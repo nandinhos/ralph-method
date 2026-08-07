@@ -15,6 +15,10 @@ O núcleo não importa código da aplicação-alvo, não usa banco de dados de
 produto e não lê credenciais. O projeto-alvo fornece somente seu contrato de
 fases, comandos de teste e contexto técnico.
 
+Para instalação, execução, comunicação entre agentes, recuperação, atualização
+e desinstalação, leia também [`docs/AGENT_GUIDE.md`](docs/AGENT_GUIDE.md). Esse
+guia é versionado junto com `VERSION` e não pode ficar desatualizado.
+
 ## Fronteiras
 
 - `bin/ralph-control` é a única autoridade da máquina de estados e do ledger.
@@ -28,6 +32,7 @@ fases, comandos de teste e contexto técnico.
 
 ```bash
 bash scripts/check-shell.sh
+bash scripts/check-doc-sync.sh
 bash scripts/test-installation.sh
 bash scripts/test-feedback.sh
 bash scripts/test-ralph-method.sh

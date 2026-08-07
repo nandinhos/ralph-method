@@ -251,6 +251,14 @@ feedback_int_or_null() {
   fi
 }
 
+feedback_string_or_null() {
+  if [ -n "${1:-}" ]; then
+    printf '"%s"' "$(feedback_escape "$1")"
+  else
+    printf 'null'
+  fi
+}
+
 feedback_state() {
   case "$1" in
     run_start|phase_start|cycle_start|gate_fail) printf 'running' ;;
@@ -307,8 +315,11 @@ feedback_payload() {
   health=$(feedback_health "$event" "$detail")
   percent=$(feedback_percent "$event" "$state")
 
-  printf '{"schema_version":"1.0.0","run_id":"%s","timestamp":"%s","event":"%s","state":"%s","health":"%s","engine":"%s","phase":{"number":%s,"total":%s,"title":"%s","attempt":%s},"progress":{"percent":%s},"detail":"%s","source":"ralph"}' \
+  printf '{"schema_version":"1.0.0","run_id":"%s","workflow_id":%s,"feature_key":%s,"attempt":%s,"timestamp":"%s","event":"%s","state":"%s","health":"%s","engine":"%s","phase":{"number":%s,"total":%s,"title":"%s","attempt":%s},"progress":{"percent":%s},"detail":"%s","source":"ralph"}' \
     "$(feedback_escape "$(feedback_redact "$RUN_ID")")" \
+    "$(feedback_string_or_null "${RALPH_WORKFLOW_ID:-}")" \
+    "$(feedback_string_or_null "${RALPH_FEATURE_KEY:-}")" \
+    "$(feedback_int_or_null "${RALPH_PHASE_ATTEMPT:-}")" \
     "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
     "$(feedback_escape "$event")" \
     "$(feedback_escape "$state")" \

@@ -93,6 +93,9 @@ FEEDBACK_FILE="$feedback_file" php -r '
         $event = json_decode($line, true, 512, JSON_THROW_ON_ERROR);
         if (($event["schema_version"] ?? null) !== "1.0.0"
             || ($event["source"] ?? null) !== "ralph"
+            || ! array_key_exists("workflow_id", $event)
+            || ! array_key_exists("feature_key", $event)
+            || ! array_key_exists("attempt", $event)
             || ! isset($event["run_id"], $event["timestamp"], $event["progress"]["percent"])) {
             exit(1);
         }

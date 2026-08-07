@@ -7,6 +7,9 @@
   "required": [
     "schema_version",
     "run_id",
+    "workflow_id",
+    "feature_key",
+    "attempt",
     "timestamp",
     "event",
     "state",
@@ -20,6 +23,9 @@
   "properties": {
     "schema_version": {"const": "1.0.0"},
     "run_id": {"type": "string", "minLength": 1, "maxLength": 160},
+    "workflow_id": {"type": ["string", "null"], "maxLength": 160},
+    "feature_key": {"type": ["string", "null"], "maxLength": 160},
+    "attempt": {"type": ["integer", "null"], "minimum": 0},
     "timestamp": {"type": "string", "format": "date-time"},
     "event": {
       "enum": [

@@ -45,7 +45,7 @@ init_output="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" plan --project
 INIT_JSON="$init_output" php -r '
     $plan = json_decode(getenv("INIT_JSON"), true, 512, JSON_THROW_ON_ERROR);
     $actions = array_column($plan["files"] ?? [], "action");
-    if (($plan["method_version"] ?? null) !== "0.2.0" || ! in_array("create", $actions, true)) {
+    if (($plan["method_version"] ?? null) !== "0.2.1" || ! in_array("create", $actions, true)) {
         exit(1);
     }
 '
@@ -71,7 +71,7 @@ DOCTOR_JSON="$doctor_output" php -r '
 # Runtime, histórico e handoff são do projeto e sobrevivem à remoção do método.
 mkdir -p "$project/.git/ralph-control" "$project/.ralph/handoffs" "$project/.ralph/reports"
 printf '%s\n' '{"runtime":true}' > "$project/.git/ralph-control/events.jsonl"
-printf '%s\n' '{"workflow":true}' > "$project/.ralph/workflow.json"
+printf '%s\n' '{"workflow":true}' > "$project/.git/ralph-control/workflow.json"
 
 printf '%s\n' '# alteração do usuário' >> "$project/bin/ralph-trace"
 printf '%s\n' '# política local do usuário' >> "$project/.ralph/codex.env"
@@ -91,7 +91,7 @@ assert_not_file "$project/.ralph/claude.env"
 assert_not_file "$project/.ralph/install-manifest.json"
 assert_file "$project/.ralph/uninstall-report.json"
 assert_file "$project/.git/ralph-control/events.jsonl"
-assert_file "$project/.ralph/workflow.json"
+assert_file "$project/.git/ralph-control/workflow.json"
 
 # Um arquivo preexistente, ainda sem ownership no manifesto, nunca é sobrescrito.
 conflict_project="$TMP/conflito"

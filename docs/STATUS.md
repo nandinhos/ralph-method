@@ -3,8 +3,9 @@
 ## Estado atual
 
 O repositório é uma extração independente do núcleo Ralph validado no
-`refactor-radar`. A versão `0.2.0` adiciona instalação local reversível,
-doctor, ownership por hash e canal de feedback para o orquestrador externo.
+`refactor-radar`. A versão `0.2.1` mantém a instalação local reversível,
+doctor, ownership por hash e canal de feedback para o orquestrador externo, e
+adiciona o guia operacional versionado para agentes de IA.
 
 ## Componentes extraídos
 
@@ -19,6 +20,7 @@ doctor, ownership por hash e canal de feedback para o orquestrador externo.
 | Instalação | `bin/ralph-init` | plan/apply/uninstall com manifesto |
 | Doctor | `bin/ralph-doctor` | drift e integridade da instalação |
 | Feedback | `schemas/feedback-event.schema.json` | contrato JSONL/stdout/callback |
+| Guia de agentes | `docs/AGENT_GUIDE.md` | operação, comunicação e ciclo de vida |
 
 ## Entrega concluída nesta fase
 
@@ -28,7 +30,8 @@ portáteis. O uninstall preserva runtime, workflow e evidências; arquivos
 alterados pelo usuário ficam intactos. O apply usa staging e rollback para não
 deixar instalação parcial em falha; os perfis gerados apontam para o loop local.
 Quando o bloco é lançado pelo controlador, o feedback também é retransmitido
-ao terminal em tempo real.
+ao terminal em tempo real. O guia de agentes acompanha a versão do método e é
+verificado por `scripts/check-doc-sync.sh`.
 
 ## Providers
 

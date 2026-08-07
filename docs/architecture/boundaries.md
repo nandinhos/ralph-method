@@ -18,7 +18,8 @@ O `install-manifest.json` é a fronteira de ownership. Cada arquivo instalado
 recebe hash de origem e hash efetivamente instalado. Na remoção, um arquivo
 modificado é preservado e listado como `preserve_modified`; somente um arquivo
 inalterado e pertencente ao manifesto pode ser removido. A desinstalação não
-remove `.git/ralph-control`, `.ralph/workflow.json`, handoffs nem relatórios.
+remove `.git/ralph-control`, `.git/ralph-control/workflow.json`, handoffs nem
+relatórios.
 
 O `bc-harness` pode distribuir o instalador, mas não é necessário em runtime.
 Depois de instalado, o projeto-alvo possui cópia própria do método e pode

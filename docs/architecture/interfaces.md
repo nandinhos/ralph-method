@@ -12,6 +12,10 @@ bin/ralph-trace record|report|tree ...
 bin/ralph-monitor --workflow <id> [--interval 30]
 ```
 
+O procedimento operacional completo para agentes está em
+[`../AGENT_GUIDE.md`](../AGENT_GUIDE.md). Ele é parte do contrato versionado e
+deve ser atualizado junto com `VERSION`.
+
 `plan` é somente leitura. `apply` instala apenas os arquivos listados no
 manifesto, com cópia atômica. `uninstall` sem `--apply` apenas calcula o plano;
 com `--apply`, remove somente arquivos ainda iguais ao hash instalado e
@@ -26,8 +30,9 @@ workflow, handoffs e relatórios não pertencem ao uninstall e são preservados.
 `scripts/ralph.sh` emite um evento sanitizado para cada início, tentativa,
 falha, espera, conclusão e encerramento. O evento segue
 `schemas/feedback-event.schema.json` e contém `run_id`, fase, tentativa,
-percentual estimado, estado e saúde. O canal é unidirecional: quem recebe o
-evento não pode aprovar gates, adquirir leases ou escolher a próxima feature.
+`workflow_id`, `feature_key`, percentual estimado, estado e saúde. O canal é
+unidirecional: quem recebe o evento não pode aprovar gates, adquirir leases ou
+escolher a próxima feature.
 
 Por padrão, o loop grava JSONL local em:
 

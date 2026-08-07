@@ -29,6 +29,7 @@ scripts/ralph-hook.sh   observabilidade best-effort
 schemas/                contratos versionados
 adapters/               normalizadores de providers
 docs/                   fonte de verdade do framework
+docs/AGENT_GUIDE.md     guia operacional para agentes de IA
 ```
 
 ## Instalação por projeto
@@ -70,10 +71,11 @@ ser apresentado como exato.
 
 ## Estado
 
-A versão atual em desenvolvimento é `0.2.0`, extraída do núcleo validado do
+A versão atual em desenvolvimento é `0.2.1`, extraída do núcleo validado do
 `refactor-radar` no commit `7ab25f8`. A instalação reversível e o canal de
-feedback estão incluídos; os adaptadores OpenCode serão incremento posterior,
-sempre acompanhado de fixtures offline e regressão.
+feedback estão incluídos, assim como o guia operacional sincronizado para
+agentes de IA. Os adaptadores OpenCode serão incremento posterior, sempre
+acompanhado de fixtures offline e regressão.
 
-Consulte [docs/STATUS.md](docs/STATUS.md), [docs/architecture/README.md](docs/architecture/README.md)
-e [docs/roadmap.md](docs/roadmap.md).
+Consulte [docs/STATUS.md](docs/STATUS.md), [docs/architecture/README.md](docs/architecture/README.md),
+[docs/AGENT_GUIDE.md](docs/AGENT_GUIDE.md) e [docs/roadmap.md](docs/roadmap.md).

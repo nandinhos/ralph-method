@@ -4,7 +4,8 @@
 
 | Dado | Local | Dono |
 |---|---|---|
-| workflow versionado | `.ralph/workflow.json` | projeto-alvo |
+| manifesto de workflow versionado | caminho informado em `ralph-control init --manifest` | projeto-alvo |
+| workflow ativo | `.git/ralph-control/workflow.json` | `ralph-control` |
 | configuração do método | `.ralph/method.json` | instalação local |
 | capabilities/providers | `.ralph/providers.json` | instalador/usuário |
 | eventos e locks | `.git/ralph-control/` | `ralph-control` |

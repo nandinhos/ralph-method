@@ -3,7 +3,7 @@
 
 declare(strict_types=1);
 
-const RALPH_METHOD_VERSION = '0.2.0';
+const RALPH_METHOD_VERSION = '0.2.1';
 const RALPH_INSTALL_SCHEMA_VERSION = '1.0.0';
 
 $sourceRoot = realpath(getenv('RALPH_METHOD_SOURCE') ?: dirname(__DIR__)) ?: dirname(__DIR__);
@@ -538,7 +538,7 @@ function uninstall(string $root, bool $apply): void
         'uninstalled_at' => gmdate('Y-m-d\\TH:i:s\\Z'),
         'preserves_runtime' => true,
         'files' => $files,
-        'preserved_paths' => ['.git/ralph-control', '.ralph/workflow.json', '.ralph/handoffs', '.ralph/reports'],
+        'preserved_paths' => ['.git/ralph-control', '.git/ralph-control/workflow.json', '.ralph/handoffs', '.ralph/reports'],
     ]);
     removeTree($backup);
     if (is_resource($lock)) {
