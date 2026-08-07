@@ -7,7 +7,7 @@
 | manifesto de workflow versionado | caminho informado em `ralph-control init --manifest` | projeto-alvo |
 | workflow ativo | `.git/ralph-control/workflow.json` | `ralph-control` |
 | configuração do método | `.ralph/method.json` | instalação local |
-| capabilities/providers | `.ralph/providers.json` | instalador/usuário |
+| capabilities/providers | `.ralph/providers.json` | instalador/usuário, com prontidão verificada |
 | eventos e locks | `.git/ralph-control/` | `ralph-control` |
 | handoffs | `.ralph/handoffs/` | controlador e projeto |
 | memória curada | `docs/engineering/` | projeto-alvo |
@@ -23,6 +23,12 @@
 - tokens, prompts e custos não entram em eventos;
 - relatório `TRC` é projeção do ledger e não fonte de estado;
 - o manifesto de instalação registra versão e hashes, não segredos.
+- `.ralph/providers.json` registra somente path, versão, capacidades, status,
+  códigos de saída e timestamps dos probes; não registra saída bruta,
+  credenciais, tokens ou prompts.
+- `adapter_enabled` só pode ser verdadeiro quando `status` é `functional`.
+- `functional` nesta versão significa autenticação confirmada e diagnóstico
+  local não generativo aprovado; não significa probe real de geração.
 - feedback é telemetria operacional local, não é fonte de transição;
 - o uninstall respeita hashes e preserva qualquer arquivo que o usuário tenha
   alterado depois da instalação.

@@ -3,3 +3,8 @@
 2026-08-07T00:00:00-03:00 | verification | fixtures verdes cobrem conflito, idempotência, preservação de arquivos modificados, runtime, eventos de progresso e regressão do loop.
 2026-08-07T00:00:00-03:00 | decision | docs/AGENT_GUIDE.md tornou-se o guia operacional versionado para agentes; check-doc-sync compara method_version com VERSION e STATUS.
 2026-08-07T00:00:00-03:00 | fix | feedback passou a carregar workflow_id e feature_key para impedir mistura de execuções no orquestrador externo.
+2026-08-07T00:00:00-03:00 | decision | v0.3.0 exige prontidão condicional: adapter só é elegível com autenticação confirmada e diagnóstico local seguro aprovado.
+2026-08-07T00:00:00-03:00 | decision | probes de provider são explícitos, limitados por timeout, sanitizados e não generativos; geração real fica opt-in futuro.
+2026-08-07T00:00:00-03:00 | verification | fixture offline cobriu provider funcional, autenticação ausente, provider sem probe seguro, segredo na saída e bloqueio do apply.
+2026-08-07T00:00:00-03:00 | error | timeout manual do probe podia aguardar processo filho que mantinha pipes abertos.
+2026-08-07T00:00:00-03:00 | fix | commandResult passou a usar timeout com TERM/KILL graduais e fixture de pane comprova retorno dentro do limite.

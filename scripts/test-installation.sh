@@ -45,7 +45,7 @@ init_output="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" plan --project
 INIT_JSON="$init_output" php -r '
     $plan = json_decode(getenv("INIT_JSON"), true, 512, JSON_THROW_ON_ERROR);
     $actions = array_column($plan["files"] ?? [], "action");
-    if (($plan["method_version"] ?? null) !== "0.2.1" || ! in_array("create", $actions, true)) {
+    if (($plan["method_version"] ?? null) !== "0.3.0" || ! in_array("create", $actions, true)) {
         exit(1);
     }
 '
@@ -58,6 +58,8 @@ assert_file "$project/bin/ralph-control"
 assert_file "$project/bin/ralph-init"
 assert_file "$project/.ralph/codex.env"
 assert_file "$project/.ralph/claude.env"
+assert_file "$project/adapters/README.md"
+assert_file "$project/schemas/provider-readiness.schema.json"
 
 dry_output="$(cd "$project" && RALPH_DRY_RUN=1 bin/ralph-bloco 1 1 codex)"
 printf '%s\n' "$dry_output" | grep -q 'ralph.*scripts/ralph.sh' || fail 'perfil instalado não aponta para o loop local'
@@ -144,6 +146,8 @@ scripts/ralph-run-independent-gate.sh
 scripts/ralph-run-quality.sh
 scripts/ralph-run-runtime-evidence.sh
 schemas/feedback-event.schema.json
+schemas/provider-readiness.schema.json
+adapters/README.md
 EOF
 rm "$broken_source/scripts/ralph-hook.sh"
 broken_project="$TMP/staging-falho"

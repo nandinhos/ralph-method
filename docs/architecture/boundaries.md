@@ -10,6 +10,7 @@
 | relay do `ralph-control` | retransmitir feedback durante o bloco | interpretar feedback como aprovação |
 | adaptador provider | converter saída externa para contrato trace | escrever ledger ou alterar código |
 | `ralph-init` | detectar contexto, instalar e remover bundle com ownership | copiar credenciais, remover histórico ou sobrescrever arquivos sem ownership |
+| verificador de provider | executar probes seguros explícitos e materializar prontidão | iniciar geração, salvar saída sensível ou habilitar adapter sem diagnóstico |
 | projeto-alvo | fornecer contexto, fases e comando de teste | depender do banco ou domínio do Ralph |
 
 ## Instalação e remoção
@@ -29,11 +30,19 @@ desinstalá-la sem apagar suas evidências.
 
 O contrato comum é um fato sanitizado de delegação entregue ao
 `ralph-trace record`. A implementação inicial pode usar somente Codex; cada
-provider adicional entra atrás do mesmo contrato.
+provider adicional entra atrás do mesmo contrato. Antes disso, o instalador
+aplica o contrato de prontidão em `schemas/provider-readiness.schema.json`.
+Executável encontrado, autenticação isolada ou versão conhecida não habilitam
+um adapter.
+
+O probe da primeira versão é explícito (`--verify-providers`), não generativo,
+tem timeout e não publica a saída bruta. Somente o estado `functional` define
+`adapter_enabled=true`; `needs_review` é preservado quando a prontidão não foi
+comprovada.
 
 | Future | Seam atual | Trigger |
 |---|---|---|
-| Claude | adapter de saída + runner selecionável | fixture e smoke CLI verdes |
-| OpenCode | adapter de saída + runner selecionável | saída normalizada com sessão/modelo ou identidade parcial |
-| Hermes/agy | delegação filha registrada no trace | provider instalado e contrato de execução definido |
+| Claude | adapter de saída + runner selecionável após prontidão | fixture, probe seguro e smoke CLI verdes |
+| OpenCode | adapter de saída + runner selecionável após prontidão | saída normalizada com sessão/modelo ou identidade parcial e probe seguro |
+| Hermes/agy | delegação filha registrada no trace após diagnóstico suportado | provider instalado, backend identificado e contrato de execução definido |
 | instalação remota | manifesto local com hashes | necessidade de vários hosts compartilhando estado |

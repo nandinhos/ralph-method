@@ -4,9 +4,10 @@
 
 ```text
 ralph-init plan --project <path>
-ralph-init apply --project <path> --provider auto|codex|claude|opencode
+ralph-init apply --project <path> --provider auto|codex|claude|opencode|hermes|agy [--verify-providers]
+ralph-init plan --project <path> [--provider ...] [--verify-providers]
 ralph-init uninstall --project <path> [--apply]
-ralph-doctor --project <path>
+ralph-doctor --project <path> [--verify-providers]
 bin/ralph-control <command> ...
 bin/ralph-trace record|report|tree ...
 bin/ralph-monitor --workflow <id> [--interval 30]
@@ -66,6 +67,27 @@ credencial ou saída integral do comando.
 `bin/ralph-monitor` continua sendo somente leitura. Além do snapshot do
 workflow, ele mostra o último evento do JSONL do loop e permite detectar
 processo ausente, heartbeat parado, gates sem atividade e workflow bloqueado.
+
+## Prontidão de provider
+
+`ralph-init` detecta providers sem tocar autenticação por padrão. A flag
+`--verify-providers` solicita probes `safe` explícitos, com timeout e sem
+geração. O resultado é persistido em `.ralph/providers.json` conforme
+`schemas/provider-readiness.schema.json`.
+
+O contrato mínimo de cada provider contém:
+
+```text
+installed, path, version,
+auth_status, health_status, status,
+capabilities, adapter_enabled, reason
+```
+
+Um adapter somente é elegível se `status=functional` e
+`adapter_enabled=true`. `detected`, `authenticated`, `degraded`,
+`unsupported` e `authentication_unknown` nunca habilitam execução alternativa.
+O modo `auto` não faz fallback silencioso; quando não encontra provider apto,
+materializa `orchestration.mode=needs_review`.
 
 ## Contrato de provider
 

@@ -3,7 +3,7 @@
 
 declare(strict_types=1);
 
-const RALPH_METHOD_VERSION = '0.2.1';
+const RALPH_METHOD_VERSION = '0.3.0';
 const RALPH_INSTALL_SCHEMA_VERSION = '1.0.0';
 
 $sourceRoot = realpath(getenv('RALPH_METHOD_SOURCE') ?: dirname(__DIR__)) ?: dirname(__DIR__);
@@ -14,7 +14,7 @@ function fail(string $message, int $code = 1): never
     exit($code);
 }
 
-/** @return array{command: string, project: string, provider: string, apply: bool} */
+/** @return array{command: string, project: string, provider: string, apply: bool, verify_providers: bool} */
 function arguments(array $argv): array
 {
     $command = $argv[1] ?? 'plan';
@@ -29,11 +29,16 @@ function arguments(array $argv): array
         'project' => getcwd() ?: '.',
         'provider' => 'auto',
         'apply' => false,
+        'verify_providers' => false,
     ];
     for ($index = $offset; $index < count($argv); $index++) {
         $argument = $argv[$index];
         if ($argument === '--apply') {
             $result['apply'] = true;
+            continue;
+        }
+        if ($argument === '--verify-providers') {
+            $result['verify_providers'] = true;
             continue;
         }
         if (str_starts_with($argument, '--project=')) {
@@ -53,7 +58,7 @@ function arguments(array $argv): array
             continue;
         }
         if (in_array($argument, ['--help', '-h'], true)) {
-            echo "uso: bin/ralph-init plan|apply|uninstall|doctor --project <path> [--provider auto|codex|claude|opencode|hermes|agy] [--apply]\n";
+            echo "uso: bin/ralph-init plan|apply|uninstall|doctor --project <path> [--provider auto|codex|claude|opencode|hermes|agy] [--verify-providers] [--apply]\n";
             exit(0);
         }
         fail("argumento desconhecido: {$argument}", 2);
@@ -83,38 +88,243 @@ function projectRoot(string $path): string
     return realpath($gitRoot) ?: $gitRoot;
 }
 
-/** @return array{exit: int, output: string} */
-function commandResult(string $command, string $cwd): array
+/** @return array{exit: int, output: string, timed_out: bool} */
+function commandResult(string $command, string $cwd, int $timeoutSeconds = 8): array
 {
-    $process = proc_open($command, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, $cwd);
+    $timeoutBinary = trim((string) shell_exec('command -v timeout 2>/dev/null'));
+    $usesExternalTimeout = $timeoutBinary !== '';
+    $runCommand = $usesExternalTimeout
+        ? commandLine($timeoutBinary, ['--signal=TERM', '--kill-after=1s', $timeoutSeconds.'s', 'sh', '-c', $command])
+        : $command;
+    $process = proc_open($runCommand, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, $cwd);
     if (! is_resource($process)) {
-        return ['exit' => 1, 'output' => ''];
+        return ['exit' => 1, 'output' => '', 'timed_out' => false];
     }
-    $output = (string) stream_get_contents($pipes[1]).(string) stream_get_contents($pipes[2]);
+    stream_set_blocking($pipes[1], false);
+    stream_set_blocking($pipes[2], false);
+    $output = '';
+    $timedOut = false;
+    $deadline = microtime(true) + $timeoutSeconds;
+    while (true) {
+        $status = proc_get_status($process);
+        $output .= (string) stream_get_contents($pipes[1]).(string) stream_get_contents($pipes[2]);
+        if (! ($status['running'] ?? false)) {
+            break;
+        }
+        if (! $usesExternalTimeout && microtime(true) >= $deadline) {
+            proc_terminate($process, 15);
+            usleep(100000);
+            if (proc_get_status($process)['running'] ?? false) {
+                proc_terminate($process, 9);
+            }
+            $timedOut = true;
+            break;
+        }
+        usleep(20000);
+    }
+    $output .= (string) stream_get_contents($pipes[1]).(string) stream_get_contents($pipes[2]);
     fclose($pipes[1]);
     fclose($pipes[2]);
+    $exit = proc_close($process);
+    $timedOut = $timedOut || ($usesExternalTimeout && in_array($exit, [124, 137, 143], true));
 
-    return ['exit' => proc_close($process), 'output' => trim($output)];
+    return ['exit' => $timedOut ? 124 : $exit, 'output' => trim($output), 'timed_out' => $timedOut];
+}
+
+function commandLine(string $path, array $arguments = []): string
+{
+    return escapeshellarg($path).($arguments === [] ? '' : ' '.implode(' ', array_map('escapeshellarg', $arguments)));
+}
+
+function sanitizeProviderText(string $output): string
+{
+    $line = trim((string) (preg_split('/\R/', $output, 2)[0] ?? ''));
+    $redacted = preg_replace('/(token|api[_-]?key|secret|password|authorization|bearer)\s*[:=]\s*\S+/i', '[redacted]', $line);
+
+    return substr($redacted === null ? '' : $redacted, 0, 160);
+}
+
+/** @return array<string, array<string, mixed>> */
+function providerDefinitions(): array
+{
+    return [
+        'codex' => [
+            'auth' => ['args' => ['login', 'status'], 'classifier' => 'codex'],
+            'health' => ['args' => ['doctor', '--json']],
+            'capabilities' => ['execution', 'model_selection', 'diagnostics'],
+        ],
+        'claude' => [
+            'auth' => ['args' => ['auth', 'status', '--json']],
+            'health' => ['args' => ['auth', 'status', '--json']],
+            'capabilities' => ['execution', 'model_selection', 'diagnostics'],
+        ],
+        'opencode' => [
+            'auth' => ['args' => ['auth', 'list']],
+            'health' => ['args' => ['auth', 'list']],
+            'capabilities' => ['execution', 'model_selection', 'diagnostics'],
+        ],
+        'hermes' => [
+            'auth' => ['args' => ['auth', 'status'], 'requires_env' => 'RALPH_HERMES_PROVIDER'],
+            'health' => ['args' => ['status']],
+            'capabilities' => ['execution', 'model_selection', 'diagnostics'],
+        ],
+        'agy' => [
+            'auth' => null,
+            'health' => null,
+            'capabilities' => ['execution', 'model_selection'],
+        ],
+    ];
+}
+
+function hasUnauthenticatedSignal(string $output): bool
+{
+    return preg_match('/not[ _-]*(logged[ _-]*in|authenticated)|unauthenticated|authentication required|login required|no credentials|credential[s]? (missing|not configured)|invalid (token|credential)|token expired|expired credential|"(loggedIn|authenticated|valid|configured)"\s*:\s*false/i', $output) === 1;
+}
+
+function hasAuthenticatedSignal(string $output): bool
+{
+    return preg_match('/logged[ _-]+in|authenticated|"(loggedIn|authenticated|valid|configured)"\s*:\s*true|credentials?\s+(available|configured|valid)/i', $output) === 1;
+}
+
+function classifyAuth(array $result, string $classifier): string
+{
+    if (($result['timed_out'] ?? false) === true) {
+        return 'unknown';
+    }
+    $output = (string) ($result['output'] ?? '');
+    if (hasUnauthenticatedSignal($output)) {
+        return 'unauthenticated';
+    }
+    if (hasAuthenticatedSignal($output)) {
+        return 'authenticated';
+    }
+    if (($result['exit'] ?? 1) !== 0) {
+        return 'unknown';
+    }
+    if ($classifier === 'codex') {
+        return 'authenticated';
+    }
+
+    return 'unknown';
+}
+
+function providerReason(string $status, string $authStatus, string $healthStatus, bool $verified): string
+{
+    if (! $verified) {
+        return 'verificação explícita ainda não solicitada';
+    }
+    if ($status === 'functional') {
+        return 'autenticação e diagnóstico local não generativo aprovados';
+    }
+    if ($status === 'unsupported') {
+        return 'provider não possui probe seguro registrado';
+    }
+    if ($authStatus === 'unauthenticated') {
+        return 'sessão ou credencial não autenticada';
+    }
+    if ($authStatus !== 'authenticated') {
+        return 'o diagnóstico não confirmou autenticação';
+    }
+    if ($healthStatus === 'unhealthy') {
+        return 'diagnóstico local do provider falhou';
+    }
+
+    return 'funcionalidade não comprovada pelo probe seguro';
 }
 
 /** @return array<string, mixed> */
-function detectProject(string $root): array
+function verifyProvider(string $provider, string $path, string $root): array
+{
+    $definition = providerDefinitions()[$provider] ?? null;
+    $base = [
+        'verification' => [
+            'requested' => true,
+            'mode' => 'safe',
+            'probe_kind' => 'diagnostic',
+            'checked_at' => gmdate('Y-m-d\\TH:i:s\\Z'),
+        ],
+        'auth_status' => 'unknown',
+        'health_status' => 'unsupported',
+        'status' => 'unsupported',
+        'adapter_enabled' => false,
+        'capabilities' => $definition['capabilities'] ?? [],
+    ];
+    if ($definition === null || $definition['auth'] === null || $definition['health'] === null) {
+        $base['reason'] = providerReason('unsupported', 'unknown', 'unsupported', true);
+        return $base;
+    }
+    $requiredEnv = $definition['auth']['requires_env'] ?? null;
+    $providerTarget = $requiredEnv !== null ? trim((string) getenv($requiredEnv)) : '';
+    if ($requiredEnv !== null && $providerTarget === '') {
+        $base['auth_status'] = 'unknown';
+        $base['status'] = 'authentication_unknown';
+        $base['reason'] = 'provider alvo não informado em '.$requiredEnv;
+        return $base;
+    }
+    $authArgs = $definition['auth']['args'];
+    if ($providerTarget !== '') {
+        $authArgs[] = $providerTarget;
+    }
+    $authResult = commandResult(commandLine($path, $authArgs), $root);
+    $authStatus = classifyAuth($authResult, (string) ($definition['auth']['classifier'] ?? 'exit_zero'));
+    $base['auth_status'] = $authStatus;
+    $base['verification']['auth_exit'] = $authResult['exit'];
+    $base['verification']['auth_timed_out'] = $authResult['timed_out'];
+    if ($authStatus !== 'authenticated') {
+        $base['status'] = $authStatus === 'unauthenticated' ? 'unauthenticated' : 'authentication_unknown';
+        $base['reason'] = providerReason($base['status'], $authStatus, 'unsupported', true);
+        return $base;
+    }
+
+    $healthArgs = $definition['health']['args'];
+    $healthResult = commandResult(commandLine($path, $healthArgs), $root);
+    $healthPassed = ($healthResult['timed_out'] ?? false) === false
+        && ($healthResult['exit'] ?? 1) === 0
+        && ! hasUnauthenticatedSignal((string) ($healthResult['output'] ?? ''));
+    $healthStatus = $healthPassed ? 'healthy' : 'unhealthy';
+    $base['health_status'] = $healthStatus;
+    $base['verification']['health_exit'] = $healthResult['exit'];
+    $base['verification']['health_timed_out'] = $healthResult['timed_out'];
+    $base['status'] = $healthStatus === 'healthy' ? 'functional' : 'degraded';
+    $base['adapter_enabled'] = $base['status'] === 'functional';
+    $base['reason'] = providerReason($base['status'], $authStatus, $healthStatus, true);
+
+    return $base;
+}
+
+/** @return array<string, mixed> */
+function detectProject(string $root, bool $verifyProviders = false): array
 {
     $commands = ['codex', 'claude', 'opencode', 'hermes', 'agy'];
+    $definitions = providerDefinitions();
     $providers = [];
     foreach ($commands as $command) {
         $path = trim((string) shell_exec('command -v '.escapeshellarg($command).' 2>/dev/null'));
         $version = null;
         if ($path !== '') {
-            $result = commandResult(escapeshellarg($path).' --version', $root);
-            $version = $result['exit'] === 0 ? substr($result['output'], 0, 160) : null;
+            $result = commandResult(commandLine($path, ['--version']), $root, 5);
+            $version = $result['exit'] === 0 ? sanitizeProviderText($result['output']) : null;
         }
         $providers[$command] = [
             'installed' => $path !== '',
             'path' => $path !== '' ? $path : null,
             'version' => $version,
             'auth_status' => 'not_checked',
+            'health_status' => 'not_checked',
+            'status' => $path === '' ? 'unavailable' : 'detected',
+            'adapter_enabled' => false,
+            'capabilities' => $definitions[$command]['capabilities'] ?? [],
+            'verification' => [
+                'requested' => $verifyProviders,
+                'mode' => $verifyProviders ? 'safe' : 'none',
+                'probe_kind' => 'diagnostic',
+                'checked_at' => null,
+            ],
+            'reason' => $path === '' ? 'executável não encontrado' : 'provider detectado; autenticação não verificada',
         ];
+        if ($verifyProviders && $path !== '') {
+            $providers[$command] = array_merge($providers[$command], verifyProvider($command, $path, $root));
+        }
     }
 
     $signals = [
@@ -144,6 +354,11 @@ function detectProject(string $root): array
 
     return [
         'providers' => $providers,
+        'verification' => [
+            'requested' => $verifyProviders,
+            'mode' => $verifyProviders ? 'safe' : 'none',
+            'live_generation_probe' => false,
+        ],
         'harness_signals' => $signals,
         'test_command' => $testCommand,
         'git' => $git,
@@ -161,17 +376,22 @@ function selectProvider(array $detected, string $requested): string
         return $requested;
     }
     foreach (['codex', 'claude', 'opencode'] as $candidate) {
-        if (($detected['harness_signals'][$candidate] ?? false) && ($detected['providers'][$candidate]['installed'] ?? false)) {
+        if (($detected['harness_signals'][$candidate] ?? false) && ($detected['providers'][$candidate]['adapter_enabled'] ?? false)) {
             return $candidate;
         }
     }
     foreach (['codex', 'claude', 'opencode'] as $candidate) {
-        if ($detected['providers'][$candidate]['installed'] ?? false) {
+        if ($detected['providers'][$candidate]['adapter_enabled'] ?? false) {
             return $candidate;
         }
     }
 
     return 'codex';
+}
+
+function providerAdapterEnabled(array $detected, string $provider): bool
+{
+    return ($detected['providers'][$provider]['adapter_enabled'] ?? false) === true;
 }
 
 function hashFile(string $path): ?string
@@ -204,7 +424,8 @@ function managedSources(): array
         'scripts/ralph-generate-handoff.sh', 'scripts/ralph-run-curator.sh',
         'scripts/ralph-run-independent-gate.sh', 'scripts/ralph-run-quality.sh',
         'scripts/ralph-run-runtime-evidence.sh',
-        'schemas/feedback-event.schema.json',
+        'schemas/feedback-event.schema.json', 'schemas/provider-readiness.schema.json',
+        'adapters/README.md',
     ];
 }
 
@@ -327,7 +548,7 @@ function readManifest(string $path, ?string $expectedRoot = null): array
 }
 
 /** @return array<string, mixed> */
-function installationPlan(string $root, array $detected, string $provider): array
+function installationPlan(string $root, array $detected, string $provider, string $requestedProvider): array
 {
     global $sourceRoot;
     $manifestPath = $root.'/.ralph/install-manifest.json';
@@ -358,8 +579,14 @@ function installationPlan(string $root, array $detected, string $provider): arra
         'schema_version' => RALPH_INSTALL_SCHEMA_VERSION,
         'method_version' => RALPH_METHOD_VERSION,
         'project' => ['root' => $root, 'git' => $detected['git']],
+        'selection' => [
+            'requested_provider' => $requestedProvider,
+            'selected_provider' => $provider,
+            'selected_status' => $detected['providers'][$provider]['status'] ?? 'unavailable',
+            'adapter_enabled' => providerAdapterEnabled($detected, $provider),
+        ],
         'orchestration' => [
-            'mode' => ($detected['providers'][$provider]['installed'] ?? false)
+            'mode' => providerAdapterEnabled($detected, $provider)
                 ? ($provider === 'codex' ? 'native_codex' : 'single_provider')
                 : 'needs_review',
             'primary_runner' => $provider,
@@ -384,6 +611,10 @@ function applyInstallation(string $root, array $plan): void
             fail('instalação interrompida por conflito em '.$file['path'], 3);
         }
     }
+    if (($plan['selection']['requested_provider'] ?? 'auto') !== 'auto' && ! ($plan['selection']['adapter_enabled'] ?? false)) {
+        $provider = $plan['selection']['selected_provider'] ?? 'desconhecido';
+        fail("provider {$provider} não está apto; use --verify-providers e corrija autenticação/diagnóstico antes de habilitar o adapter", 3);
+    }
     $provider = $plan['orchestration']['primary_runner'];
     $lockPath = $root.'/.ralph/install.lock';
     if (! is_dir(dirname($lockPath)) && ! mkdir(dirname($lockPath), 0700, true) && ! is_dir(dirname($lockPath))) {
@@ -407,6 +638,7 @@ function applyInstallation(string $root, array $plan): void
         'orchestration' => $plan['orchestration'],
         'project' => $plan['project'],
         'test_command' => $plan['detection']['test_command'],
+        'providers' => $plan['detection']['providers'],
     ];
     $providers = $plan['detection'];
 
@@ -439,7 +671,7 @@ function applyInstallation(string $root, array $plan): void
             'installed_at' => gmdate('Y-m-d\\TH:i:s\\Z'),
             'project' => $plan['project'],
             'orchestration' => $plan['orchestration'],
-            'components' => ['installer', 'control_plane', 'trace', 'monitor', 'loop', 'hook', 'feedback'],
+            'components' => ['installer', 'control_plane', 'trace', 'monitor', 'loop', 'hook', 'feedback', 'provider_readiness'],
             'managed_files' => $managed,
         ];
         writeJson($stage.'/.ralph/install-manifest.json', $manifest);
@@ -548,11 +780,17 @@ function uninstall(string $root, bool $apply): void
     printPlan(['status' => 'uninstalled', 'report' => '.ralph/uninstall-report.json', 'preserves_runtime' => true, 'files' => $files]);
 }
 
-function doctor(string $root): void
+function doctor(string $root, bool $verifyProviders): void
 {
     $manifestPath = $root.'/.ralph/install-manifest.json';
+    $detected = detectProject($root, $verifyProviders);
     if (! is_file($manifestPath)) {
-        printPlan(['status' => 'not_installed', 'project' => $root]);
+        printPlan([
+            'status' => 'not_installed',
+            'project' => $root,
+            'provider_verification' => $detected['verification'],
+            'providers' => $detected['providers'],
+        ]);
         return;
     }
     $manifest = readManifest($manifestPath, $root);
@@ -570,6 +808,8 @@ function doctor(string $root): void
         'provider' => $manifest['orchestration']['primary_runner'] ?? null,
         'drift' => $drift,
         'runtime_preserved' => is_dir($root.'/.git/ralph-control'),
+        'provider_verification' => $detected['verification'],
+        'providers' => $detected['providers'],
     ]);
 }
 
@@ -583,12 +823,12 @@ try {
         exit(0);
     }
     if ($arguments['command'] === 'doctor') {
-        doctor($root);
+        doctor($root, $arguments['verify_providers']);
         exit(0);
     }
-    $detected = detectProject($root);
+    $detected = detectProject($root, $arguments['verify_providers']);
     $provider = selectProvider($detected, $arguments['provider']);
-    $plan = installationPlan($root, $detected, $provider);
+    $plan = installationPlan($root, $detected, $provider, $arguments['provider']);
     if ($arguments['command'] === 'plan') {
         printPlan($plan);
         exit(0);

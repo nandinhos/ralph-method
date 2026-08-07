@@ -45,8 +45,11 @@ ralph-init uninstall --project /caminho/do/projeto --apply
 ```
 
 `plan` é somente leitura. `apply` cria uma instalação local e idempotente. A
-detecção registra somente fatos como arquivos presentes, versões de CLI,
-comando de teste e capacidade declarada; não copia tokens nem credenciais.
+detecção padrão registra somente fatos como arquivos presentes, versões de CLI,
+comando de teste e capacidade declarada; não consulta autenticação, não copia
+tokens nem credenciais. Para habilitar um adapter, execute o probe seguro
+explicitamente com `--verify-providers`; somente o status `functional` pode
+definir `adapter_enabled=true`.
 `uninstall` primeiro mostra um plano e só remove arquivos que continuam iguais
 ao hash instalado quando recebe `--apply`. Arquivos modificados, histórico,
 workflow, handoffs e relatórios são preservados.
@@ -67,11 +70,14 @@ no manifesto da instalação. Ausência de telemetria não vira erro de gate.
 
 O `ralph-trace` diferencia identidade `exact`, `declared`, `observed`,
 `partial` e `unavailable`. Um provider que não expõe modelo efetivo não pode
-ser apresentado como exato.
+ser apresentado como exato. A prontidão de provider é independente da
+identidade de modelo e segue `schemas/provider-readiness.schema.json`. Probes
+seguros não executam geração; uma prova real de inferência futura terá de ser
+opt-in.
 
 ## Estado
 
-A versão atual em desenvolvimento é `0.2.1`, extraída do núcleo validado do
+A versão atual em desenvolvimento é `0.3.0`, extraída do núcleo validado do
 `refactor-radar` no commit `7ab25f8`. A instalação reversível e o canal de
 feedback estão incluídos, assim como o guia operacional sincronizado para
 agentes de IA. Os adaptadores OpenCode serão incremento posterior, sempre

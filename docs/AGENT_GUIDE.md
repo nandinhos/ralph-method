@@ -1,7 +1,7 @@
 # Guia operacional para agentes de IA — Ralph Method
 
 - guide_version: 1.0.0
-- method_version: 0.2.1
+- method_version: 0.3.0
 - status: ativo
 - fonte_do_metodo: `VERSION`
 - contrato_de_feedback: `schemas/feedback-event.schema.json`
@@ -176,6 +176,49 @@ O consumidor deve usar `run_id`, `workflow_id`, `feature_key`, `attempt` e
 mas deve sempre consultar `ralph-control status` para decisões. Feedback
 ausente ou atrasado significa falta de observabilidade, não aprovação.
 
+### 3.4 Prontidão de providers
+
+A existência de uma CLI não habilita seu adapter. O estado precisa avançar
+assim:
+
+```text
+unavailable|detected
+→ autenticação confirmada
+→ diagnóstico local seguro
+→ functional
+→ adapter_enabled=true
+```
+
+O plano padrão não consulta autenticação. Para solicitar probes explícitos,
+use:
+
+```bash
+"$METHOD_ROOT/bin/ralph-init" plan \
+  --project "$PROJECT_ROOT" \
+  --provider auto \
+  --verify-providers
+```
+
+O modo `safe` usa somente comandos diagnósticos do provider, tem timeout,
+redige a saída e não inicia conversa, não envia prompt e não executa probe de
+geração. `functional` significa que a sessão foi confirmada e o diagnóstico
+local não generativo passou; não é uma afirmação de que uma chamada de modelo
+foi consumida ou concluída.
+
+Estados importantes em `.ralph/providers.json`:
+
+```text
+unavailable | detected | authentication_unknown | unauthenticated
+authenticated | functional | degraded | unsupported
+```
+
+Somente `functional` pode definir `adapter_enabled=true`. Um provider
+alternativo explicitamente solicitado no `apply` é recusado se não estiver
+funcional. Em `auto`, a instalação do núcleo pode continuar em
+`orchestration.mode=needs_review`, sem fallback silencioso. Hermes precisa de
+`RALPH_HERMES_PROVIDER` para identificar o backend; agy permanece bloqueado
+até existir um diagnóstico seguro registrado.
+
 ## 4. Instalação em um projeto-alvo
 
 Defina o caminho do checkout do Ralph Method e o caminho do projeto. O projeto
@@ -198,6 +241,7 @@ Leia o JSON do plano. Procure especialmente por:
 
 - `conflict` em qualquer arquivo;
 - provider detectado e seu `auth_status`;
+- `status`, `health_status` e `adapter_enabled` do provider;
 - comando de teste detectado;
 - sinais de `.codex`, `.claude` ou OpenCode;
 - working tree suja;
@@ -205,13 +249,23 @@ Leia o JSON do plano. Procure especialmente por:
 
 `plan` não altera o projeto.
 
+Para auditar autenticação e prontidão sem gerar uma mensagem:
+
+```bash
+"$METHOD_ROOT/bin/ralph-init" plan \
+  --project "$PROJECT_ROOT" \
+  --provider auto \
+  --verify-providers
+```
+
 ### 4.2 Aplicar a instalação
 
 ```bash
 RALPH_METHOD_SOURCE="$METHOD_ROOT" \
   "$METHOD_ROOT/bin/ralph-init" apply \
   --project "$PROJECT_ROOT" \
-  --provider auto
+  --provider auto \
+  --verify-providers
 ```
 
 O instalador cria uma cópia local dos componentes, `.ralph/method.json`,
@@ -225,10 +279,11 @@ Providers aceitos pelo instalador:
 auto | codex | claude | opencode | hermes | agy
 ```
 
-`auto` detecta o contexto, mas não habilita fallback silencioso. A versão
-atual executa diretamente Codex e Claude no loop; OpenCode, Hermes e agy ficam
-registrados como capabilities ou delegações até que seu adapter esteja
-validado.
+`auto` só materializa como executor o provider com `adapter_enabled=true`. Se
+nenhum provider estiver funcional, a instalação do núcleo termina com
+`needs_review` e não habilita adapter. Uma seleção explícita de provider não
+funcional falha fechada; corrija a sessão e repita o comando com
+`--verify-providers`.
 
 ### 4.3 Verificar a instalação
 

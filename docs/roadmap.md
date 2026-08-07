@@ -18,10 +18,14 @@
 - [x] monitor mostra o último evento do loop;
 - [x] fixtures de instalação, desinstalação e comunicação.
 
-## 0.3.0 — providers condicionais
+## 0.3.0 — prontidão condicional de providers
 
+- [x] contrato de prontidão versionado;
+- [x] autenticação e diagnóstico seguro explícitos;
+- [x] bloqueio de adapter não funcional;
+- [x] fixture offline de provider funcional, não autenticado e unsupported;
 - [ ] contrato de adapter Codex;
 - [ ] fixture e adapter Claude;
 - [ ] fixture e adapter OpenCode;
 - [ ] Hermes/agy como delegações filhas;
-- [ ] regressão multiprovider.
+- [ ] regressão de execução multiprovider.

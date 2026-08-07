@@ -35,6 +35,7 @@ bash scripts/check-shell.sh
 bash scripts/check-doc-sync.sh
 bash scripts/test-installation.sh
 bash scripts/test-feedback.sh
+bash scripts/test-provider-readiness.sh
 bash scripts/test-ralph-method.sh
 bash scripts/test-ralph.sh
 ```
@@ -46,6 +47,8 @@ testar o núcleo portátil.
 ## Segurança
 
 - Não registrar tokens, prompts, respostas completas ou valores de ambiente.
+- Provider só pode habilitar adapter após autenticação e diagnóstico seguro
+  comprovados; `--verify-providers` é explícito e não generativo.
 - Não sobrescrever arquivos existentes do projeto-alvo sem ownership explícito.
 - Não trocar provider silenciosamente após falha.
 - A instalação deve ser atômica, idempotente e reversível.
