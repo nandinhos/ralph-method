@@ -107,6 +107,14 @@
 #   Best-effort: hook ausente/lento/com erro nao derruba o run; TERM em 10s e
 #   KILL 2s depois por default
 #
+# Feedback para o orquestrador externo:
+#   RALPH_FEEDBACK_FILE    JSONL append-only; default: .git/ralph-control/feedback/events.jsonl
+#   RALPH_FEEDBACK_STDOUT  1 publica `RALPH_FEEDBACK <json>` na tela
+#   RALPH_FEEDBACK_CMD     executavel consumidor; recebe evento/detalhe e JSON em stdin
+#   RALPH_RUN_ID            identificador externo opcional da execucao
+#   O canal e somente observabilidade. Falha do consumidor nunca aprova gate,
+#   altera estado ou interrompe o loop.
+#
 # Exit code: 0 = todas as fases verdes; 1 = alguma falhou ou abortou.
 #
 # Pre-requisitos:
@@ -157,6 +165,11 @@ LIMIT_WAIT_DEFAULT="${RALPH_LIMIT_WAIT_DEFAULT:-1800}"
 LIMIT_BUFFER="${RALPH_LIMIT_BUFFER:-60}"
 HOOK_TIMEOUT="${RALPH_HOOK_TIMEOUT:-10}"
 HOOK_KILL_AFTER="${RALPH_HOOK_KILL_AFTER:-2}"
+FEEDBACK_FILE="${RALPH_FEEDBACK_FILE:-.git/ralph-control/feedback/events.jsonl}"
+FEEDBACK_STDOUT="${RALPH_FEEDBACK_STDOUT:-0}"
+FEEDBACK_CMD="${RALPH_FEEDBACK_CMD:-}"
+FEEDBACK_TIMEOUT="${RALPH_FEEDBACK_TIMEOUT:-5}"
+RUN_ID="${RALPH_RUN_ID:-run_$(date -u '+%Y%m%dT%H%M%SZ')_$$}"
 
 TEST_CMD=""
 SAIL_BIN=""
@@ -212,10 +225,143 @@ resolve_hook() {
   log "Hook de eventos: $HOOK_BIN"
 }
 
-emit() {
-  [ -n "$HOOK_BIN" ] || return 0
+feedback_escape() {
+  local value="${1:-}"
+  value=${value//\\/\\\\}
+  value=${value//\"/\\\"}
+  value=${value//$'\n'/\\n}
+  value=${value//$'\r'/\\r}
+  value=${value//$'\t'/\\t}
+  printf '%s' "$value"
+}
 
+feedback_redact() {
+  local value="${1:-}" sanitized
+  sanitized=$(printf '%s' "$value" | sed -E \
+    -e 's/((token|secret|password|passwd|api[_-]?key)[[:space:]]*[=:][[:space:]]*)[^[:space:]]+/\1[REDACTED]/Ig' \
+    -e 's/(sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9_]{20,})/[REDACTED]/g') || sanitized="$value"
+  printf '%s' "$sanitized"
+}
+
+feedback_int_or_null() {
+  if [[ "${1:-}" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$1"
+  else
+    printf 'null'
+  fi
+}
+
+feedback_state() {
+  case "$1" in
+    run_start|phase_start|cycle_start|gate_fail) printf 'running' ;;
+    limit_wait) printf 'waiting' ;;
+    phase_done|phase_already_done) printf 'completed' ;;
+    phase_failed) printf 'blocked' ;;
+    run_end)
+      case "${2:-}" in
+        FALHOU*|ABORTADO*) printf 'failed' ;;
+        *) printf 'completed' ;;
+      esac
+      ;;
+    *) printf 'running' ;;
+  esac
+}
+
+feedback_health() {
+  case "$1" in
+    gate_fail|cycle_start|limit_wait) printf 'warning' ;;
+    phase_failed|run_end)
+      case "${2:-}" in
+        FALHOU*|ABORTADO*|*falhou*) printf 'error' ;;
+        *) printf 'ok' ;;
+      esac
+      ;;
+    *) printf 'ok' ;;
+  esac
+}
+
+feedback_percent() {
+  local event="$1" phase_num="${RALPH_PHASE_NUM:-}" total="${RALPH_PHASE_TOTAL:-}" state="$2"
+  if ! [[ "$phase_num" =~ ^[0-9]+$ && "$total" =~ ^[0-9]+$ && "$total" -gt 0 ]]; then
+    [ "$state" = "completed" ] && printf '100' || printf '0'
+    return 0
+  fi
+
+  local completed="$phase_num"
+  if [ "$event" = "phase_start" ]; then
+    completed=$((phase_num - 1))
+  elif [ "$event" = "run_start" ]; then
+    completed=0
+  elif [ "$event" = "run_end" ] && [ "$state" = "completed" ]; then
+    completed="$total"
+  fi
+  [ "$completed" -lt 0 ] && completed=0
+  [ "$completed" -gt "$total" ] && completed="$total"
+  printf '%s' "$((completed * 100 / total))"
+}
+
+feedback_payload() {
   local event="$1" detail="${2:-}"
+  local state health percent
+  state=$(feedback_state "$event" "$detail")
+  health=$(feedback_health "$event" "$detail")
+  percent=$(feedback_percent "$event" "$state")
+
+  printf '{"schema_version":"1.0.0","run_id":"%s","timestamp":"%s","event":"%s","state":"%s","health":"%s","engine":"%s","phase":{"number":%s,"total":%s,"title":"%s","attempt":%s},"progress":{"percent":%s},"detail":"%s","source":"ralph"}' \
+    "$(feedback_escape "$(feedback_redact "$RUN_ID")")" \
+    "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+    "$(feedback_escape "$event")" \
+    "$(feedback_escape "$state")" \
+    "$(feedback_escape "$health")" \
+    "$(feedback_escape "$ENGINE")" \
+    "$(feedback_int_or_null "${RALPH_PHASE_NUM:-}")" \
+    "$(feedback_int_or_null "${RALPH_PHASE_TOTAL:-}")" \
+    "$(feedback_escape "$(feedback_redact "${RALPH_PHASE_TITLE:-}")")" \
+    "$(feedback_int_or_null "${RALPH_PHASE_ATTEMPT:-}")" \
+    "$percent" \
+    "$(feedback_escape "$(feedback_redact "$detail")")"
+}
+
+feedback_emit() {
+  local event="$1" detail="${2:-}" payload callback_rc=0
+  payload=$(feedback_payload "$event" "$detail")
+
+  if [ -n "$FEEDBACK_FILE" ]; then
+    local feedback_dir
+    feedback_dir=$(dirname "$FEEDBACK_FILE")
+    if mkdir -p "$feedback_dir" 2>/dev/null; then
+      if command -v flock >/dev/null 2>&1; then
+        (flock -x 9; printf '%s\n' "$payload" >&9) 9>>"$FEEDBACK_FILE" || true
+      else
+        printf '%s\n' "$payload" >>"$FEEDBACK_FILE" 2>/dev/null || true
+      fi
+    fi
+  fi
+
+  if [ "$FEEDBACK_STDOUT" = "1" ]; then
+    printf 'RALPH_FEEDBACK %s\n' "$payload"
+  fi
+
+  if [ -n "$FEEDBACK_CMD" ]; then
+    if [ -x "$FEEDBACK_CMD" ]; then
+      if command -v timeout >/dev/null 2>&1; then
+        printf '%s\n' "$payload" | timeout --kill-after=1s "${FEEDBACK_TIMEOUT}s" \
+          "$FEEDBACK_CMD" "$event" "$detail" >/dev/null 2>&1 || callback_rc=$?
+      else
+        printf '%s\n' "$payload" | "$FEEDBACK_CMD" "$event" "$detail" >/dev/null 2>&1 || callback_rc=$?
+      fi
+      [ "$callback_rc" -eq 0 ] || warn "feedback: consumidor falhou no evento '$event' (ignorado)"
+    else
+      warn "RALPH_FEEDBACK_CMD definido mas nao executavel: $FEEDBACK_CMD (ignorado)"
+    fi
+  fi
+}
+
+emit() {
+  local event="$1" detail="${2:-}"
+  feedback_emit "$event" "$detail"
+
+  [ -n "$HOOK_BIN" ] || return 0
 
   RALPH_EVENT="$event" \
   RALPH_EVENT_DETAIL="$detail" \

@@ -4,15 +4,19 @@
 
 - [x] control plane, trace, monitor e bloco extraídos;
 - [x] contrato arquitetural inicial;
-- [ ] suíte portátil da extração.
+- [x] suíte portátil da extração.
 
 ## 0.2.0 — instalação exclusiva
 
-- [ ] `ralph-init plan` somente leitura;
-- [ ] `ralph-init apply` atômico e idempotente;
-- [ ] `ralph-doctor`;
-- [ ] manifesto e hashes da instalação;
-- [ ] matriz de capabilities.
+- [x] `ralph-init plan` somente leitura;
+- [x] `ralph-init apply` atômico e idempotente;
+- [x] `ralph-init uninstall` reversível e protegido por ownership;
+- [x] `ralph-doctor`;
+- [x] manifesto e hashes da instalação;
+- [x] matriz de capabilities;
+- [x] feedback JSONL, stdout e callback para o orquestrador;
+- [x] monitor mostra o último evento do loop;
+- [x] fixtures de instalação, desinstalação e comunicação.
 
 ## 0.3.0 — providers condicionais
 

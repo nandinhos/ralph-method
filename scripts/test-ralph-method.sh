@@ -116,4 +116,8 @@ assert_eq '2' "$workflow_exit" 'workflow divergente'
 printf '%s' "$workflow_output" | grep -q 'workflow incompatível' || fail 'mensagem do workflow divergente'
 
 (cd "$TMP" && control verify) >/dev/null
+
+run_feedback_output="$(cd "$TMP" && control run --workflow wf_test --feature FEATURE-001 --lease "$lease" \
+  --command "printf '%s\\n' 'RALPH_FEEDBACK {\"event\":\"phase_done\",\"source\":\"ralph\"}'")"
+printf '%s' "$run_feedback_output" | grep -q '^RALPH_FEEDBACK ' || fail 'control não retransmitiu feedback do bloco'
 printf 'OK: Ralph Method smoke passou.\n'

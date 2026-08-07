@@ -14,6 +14,8 @@ O Ralph Method é um framework local instalado dentro de um projeto-alvo. O
 ```text
 executor executa
 → hook observa
+→ feedback informa o orquestrador
+→ ralph-control retransmite o feedback do bloco
 → ralph-trace normaliza fatos
 → ralph-control registra e valida
 → gates comprovam

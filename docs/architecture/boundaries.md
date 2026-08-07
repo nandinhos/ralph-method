@@ -6,9 +6,23 @@
 | `ralph-trace` | registrar fatos de execução e projetar relatório | alterar estado ou iniciar feature |
 | `ralph-monitor` | observar processos e publicar snapshot | aprovar, retry ou liberar lease |
 | `ralph.sh` | criar sessões e executar fases | concluir por parsing de log |
+| canal de feedback | publicar fatos sanitizados ao consumidor externo | alterar estado, gate, lease ou fila |
+| relay do `ralph-control` | retransmitir feedback durante o bloco | interpretar feedback como aprovação |
 | adaptador provider | converter saída externa para contrato trace | escrever ledger ou alterar código |
-| `ralph-init` | detectar contexto e instalar bundle local | copiar credenciais ou sobrescrever arquivos alheios |
+| `ralph-init` | detectar contexto, instalar e remover bundle com ownership | copiar credenciais, remover histórico ou sobrescrever arquivos sem ownership |
 | projeto-alvo | fornecer contexto, fases e comando de teste | depender do banco ou domínio do Ralph |
+
+## Instalação e remoção
+
+O `install-manifest.json` é a fronteira de ownership. Cada arquivo instalado
+recebe hash de origem e hash efetivamente instalado. Na remoção, um arquivo
+modificado é preservado e listado como `preserve_modified`; somente um arquivo
+inalterado e pertencente ao manifesto pode ser removido. A desinstalação não
+remove `.git/ralph-control`, `.ralph/workflow.json`, handoffs nem relatórios.
+
+O `bc-harness` pode distribuir o instalador, mas não é necessário em runtime.
+Depois de instalado, o projeto-alvo possui cópia própria do método e pode
+desinstalá-la sem apagar suas evidências.
 
 ## Seam de providers
 

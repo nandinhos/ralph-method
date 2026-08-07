@@ -1,1 +1,3 @@
 2026-08-07T00:00:00-03:00 | decision | núcleo Ralph extraído do commit 7ab25f8 para o repositório independente ralph-method; refactor-radar permanece fonte histórica, não dependência de runtime.
+2026-08-07T00:00:00-03:00 | decision | v0.2 adiciona instalação local reversível por manifesto/hash e feedback JSONL/stdout/callback; consumidores externos observam, ralph-control continua única autoridade.
+2026-08-07T00:00:00-03:00 | verification | fixtures verdes cobrem conflito, idempotência, preservação de arquivos modificados, runtime, eventos de progresso e regressão do loop.

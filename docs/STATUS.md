@@ -2,9 +2,9 @@
 
 ## Estado atual
 
-O repositório foi criado como extração independente do núcleo Ralph validado
-no `refactor-radar`. O control plane, trace, monitor, bloco, hooks e wrappers
-de gates já estão presentes. A primeira versão do framework é `0.1.0`.
+O repositório é uma extração independente do núcleo Ralph validado no
+`refactor-radar`. A versão `0.2.0` adiciona instalação local reversível,
+doctor, ownership por hash e canal de feedback para o orquestrador externo.
 
 ## Componentes extraídos
 
@@ -16,12 +16,19 @@ de gates já estão presentes. A primeira versão do framework é `0.1.0`.
 | Bloco | `bin/ralph-block`, `bin/ralph-bloco` | uma feature por execução |
 | Loop | `scripts/ralph.sh` | sessões por fase e gates externos |
 | Hook | `scripts/ralph-hook.sh` | observabilidade best-effort |
+| Instalação | `bin/ralph-init` | plan/apply/uninstall com manifesto |
+| Doctor | `bin/ralph-doctor` | drift e integridade da instalação |
+| Feedback | `schemas/feedback-event.schema.json` | contrato JSONL/stdout/callback |
 
-## Próxima entrega
+## Entrega concluída nesta fase
 
-Implementar `ralph-init plan/apply`, `ralph-doctor`, manifesto de instalação e
-registro de capabilities dos providers. A instalação deve ser local,
-idempotente, atômica e sem sobrescrever arquivos que não pertençam ao Ralph.
+`ralph-init plan/apply/uninstall`, `ralph-doctor`, manifesto de instalação,
+capabilities dos providers e feedback do loop foram implementados com testes
+portáteis. O uninstall preserva runtime, workflow e evidências; arquivos
+alterados pelo usuário ficam intactos. O apply usa staging e rollback para não
+deixar instalação parcial em falha; os perfis gerados apontam para o loop local.
+Quando o bloco é lançado pelo controlador, o feedback também é retransmitido
+ao terminal em tempo real.
 
 ## Providers
 
@@ -31,6 +38,8 @@ adaptador validado. Hermes e agy permanecem candidatos a executores delegados.
 
 ## Validação
 
-Os testes completos desta extração ainda serão executados após a criação da
-suíte portátil. Nenhuma alegação de compatibilidade está sendo feita apenas
-porque os arquivos foram copiados.
+Os checks portáteis verdes são `scripts/check-shell.sh`,
+`scripts/test-installation.sh`, `scripts/test-feedback.sh`,
+`scripts/test-ralph-method.sh` e `scripts/test-ralph.sh`. Eles cobrem
+ownership, conflito, idempotência, remoção segura, eventos, progresso e a
+regressão do loop.

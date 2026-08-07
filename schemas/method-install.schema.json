@@ -3,10 +3,11 @@
   "$id": "https://ralph-method.local/schemas/method-install.schema.json",
   "title": "Manifesto de instalação do Ralph Method",
   "type": "object",
-  "required": ["schema_version", "method_version", "project", "orchestration", "components"],
+  "required": ["schema_version", "method_version", "installed_at", "project", "orchestration", "components", "managed_files"],
   "properties": {
     "schema_version": {"const": "1.0.0"},
     "method_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "installed_at": {"type": "string", "format": "date-time"},
     "project": {"type": "object", "required": ["root", "git"], "additionalProperties": true},
     "orchestration": {
       "type": "object",
@@ -18,7 +19,20 @@
       },
       "additionalProperties": true
     },
-    "components": {"type": "array", "items": {"type": "object"}}
+    "components": {"type": "array", "items": {"type": "string"}},
+    "managed_files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "installed_hash"],
+        "properties": {
+          "path": {"type": "string", "minLength": 1},
+          "source_hash": {"type": ["string", "null"]},
+          "installed_hash": {"type": ["string", "null"]}
+        },
+        "additionalProperties": false
+      }
+    }
   },
   "additionalProperties": false
 }

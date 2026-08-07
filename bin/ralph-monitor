@@ -155,6 +155,11 @@ function monitorDefaultFeedbackFile(string $root): string
     return (monitorGitCommonDir($root) ?: $root).DIRECTORY_SEPARATOR.'ralph-control/monitor/latest.json';
 }
 
+function monitorLoopFeedbackFile(string $root): string
+{
+    return (monitorGitCommonDir($root) ?: $root).DIRECTORY_SEPARATOR.'ralph-control/feedback/events.jsonl';
+}
+
 /** @param array<string, mixed> $snapshot */
 function monitorWriteFeedback(string $path, array $snapshot): void
 {
@@ -228,6 +233,29 @@ function monitorLastEvent(string $root, string $workflowId, ?string $featureKey)
     return null;
 }
 
+/** @return array<string, mixed>|null */
+function monitorLastLoopFeedback(string $root): ?array
+{
+    $path = monitorLoopFeedbackFile($root);
+    if (! is_file($path)) {
+        return null;
+    }
+
+    $lines = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+    for ($index = count($lines) - 1; $index >= 0; $index--) {
+        try {
+            $event = json_decode($lines[$index], true, 512, JSON_THROW_ON_ERROR);
+        } catch (Throwable) {
+            continue;
+        }
+        if (is_array($event) && ($event['schema_version'] ?? null) === '1.0.0' && ($event['source'] ?? null) === 'ralph') {
+            return $event;
+        }
+    }
+
+    return null;
+}
+
 /** @return array<string, mixed> */
 function monitorSnapshot(string $root, string $workflowId, int $staleAfter, int $activityStaleAfter, ?string $controllerPath = null): array
 {
@@ -267,6 +295,7 @@ function monitorSnapshot(string $root, string $workflowId, int $staleAfter, int 
     }
 
     $lastEvent = monitorLastEvent($root, $workflowId, $cursor);
+    $lastLoopFeedback = monitorLastLoopFeedback($root);
     $lastEventTimestamp = is_string($lastEvent['timestamp'] ?? null) ? $lastEvent['timestamp'] : null;
     $lastEventAge = monitorAge($lastEventTimestamp);
     $processes = monitorProcesses($workflowId);
@@ -331,6 +360,7 @@ function monitorSnapshot(string $root, string $workflowId, int $staleAfter, int 
             'idle_seconds' => $idleSeconds,
             'cpu_milli' => $cpuMilli,
         ],
+        'loop_feedback' => $lastLoopFeedback,
         'processes' => $processes,
         'stale_after_seconds' => $staleAfter,
         'activity_stale_after_seconds' => $activityStaleAfter,
@@ -373,9 +403,13 @@ function monitorFeedback(array $snapshot): string
         'error' => (string) ($snapshot['message'] ?? 'falha ao consultar o workflow'),
         default => 'execução acompanhada normalmente',
     };
+    $loopFeedback = is_array($snapshot['loop_feedback'] ?? null) ? $snapshot['loop_feedback'] : null;
+    $loopSummary = $loopFeedback === null
+        ? 'loop sem feedback'
+        : (string) ($loopFeedback['event'] ?? 'evento desconhecido').': '.trim((string) preg_replace('/\s+/', ' ', (string) ($loopFeedback['detail'] ?? '')));
 
     return sprintf(
-        '[%s] [%s] Ralph %s | feature=%s | estado=%s | progresso=%s | estimativa=%s %s | gates=%s | processos=%d | último evento=%s há %s | %s',
+        '[%s] [%s] Ralph %s | feature=%s | estado=%s | progresso=%s | estimativa=%s %s | gates=%s | processos=%d | último evento=%s há %s | loop=%s | %s',
         (new DateTimeImmutable)->format('Y-m-d H:i:s'),
         $level,
         $snapshot['workflow_id'] ?? 'sem-workflow',
@@ -388,6 +422,7 @@ function monitorFeedback(array $snapshot): string
         $processCount,
         $last['type'] ?? 'indisponível',
         monitorFormatAge($last['age_seconds'] ?? null),
+        $loopSummary,
         $message,
     );
 }

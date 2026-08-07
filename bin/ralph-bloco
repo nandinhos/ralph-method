@@ -121,7 +121,7 @@ VERIFICADOR="${RALPH_VERIFY_MODEL:-<AUSENTE NO PERFIL>}"
 # mantido em catálogo próprio com ajustes que o uso ensinou. Definir
 # RALPH_BIN no perfil do engine é o caminho recomendado: fica versionado junto
 # da política, e some a chance de o bloco rodar com o orquestrador errado.
-RALPH="${RALPH_BIN:-$HOME/.claude-profiles/bc/plugins/marketplaces/beer-and-code/scripts/ralph.sh}"
+RALPH="${RALPH_BIN:-$REPO/scripts/ralph.sh}"
 GIT_DIR="$(git -C "$REPO" rev-parse --absolute-git-dir)"
 LOG_DIR="${GIT_DIR}/ralph-logs"
 LOG="${LOG_DIR}/ralph-${DE}-${ATE}.log"

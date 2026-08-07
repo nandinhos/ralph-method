@@ -13,7 +13,9 @@ gates comprovam e o controlador decide.
 - handoff e documentos numerados;
 - `ralph-trace` para a árvore de delegação entre executores;
 - seam para Codex, Claude, OpenCode, Hermes e agy;
-- instalação exclusiva por projeto, sem estado global do produto.
+- instalação exclusiva por projeto, sem estado global do produto;
+- desinstalação reversível por ownership e hashes;
+- feedback JSONL/stdout/callback para o orquestrador externo.
 
 ## Estrutura
 
@@ -31,17 +33,30 @@ docs/                   fonte de verdade do framework
 
 ## Instalação por projeto
 
-O instalador será exposto pelo `bc-harness` e executado em duas fases:
+O instalador pode ser exposto pelo `bc-harness` e é executado em duas fases:
 
 ```bash
 ralph-init plan --project /caminho/do/projeto
 ralph-init apply --project /caminho/do/projeto --provider auto
 ralph-doctor --project /caminho/do/projeto
+ralph-init uninstall --project /caminho/do/projeto
+ralph-init uninstall --project /caminho/do/projeto --apply
 ```
 
 `plan` é somente leitura. `apply` cria uma instalação local e idempotente. A
 detecção registra somente fatos como arquivos presentes, versões de CLI,
 comando de teste e capacidade declarada; não copia tokens nem credenciais.
+`uninstall` primeiro mostra um plano e só remove arquivos que continuam iguais
+ao hash instalado quando recebe `--apply`. Arquivos modificados, histórico,
+workflow, handoffs e relatórios são preservados.
+
+## Feedback para o orquestrador
+
+O loop publica eventos operacionais em
+`.git/ralph-control/feedback/events.jsonl`. Para que uma camada externa mostre
+o andamento em tempo real, configure `RALPH_FEEDBACK_STDOUT=1` ou um
+`RALPH_FEEDBACK_CMD`. O consumidor observa o evento, mas a decisão continua
+exclusiva do `ralph-control`.
 
 ## Providers
 
@@ -55,9 +70,10 @@ ser apresentado como exato.
 
 ## Estado
 
-A versão inicial é `0.1.0`, extraída do núcleo validado do `refactor-radar` no
-commit `7ab25f8`. A instalação inteligente e os adaptadores OpenCode serão
-incrementos versionados, sempre acompanhados de fixtures offline e regressão.
+A versão atual em desenvolvimento é `0.2.0`, extraída do núcleo validado do
+`refactor-radar` no commit `7ab25f8`. A instalação reversível e o canal de
+feedback estão incluídos; os adaptadores OpenCode serão incremento posterior,
+sempre acompanhado de fixtures offline e regressão.
 
 Consulte [docs/STATUS.md](docs/STATUS.md), [docs/architecture/README.md](docs/architecture/README.md)
 e [docs/roadmap.md](docs/roadmap.md).

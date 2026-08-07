@@ -311,6 +311,28 @@ function commandOutput(string $command, int &$exitCode): string
     return implode("\n", $output);
 }
 
+function relayFeedbackChunk(string &$buffer, string $chunk): void
+{
+    $buffer .= $chunk;
+    while (($position = strpos($buffer, "\n")) !== false) {
+        $line = substr($buffer, 0, $position);
+        $buffer = substr($buffer, $position + 1);
+        if (str_starts_with($line, 'RALPH_FEEDBACK ')) {
+            fwrite(STDOUT, $line."\n");
+            fflush(STDOUT);
+        }
+    }
+}
+
+function relayFeedbackFlush(string &$buffer): void
+{
+    if ($buffer !== '' && str_starts_with($buffer, 'RALPH_FEEDBACK ')) {
+        fwrite(STDOUT, $buffer."\n");
+        fflush(STDOUT);
+    }
+    $buffer = '';
+}
+
 /** @return array{exit_code: int, stdout: string, stderr: string, timed_out: bool, process_tree: array<string, mixed>} */
 function runReadOnlyCommand(string $command, int $timeoutSeconds, array $environment = []): array
 {
@@ -2895,6 +2917,11 @@ function configuredRalph(array $arguments): string
     }
     $ralph ??= getenv('RALPH_BIN') ?: '';
     if ($ralph === '' || ! is_executable($ralph)) {
+        if ($ralph !== '' && ! str_starts_with($ralph, DIRECTORY_SEPARATOR)) {
+            $ralph = $root.DIRECTORY_SEPARATOR.$ralph;
+        }
+    }
+    if ($ralph === '' || ! is_executable($ralph)) {
         fail('RALPH_BIN não encontrado ou não executável');
     }
 
@@ -2948,6 +2975,9 @@ function runControlled(array $arguments): void
         'RALPH_FEATURE_KEY' => $featureKey,
         'RALPH_LEASE_TOKEN' => $lease,
         'RALPH_HOOK' => $root.'/scripts/ralph-hook.sh',
+        'RALPH_FEEDBACK_STDOUT' => getenv('RALPH_FEEDBACK_STDOUT') !== false
+            ? (string) getenv('RALPH_FEEDBACK_STDOUT')
+            : '1',
     ]);
     $pipes = [];
     $process = proc_open('setsid '.$command, [
@@ -2972,6 +3002,7 @@ function runControlled(array $arguments): void
     stream_set_blocking($pipes[2], false);
     $stdout = '';
     $stderr = '';
+    $feedbackBuffer = '';
     $heartbeatInterval = max(1, (int) ($arguments['heartbeat-interval'] ?? getenv('RALPH_HEARTBEAT_INTERVAL') ?: 15));
     $lastHeartbeatAt = microtime(true);
     $lastActivityAt = $lastHeartbeatAt;
@@ -2981,6 +3012,7 @@ function runControlled(array $arguments): void
         $stderrChunk = stream_get_contents($pipes[2]);
         if (is_string($stdoutChunk) && $stdoutChunk !== '') {
             $stdout .= $stdoutChunk;
+            relayFeedbackChunk($feedbackBuffer, $stdoutChunk);
             $lastActivityAt = microtime(true);
         }
         if (is_string($stderrChunk) && $stderrChunk !== '') {
@@ -3018,10 +3050,12 @@ function runControlled(array $arguments): void
     $stderrChunk = stream_get_contents($pipes[2]);
     if (is_string($stdoutChunk)) {
         $stdout .= $stdoutChunk;
+        relayFeedbackChunk($feedbackBuffer, $stdoutChunk);
     }
     if (is_string($stderrChunk)) {
         $stderr .= $stderrChunk;
     }
+    relayFeedbackFlush($feedbackBuffer);
     fclose($pipes[1]);
     fclose($pipes[2]);
     $exitCode = proc_close($process);

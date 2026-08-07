@@ -5,10 +5,62 @@
 ```text
 ralph-init plan --project <path>
 ralph-init apply --project <path> --provider auto|codex|claude|opencode
+ralph-init uninstall --project <path> [--apply]
 ralph-doctor --project <path>
 bin/ralph-control <command> ...
 bin/ralph-trace record|report|tree ...
+bin/ralph-monitor --workflow <id> [--interval 30]
 ```
+
+`plan` é somente leitura. `apply` instala apenas os arquivos listados no
+manifesto, com cópia atômica. `uninstall` sem `--apply` apenas calcula o plano;
+com `--apply`, remove somente arquivos ainda iguais ao hash instalado e
+preserva arquivos modificados pelo usuário. Os perfis locais de Codex e Claude
+também são gerados com `RALPH_BIN=scripts/ralph.sh` e entram no ownership. O
+relatório fica em
+`.ralph/uninstall-report.json`. O histórico operacional (`.git/ralph-control`),
+workflow, handoffs e relatórios não pertencem ao uninstall e são preservados.
+
+## Canal de feedback do loop
+
+`scripts/ralph.sh` emite um evento sanitizado para cada início, tentativa,
+falha, espera, conclusão e encerramento. O evento segue
+`schemas/feedback-event.schema.json` e contém `run_id`, fase, tentativa,
+percentual estimado, estado e saúde. O canal é unidirecional: quem recebe o
+evento não pode aprovar gates, adquirir leases ou escolher a próxima feature.
+
+Por padrão, o loop grava JSONL local em:
+
+```text
+.git/ralph-control/feedback/events.jsonl
+```
+
+Para exibir o fluxo na tela do orquestrador, use:
+
+```bash
+RALPH_FEEDBACK_STDOUT=1 scripts/ralph.sh
+```
+
+O consumidor deve ler linhas com o prefixo `RALPH_FEEDBACK `. Para integração
+direta, `RALPH_FEEDBACK_CMD=/caminho/do/consumidor` executa um binário com
+`<evento> <detalhe>` nos argumentos e o JSON completo no stdin. O callback tem
+timeout e qualquer falha é apenas reportada; a execução não é aprovada nem
+interrompida por ele.
+
+Quando o bloco é iniciado pelo `ralph-control run` ou pelo supervisor, o
+controlador ativa esse canal por padrão e retransmite as linhas
+`RALPH_FEEDBACK` enquanto o processo está vivo. Assim o terminal do
+orquestrador recebe progresso sem esperar o encerramento do bloco. O relay
+continua sendo somente saída; gates, leases e transições permanecem no
+controlador.
+
+Os detalhes textuais são reduzidos e têm padrões óbvios de token, senha e API
+key redigidos antes da publicação. O evento não carrega prompt, resposta,
+credencial ou saída integral do comando.
+
+`bin/ralph-monitor` continua sendo somente leitura. Além do snapshot do
+workflow, ele mostra o último evento do JSONL do loop e permite detectar
+processo ausente, heartbeat parado, gates sem atividade e workflow bloqueado.
 
 ## Contrato de provider
 

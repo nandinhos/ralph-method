@@ -1,0 +1,602 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+const RALPH_METHOD_VERSION = '0.2.0';
+const RALPH_INSTALL_SCHEMA_VERSION = '1.0.0';
+
+$sourceRoot = realpath(getenv('RALPH_METHOD_SOURCE') ?: dirname(__DIR__)) ?: dirname(__DIR__);
+
+function fail(string $message, int $code = 1): never
+{
+    fwrite(STDERR, "erro: {$message}\n");
+    exit($code);
+}
+
+/** @return array{command: string, project: string, provider: string, apply: bool} */
+function arguments(array $argv): array
+{
+    $command = $argv[1] ?? 'plan';
+    if (str_starts_with($command, '--')) {
+        $command = 'plan';
+        $offset = 1;
+    } else {
+        $offset = 2;
+    }
+    $result = [
+        'command' => $command,
+        'project' => getcwd() ?: '.',
+        'provider' => 'auto',
+        'apply' => false,
+    ];
+    for ($index = $offset; $index < count($argv); $index++) {
+        $argument = $argv[$index];
+        if ($argument === '--apply') {
+            $result['apply'] = true;
+            continue;
+        }
+        if (str_starts_with($argument, '--project=')) {
+            $result['project'] = substr($argument, 10);
+            continue;
+        }
+        if ($argument === '--project') {
+            $result['project'] = $argv[++$index] ?? '';
+            continue;
+        }
+        if (str_starts_with($argument, '--provider=')) {
+            $result['provider'] = substr($argument, 11);
+            continue;
+        }
+        if ($argument === '--provider') {
+            $result['provider'] = $argv[++$index] ?? '';
+            continue;
+        }
+        if (in_array($argument, ['--help', '-h'], true)) {
+            echo "uso: bin/ralph-init plan|apply|uninstall|doctor --project <path> [--provider auto|codex|claude|opencode|hermes|agy] [--apply]\n";
+            exit(0);
+        }
+        fail("argumento desconhecido: {$argument}", 2);
+    }
+    if (! in_array($result['command'], ['plan', 'apply', 'uninstall', 'doctor'], true)) {
+        fail('comando inválido; use plan, apply, uninstall ou doctor', 2);
+    }
+    if (! in_array($result['provider'], ['auto', 'codex', 'claude', 'opencode', 'hermes', 'agy'], true)) {
+        fail('provider inválido', 2);
+    }
+
+    return $result;
+}
+
+function projectRoot(string $path): string
+{
+    $root = realpath($path);
+    if ($root === false || ! is_dir($root)) {
+        fail("projeto não encontrado: {$path}", 2);
+    }
+    $command = 'git -C '.escapeshellarg($root).' rev-parse --show-toplevel 2>/dev/null';
+    $gitRoot = trim((string) shell_exec($command));
+    if ($gitRoot === '') {
+        fail('o projeto precisa ser um checkout Git', 2);
+    }
+
+    return realpath($gitRoot) ?: $gitRoot;
+}
+
+/** @return array{exit: int, output: string} */
+function commandResult(string $command, string $cwd): array
+{
+    $process = proc_open($command, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, $cwd);
+    if (! is_resource($process)) {
+        return ['exit' => 1, 'output' => ''];
+    }
+    $output = (string) stream_get_contents($pipes[1]).(string) stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+
+    return ['exit' => proc_close($process), 'output' => trim($output)];
+}
+
+/** @return array<string, mixed> */
+function detectProject(string $root): array
+{
+    $commands = ['codex', 'claude', 'opencode', 'hermes', 'agy'];
+    $providers = [];
+    foreach ($commands as $command) {
+        $path = trim((string) shell_exec('command -v '.escapeshellarg($command).' 2>/dev/null'));
+        $version = null;
+        if ($path !== '') {
+            $result = commandResult(escapeshellarg($path).' --version', $root);
+            $version = $result['exit'] === 0 ? substr($result['output'], 0, 160) : null;
+        }
+        $providers[$command] = [
+            'installed' => $path !== '',
+            'path' => $path !== '' ? $path : null,
+            'version' => $version,
+            'auth_status' => 'not_checked',
+        ];
+    }
+
+    $signals = [
+        'codex' => is_dir($root.'/.codex') || is_dir($root.'/.codex-plugin'),
+        'claude' => is_dir($root.'/.claude') || is_dir($root.'/.claude-plugin') || is_file($root.'/CLAUDE.md'),
+        'opencode' => is_dir($root.'/.opencode') || is_file($root.'/opencode.json') || is_file($root.'/opencode.yaml') || is_file($root.'/opencode.toml'),
+    ];
+    $testCommand = null;
+    if (is_file($root.'/bin/check')) {
+        $testCommand = 'bin/check';
+    } elseif (is_file($root.'/composer.json')) {
+        $testCommand = 'composer test';
+    } elseif (is_file($root.'/package.json')) {
+        $testCommand = 'npm test';
+    } elseif (is_file($root.'/pyproject.toml') || is_file($root.'/pytest.ini')) {
+        $testCommand = 'pytest';
+    } elseif (is_file($root.'/go.mod')) {
+        $testCommand = 'go test ./...';
+    } elseif (is_file($root.'/Cargo.toml')) {
+        $testCommand = 'cargo test';
+    }
+    $git = [
+        'commit' => trim((string) shell_exec('git -C '.escapeshellarg($root).' rev-parse HEAD 2>/dev/null')),
+        'branch' => trim((string) shell_exec('git -C '.escapeshellarg($root).' branch --show-current 2>/dev/null')),
+        'working_tree_clean' => trim((string) shell_exec('git -C '.escapeshellarg($root).' status --porcelain 2>/dev/null')) === '',
+    ];
+
+    return [
+        'providers' => $providers,
+        'harness_signals' => $signals,
+        'test_command' => $testCommand,
+        'git' => $git,
+        'context_files' => array_values(array_filter(['AGENTS.md', 'CLAUDE.md', 'docs/agents', '.spec'], static fn (string $path): bool => file_exists($root.'/'.$path))),
+    ];
+}
+
+function selectProvider(array $detected, string $requested): string
+{
+    if ($requested !== 'auto') {
+        if (! ($detected['providers'][$requested]['installed'] ?? false)) {
+            fail("provider {$requested} não está instalado", 2);
+        }
+
+        return $requested;
+    }
+    foreach (['codex', 'claude', 'opencode'] as $candidate) {
+        if (($detected['harness_signals'][$candidate] ?? false) && ($detected['providers'][$candidate]['installed'] ?? false)) {
+            return $candidate;
+        }
+    }
+    foreach (['codex', 'claude', 'opencode'] as $candidate) {
+        if ($detected['providers'][$candidate]['installed'] ?? false) {
+            return $candidate;
+        }
+    }
+
+    return 'codex';
+}
+
+function hashFile(string $path): ?string
+{
+    return is_file($path) ? hash_file('sha256', $path) ?: null : null;
+}
+
+function writeJson(string $path, array $value): void
+{
+    $directory = dirname($path);
+    if (! is_dir($directory) && ! mkdir($directory, 0700, true) && ! is_dir($directory)) {
+        fail("não foi possível criar {$directory}");
+    }
+    $temporary = $path.'.tmp.'.bin2hex(random_bytes(6));
+    $json = json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR)."\n";
+    if (file_put_contents($temporary, $json, LOCK_EX) === false || ! rename($temporary, $path)) {
+        @unlink($temporary);
+        fail("não foi possível escrever {$path}");
+    }
+}
+
+/** @return list<string> */
+function managedSources(): array
+{
+    return [
+        'bin/ralph-control', 'bin/ralph-trace', 'bin/ralph-monitor',
+        'bin/ralph-block', 'bin/ralph-bloco', 'bin/ralph-knowledge',
+        'bin/ralph-init', 'bin/ralph-doctor',
+        'scripts/ralph.sh', 'scripts/ralph-hook.sh',
+        'scripts/ralph-generate-handoff.sh', 'scripts/ralph-run-curator.sh',
+        'scripts/ralph-run-independent-gate.sh', 'scripts/ralph-run-quality.sh',
+        'scripts/ralph-run-runtime-evidence.sh',
+        'schemas/feedback-event.schema.json',
+    ];
+}
+
+/** @return list<string> */
+function generatedPaths(): array
+{
+    return ['.ralph/method.json', '.ralph/providers.json', '.ralph/codex.env', '.ralph/claude.env'];
+}
+
+/** @return array<string, string> */
+function generatedProfiles(): array
+{
+    return [
+        '.ralph/codex.env' => "# Gerado pelo Ralph Method; altere somente se quiser uma política local.\nRALPH_BIN=scripts/ralph.sh\nRALPH_VERIFY_MODEL=gpt-5.6-luna\n",
+        '.ralph/claude.env' => "# Gerado pelo Ralph Method; altere somente se quiser uma política local.\nRALPH_BIN=scripts/ralph.sh\nRALPH_VERIFY_MODEL=sonnet\n",
+    ];
+}
+
+function writeText(string $path, string $content): void
+{
+    $directory = dirname($path);
+    if (! is_dir($directory) && ! mkdir($directory, 0700, true) && ! is_dir($directory)) {
+        fail("não foi possível criar {$directory}");
+    }
+    if (file_put_contents($path, $content, LOCK_EX) === false) {
+        fail("não foi possível escrever {$path}");
+    }
+}
+
+function stageCopy(string $source, string $destination): void
+{
+    $directory = dirname($destination);
+    if (! is_dir($directory) && ! mkdir($directory, 0700, true) && ! is_dir($directory)) {
+        throw new RuntimeException("não foi possível criar {$directory}");
+    }
+    if (! copy($source, $destination)) {
+        throw new RuntimeException("não foi possível preparar {$destination}");
+    }
+    chmod($destination, ((int) fileperms($source) & 0111) !== 0 ? 0755 : 0644);
+}
+
+function removeTree(string $path): void
+{
+    if (is_link($path) || is_file($path)) {
+        @unlink($path);
+        return;
+    }
+    if (! is_dir($path)) {
+        return;
+    }
+    foreach (scandir($path) ?: [] as $entry) {
+        if (in_array($entry, ['.', '..'], true)) {
+            continue;
+        }
+        removeTree($path.'/'.$entry);
+    }
+    @rmdir($path);
+}
+
+/** @param list<string> $paths */
+function commitStagedFiles(string $root, string $stage, string $backup, array $paths): void
+{
+    $backedUp = [];
+    $installed = [];
+    try {
+        foreach ($paths as $relative) {
+            $destination = $root.'/'.$relative;
+            $staged = $stage.'/'.$relative;
+            $backupPath = $backup.'/'.$relative;
+            if (is_file($destination)) {
+                $backupDirectory = dirname($backupPath);
+                if (! is_dir($backupDirectory) && ! mkdir($backupDirectory, 0700, true) && ! is_dir($backupDirectory)) {
+                    throw new RuntimeException("não foi possível preparar backup de {$relative}");
+                }
+                if (! rename($destination, $backupPath)) {
+                    throw new RuntimeException("não foi possível proteger {$relative} antes da instalação");
+                }
+                $backedUp[] = $relative;
+            }
+            $destinationDirectory = dirname($destination);
+            if (! is_dir($destinationDirectory) && ! mkdir($destinationDirectory, 0700, true) && ! is_dir($destinationDirectory)) {
+                throw new RuntimeException("não foi possível criar {$destinationDirectory}");
+            }
+            if (! rename($staged, $destination)) {
+                throw new RuntimeException("não foi possível publicar {$relative}");
+            }
+            $installed[] = $relative;
+        }
+    } catch (Throwable $exception) {
+        foreach (array_reverse($installed) as $relative) {
+            @unlink($root.'/'.$relative);
+        }
+        foreach (array_reverse($backedUp) as $relative) {
+            $destination = $root.'/'.$relative;
+            $directory = dirname($destination);
+            if (! is_dir($directory)) {
+                @mkdir($directory, 0700, true);
+            }
+            @rename($backup.'/'.$relative, $destination);
+        }
+        throw $exception;
+    }
+}
+
+/** @return array<string, mixed> */
+function readManifest(string $path, ?string $expectedRoot = null): array
+{
+    if (! is_file($path)) {
+        fail("manifesto de instalação não encontrado: {$path}", 2);
+    }
+    $manifest = json_decode((string) file_get_contents($path), true, 512, JSON_THROW_ON_ERROR);
+    if (! is_array($manifest) || ! is_array($manifest['managed_files'] ?? null)) {
+        fail('manifesto de instalação inválido', 2);
+    }
+    if ($expectedRoot !== null && ($manifest['project']['root'] ?? null) !== $expectedRoot) {
+        fail('manifesto de instalação pertence a outro projeto', 3);
+    }
+
+    return $manifest;
+}
+
+/** @return array<string, mixed> */
+function installationPlan(string $root, array $detected, string $provider): array
+{
+    global $sourceRoot;
+    $manifestPath = $root.'/.ralph/install-manifest.json';
+    $existing = is_file($manifestPath) ? readManifest($manifestPath, $root) : null;
+    $files = [];
+    foreach (array_merge(managedSources(), generatedPaths()) as $relative) {
+        $source = $sourceRoot.'/'.$relative;
+        $destination = $root.'/'.$relative;
+        $currentHash = hashFile($destination);
+        $ownedHash = null;
+        foreach (($existing['managed_files'] ?? []) as $managed) {
+            if (($managed['path'] ?? null) === $relative) {
+                $ownedHash = $managed['installed_hash'] ?? null;
+                break;
+            }
+        }
+        $action = $currentHash === null ? 'create' : (($ownedHash !== null && $currentHash === $ownedHash) ? 'update' : 'conflict');
+        $files[] = [
+            'path' => $relative,
+            'action' => $action,
+            'current_hash' => $currentHash,
+            'source_hash' => is_file($source) ? hashFile($source) : null,
+            'generated' => ! in_array($relative, managedSources(), true),
+        ];
+    }
+
+    return [
+        'schema_version' => RALPH_INSTALL_SCHEMA_VERSION,
+        'method_version' => RALPH_METHOD_VERSION,
+        'project' => ['root' => $root, 'git' => $detected['git']],
+        'orchestration' => [
+            'mode' => ($detected['providers'][$provider]['installed'] ?? false)
+                ? ($provider === 'codex' ? 'native_codex' : 'single_provider')
+                : 'needs_review',
+            'primary_runner' => $provider,
+            'fallback_policy' => 'none',
+        ],
+        'detection' => $detected,
+        'files' => $files,
+        'existing_installation' => $existing !== null,
+    ];
+}
+
+function printPlan(array $plan): void
+{
+    echo json_encode($plan, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR)."\n";
+}
+
+function applyInstallation(string $root, array $plan): void
+{
+    global $sourceRoot;
+    foreach ($plan['files'] as $file) {
+        if ($file['action'] === 'conflict') {
+            fail('instalação interrompida por conflito em '.$file['path'], 3);
+        }
+    }
+    $provider = $plan['orchestration']['primary_runner'];
+    $lockPath = $root.'/.ralph/install.lock';
+    if (! is_dir(dirname($lockPath)) && ! mkdir(dirname($lockPath), 0700, true) && ! is_dir(dirname($lockPath))) {
+        fail('não foi possível preparar o lock da instalação');
+    }
+    $lock = fopen($lockPath, 'c+');
+    if ($lock === false || ! flock($lock, LOCK_EX | LOCK_NB)) {
+        if (is_resource($lock)) {
+            fclose($lock);
+        }
+        fail('já existe uma instalação ou remoção em andamento', 4);
+    }
+
+    $stage = $root.'/.ralph/.install-stage-'.bin2hex(random_bytes(6));
+    $backup = $root.'/.ralph/.install-backup-'.bin2hex(random_bytes(6));
+    $sourceFiles = array_values(array_filter($plan['files'], static fn (array $file): bool => ($file['generated'] ?? false) === false));
+    $managedFiles = $plan['files'];
+    $method = [
+        'schema_version' => RALPH_INSTALL_SCHEMA_VERSION,
+        'method_version' => RALPH_METHOD_VERSION,
+        'orchestration' => $plan['orchestration'],
+        'project' => $plan['project'],
+        'test_command' => $plan['detection']['test_command'],
+    ];
+    $providers = $plan['detection'];
+
+    try {
+        if (! mkdir($stage, 0700, true) && ! is_dir($stage)) {
+            throw new RuntimeException('não foi possível criar o staging da instalação');
+        }
+        foreach ($sourceFiles as $file) {
+            stageCopy($sourceRoot.'/'.$file['path'], $stage.'/'.$file['path']);
+        }
+        writeJson($stage.'/.ralph/method.json', $method);
+        writeJson($stage.'/.ralph/providers.json', $providers);
+        foreach (generatedProfiles() as $relative => $content) {
+            writeText($stage.'/'.$relative, $content);
+            chmod($stage.'/'.$relative, 0644);
+        }
+
+        $managed = [];
+        foreach ($managedFiles as $file) {
+            $relative = (string) $file['path'];
+            $managed[] = [
+                'path' => $relative,
+                'source_hash' => $file['source_hash'] ?? null,
+                'installed_hash' => hashFile($stage.'/'.$relative),
+            ];
+        }
+        $manifest = [
+            'schema_version' => RALPH_INSTALL_SCHEMA_VERSION,
+            'method_version' => RALPH_METHOD_VERSION,
+            'installed_at' => gmdate('Y-m-d\\TH:i:s\\Z'),
+            'project' => $plan['project'],
+            'orchestration' => $plan['orchestration'],
+            'components' => ['installer', 'control_plane', 'trace', 'monitor', 'loop', 'hook', 'feedback'],
+            'managed_files' => $managed,
+        ];
+        writeJson($stage.'/.ralph/install-manifest.json', $manifest);
+
+        $commitPaths = array_merge(array_map(static fn (array $file): string => (string) $file['path'], $managedFiles), ['.ralph/install-manifest.json']);
+        commitStagedFiles($root, $stage, $backup, $commitPaths);
+        removeTree($backup);
+        removeTree($stage);
+        flock($lock, LOCK_UN);
+        fclose($lock);
+        printPlan(['status' => 'installed', 'method_version' => RALPH_METHOD_VERSION, 'provider' => $provider, 'manifest' => '.ralph/install-manifest.json']);
+    } catch (Throwable $exception) {
+        removeTree($stage);
+        removeTree($backup);
+        flock($lock, LOCK_UN);
+        fclose($lock);
+        fail('instalação transacional revertida: '.$exception->getMessage(), 4);
+    }
+}
+
+function uninstall(string $root, bool $apply): void
+{
+    $lock = null;
+    if ($apply) {
+        $lockPath = $root.'/.ralph/install.lock';
+        if (! is_dir(dirname($lockPath)) && ! mkdir(dirname($lockPath), 0700, true) && ! is_dir(dirname($lockPath))) {
+            fail('não foi possível preparar o lock da desinstalação');
+        }
+        $lock = fopen($lockPath, 'c+');
+        if ($lock === false || ! flock($lock, LOCK_EX | LOCK_NB)) {
+            if (is_resource($lock)) {
+                fclose($lock);
+            }
+            fail('já existe uma instalação ou remoção em andamento', 4);
+        }
+    }
+
+    $manifestPath = $root.'/.ralph/install-manifest.json';
+    $manifest = readManifest($manifestPath, $root);
+    $files = [];
+    foreach ($manifest['managed_files'] as $managed) {
+        $path = (string) ($managed['path'] ?? '');
+        $absolute = $root.'/'.$path;
+        $currentHash = hashFile($absolute);
+        $installedHash = $managed['installed_hash'] ?? null;
+        $action = $currentHash === null ? 'missing' : ($currentHash === $installedHash ? 'remove' : 'preserve_modified');
+        $files[] = ['path' => $path, 'action' => $action];
+    }
+    $plan = ['status' => $apply ? 'uninstalling' : 'uninstall_plan', 'preserves_runtime' => true, 'files' => $files];
+    if (! $apply) {
+        printPlan($plan);
+        return;
+    }
+
+    $backup = $root.'/.ralph/.uninstall-backup-'.bin2hex(random_bytes(6));
+    $moved = [];
+    foreach ($files as $file) {
+        if ($file['action'] === 'remove') {
+            $source = $root.'/'.$file['path'];
+            $backupPath = $backup.'/'.$file['path'];
+            $directory = dirname($backupPath);
+            if (! is_dir($directory) && ! mkdir($directory, 0700, true) && ! is_dir($directory)) {
+                fail('não foi possível preparar backup da remoção', 4);
+            }
+            if (! rename($source, $backupPath)) {
+                foreach (array_reverse($moved) as $restored) {
+                    @rename($backup.'/'.$restored, $root.'/'.$restored);
+                }
+                removeTree($backup);
+                if (is_resource($lock)) {
+                    flock($lock, LOCK_UN);
+                    fclose($lock);
+                }
+                fail('desinstalação revertida; não foi possível remover '.$file['path'], 4);
+            }
+            $moved[] = $file['path'];
+        }
+    }
+    $manifestBackup = $backup.'/.ralph/install-manifest.json';
+    if (! is_dir(dirname($manifestBackup)) && ! mkdir(dirname($manifestBackup), 0700, true) && ! is_dir(dirname($manifestBackup))) {
+        fail('não foi possível preparar backup do manifesto', 4);
+    }
+    if (! rename($manifestPath, $manifestBackup)) {
+        foreach (array_reverse($moved) as $restored) {
+            @rename($backup.'/'.$restored, $root.'/'.$restored);
+        }
+        removeTree($backup);
+        if (is_resource($lock)) {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
+        fail('desinstalação revertida; não foi possível remover o manifesto', 4);
+    }
+    writeJson($root.'/.ralph/uninstall-report.json', [
+        'schema_version' => RALPH_INSTALL_SCHEMA_VERSION,
+        'uninstalled_at' => gmdate('Y-m-d\\TH:i:s\\Z'),
+        'preserves_runtime' => true,
+        'files' => $files,
+        'preserved_paths' => ['.git/ralph-control', '.ralph/workflow.json', '.ralph/handoffs', '.ralph/reports'],
+    ]);
+    removeTree($backup);
+    if (is_resource($lock)) {
+        flock($lock, LOCK_UN);
+        fclose($lock);
+    }
+    printPlan(['status' => 'uninstalled', 'report' => '.ralph/uninstall-report.json', 'preserves_runtime' => true, 'files' => $files]);
+}
+
+function doctor(string $root): void
+{
+    $manifestPath = $root.'/.ralph/install-manifest.json';
+    if (! is_file($manifestPath)) {
+        printPlan(['status' => 'not_installed', 'project' => $root]);
+        return;
+    }
+    $manifest = readManifest($manifestPath, $root);
+    $drift = [];
+    foreach ($manifest['managed_files'] as $managed) {
+        $path = (string) $managed['path'];
+        $actual = hashFile($root.'/'.$path);
+        if ($actual !== ($managed['installed_hash'] ?? null)) {
+            $drift[] = ['path' => $path, 'status' => $actual === null ? 'missing' : 'modified'];
+        }
+    }
+    printPlan([
+        'status' => $drift === [] ? 'healthy' : 'drift_detected',
+        'method_version' => $manifest['method_version'] ?? null,
+        'provider' => $manifest['orchestration']['primary_runner'] ?? null,
+        'drift' => $drift,
+        'runtime_preserved' => is_dir($root.'/.git/ralph-control'),
+    ]);
+}
+
+$arguments = arguments($argv);
+$root = projectRoot($arguments['project']);
+$manifestPath = $root.'/.ralph/install-manifest.json';
+
+try {
+    if ($arguments['command'] === 'uninstall') {
+        uninstall($root, $arguments['apply']);
+        exit(0);
+    }
+    if ($arguments['command'] === 'doctor') {
+        doctor($root);
+        exit(0);
+    }
+    $detected = detectProject($root);
+    $provider = selectProvider($detected, $arguments['provider']);
+    $plan = installationPlan($root, $detected, $provider);
+    if ($arguments['command'] === 'plan') {
+        printPlan($plan);
+        exit(0);
+    }
+    if ($arguments['command'] === 'apply') {
+        applyInstallation($root, $plan);
+        exit(0);
+    }
+} catch (JsonException $exception) {
+    fail('JSON inválido: '.$exception->getMessage());
+}

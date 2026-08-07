@@ -21,13 +21,15 @@ fases, comandos de teste e contexto técnico.
 - `bin/ralph-trace` registra fatos delegados através do controlador.
 - `bin/ralph-monitor` observa execução e publica snapshots locais.
 - `scripts/ralph.sh` executa fases; não aprova por texto de log.
-- `scripts/ralph-init.sh` instalará o framework somente após plano explícito.
+- `bin/ralph-init` instala e desinstala o framework somente após plano explícito.
 - Adaptadores de provider apenas normalizam saída; nunca gravam estado global.
 
 ## Verificação
 
 ```bash
 bash scripts/check-shell.sh
+bash scripts/test-installation.sh
+bash scripts/test-feedback.sh
 bash scripts/test-ralph-method.sh
 bash scripts/test-ralph.sh
 ```
@@ -42,3 +44,5 @@ testar o núcleo portátil.
 - Não sobrescrever arquivos existentes do projeto-alvo sem ownership explícito.
 - Não trocar provider silenciosamente após falha.
 - A instalação deve ser atômica, idempotente e reversível.
+- O loop publica feedback sanitizado em JSONL; o consumidor externo observa,
+  mas não aprova gates, muda leases ou escolhe a próxima feature.
