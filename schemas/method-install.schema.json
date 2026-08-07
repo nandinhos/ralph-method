@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ralph-method.local/schemas/method-install.schema.json",
+  "title": "Manifesto de instalação do Ralph Method",
+  "type": "object",
+  "required": ["schema_version", "method_version", "project", "orchestration", "components"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "method_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "project": {"type": "object", "required": ["root", "git"], "additionalProperties": true},
+    "orchestration": {
+      "type": "object",
+      "required": ["mode", "primary_runner", "fallback_policy"],
+      "properties": {
+        "mode": {"enum": ["native_codex", "single_provider", "multi_provider", "needs_review"]},
+        "primary_runner": {"enum": ["codex", "claude", "opencode", "hermes", "agy"]},
+        "fallback_policy": {"enum": ["none", "explicit_only"]}
+      },
+      "additionalProperties": true
+    },
+    "components": {"type": "array", "items": {"type": "object"}}
+  },
+  "additionalProperties": false
+}

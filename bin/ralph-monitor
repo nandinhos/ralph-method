@@ -1,0 +1,436 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+/**
+ * Monitor somente leitura do workflow do Ralph.
+ *
+ * Ele não aprova gates, não libera leases e não altera o ledger. Sua função é
+ * tornar visível o progresso, publicar um snapshot consumível pelo supervisor
+ * e apontar ausência de heartbeat ou de processo.
+ */
+
+/** @return array<string, string|bool> */
+function monitorArguments(array $argv): array
+{
+    $arguments = [];
+    for ($index = 1; $index < count($argv); $index++) {
+        $argument = $argv[$index];
+        if (! str_starts_with($argument, '--')) {
+            continue;
+        }
+
+        $argument = substr($argument, 2);
+        if (str_contains($argument, '=')) {
+            [$key, $value] = explode('=', $argument, 2);
+            $arguments[$key] = $value;
+            continue;
+        }
+
+        $next = $argv[$index + 1] ?? null;
+        if ($next !== null && ! str_starts_with($next, '--')) {
+            $arguments[$argument] = $next;
+            $index++;
+            continue;
+        }
+
+        $arguments[$argument] = true;
+    }
+
+    return $arguments;
+}
+
+/** @return array{exit: int, stdout: string, stderr: string} */
+function monitorCommand(string $command, ?string $cwd = null): array
+{
+    $pipes = [];
+    $process = proc_open($command, [
+        0 => ['pipe', 'r'],
+        1 => ['pipe', 'w'],
+        2 => ['pipe', 'w'],
+    ], $pipes, $cwd);
+
+    if (! is_resource($process)) {
+        return ['exit' => 1, 'stdout' => '', 'stderr' => 'não foi possível iniciar o comando'];
+    }
+
+    fclose($pipes[0]);
+    $stdout = stream_get_contents($pipes[1]);
+    $stderr = stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+
+    return ['exit' => proc_close($process), 'stdout' => $stdout, 'stderr' => $stderr];
+}
+
+function monitorRequired(array $arguments, string $name): string
+{
+    $value = $arguments[$name] ?? null;
+    if (! is_string($value) || trim($value) === '') {
+        fwrite(STDERR, "erro: parâmetro obrigatório ausente: --{$name}\n");
+        exit(2);
+    }
+
+    return trim($value);
+}
+
+function monitorInt(array $arguments, string $name, int $default, int $minimum): int
+{
+    $value = $arguments[$name] ?? $default;
+    if (is_bool($value) || ! is_numeric($value)) {
+        fwrite(STDERR, "erro: --{$name} deve ser numérico\n");
+        exit(2);
+    }
+
+    $value = (int) $value;
+    if ($value < $minimum) {
+        fwrite(STDERR, "erro: --{$name} deve ser maior ou igual a {$minimum}\n");
+        exit(2);
+    }
+
+    return $value;
+}
+
+function monitorBool(array $arguments, string $name): bool
+{
+    return ($arguments[$name] ?? false) === true;
+}
+
+function monitorAge(?string $timestamp): ?int
+{
+    if ($timestamp === null || $timestamp === '') {
+        return null;
+    }
+
+    try {
+        $eventTime = new DateTimeImmutable($timestamp);
+    } catch (Throwable) {
+        return null;
+    }
+
+    return max(0, time() - $eventTime->getTimestamp());
+}
+
+function monitorFormatAge(?int $seconds): string
+{
+    if ($seconds === null) {
+        return 'indisponível';
+    }
+    if ($seconds < 60) {
+        return $seconds.'s';
+    }
+    if ($seconds < 3600) {
+        return intdiv($seconds, 60).'min '.($seconds % 60).'s';
+    }
+
+    return intdiv($seconds, 3600).'h '.intdiv($seconds % 3600, 60).'min';
+}
+
+function monitorProgressBar(float|int $percent, int $width = 20): string
+{
+    $percent = max(0, min(100, (float) $percent));
+    $filled = (int) round(($percent / 100) * $width);
+
+    return '['.str_repeat('█', $filled).str_repeat('·', $width - $filled).']';
+}
+
+function monitorGitCommonDir(string $root): ?string
+{
+    $git = monitorCommand('git -C '.escapeshellarg($root).' rev-parse --git-common-dir');
+    if ($git['exit'] !== 0) {
+        return null;
+    }
+
+    $gitCommonDir = trim($git['stdout']);
+    if (! str_starts_with($gitCommonDir, DIRECTORY_SEPARATOR)) {
+        $gitCommonDir = $root.DIRECTORY_SEPARATOR.$gitCommonDir;
+    }
+
+    return realpath($gitCommonDir) ?: $gitCommonDir;
+}
+
+function monitorDefaultFeedbackFile(string $root): string
+{
+    return (monitorGitCommonDir($root) ?: $root).DIRECTORY_SEPARATOR.'ralph-control/monitor/latest.json';
+}
+
+/** @param array<string, mixed> $snapshot */
+function monitorWriteFeedback(string $path, array $snapshot): void
+{
+    $directory = dirname($path);
+    if (! is_dir($directory) && ! mkdir($directory, 0700, true) && ! is_dir($directory)) {
+        return;
+    }
+
+    $temporary = $path.'.tmp.'.bin2hex(random_bytes(6));
+    $json = json_encode($snapshot, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)."\n";
+    if (file_put_contents($temporary, $json, LOCK_EX) === false || ! rename($temporary, $path)) {
+        @unlink($temporary);
+    }
+}
+
+/** @return list<array{pid: int, age: int, command: string}> */
+function monitorProcesses(string $workflowId): array
+{
+    $result = monitorCommand('ps -eo pid=,etimes=,cmd=');
+    if ($result['exit'] !== 0) {
+        return [];
+    }
+
+    $processes = [];
+    foreach (preg_split('/\R/', $result['stdout']) ?: [] as $line) {
+        if (! str_contains($line, $workflowId) || ! preg_match('/ralph-control|ralph\.sh|ralph-block|ralph-bloco/', $line)) {
+            continue;
+        }
+        if (preg_match('/^\s*(\d+)\s+(\d+)\s+(.+)$/', $line, $matches) !== 1) {
+            continue;
+        }
+
+        $processes[] = [
+            'pid' => (int) $matches[1],
+            'age' => (int) $matches[2],
+            'command' => trim($matches[3]),
+        ];
+    }
+
+    return $processes;
+}
+
+/** @return array<string, mixed>|null */
+function monitorLastEvent(string $root, string $workflowId, ?string $featureKey): ?array
+{
+    $gitCommonDir = monitorGitCommonDir($root);
+    if ($gitCommonDir === null) {
+        return null;
+    }
+
+    $eventsFile = $gitCommonDir.DIRECTORY_SEPARATOR.'ralph-control/events.jsonl';
+    if (! is_file($eventsFile)) {
+        return null;
+    }
+
+    $lines = file($eventsFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+    for ($index = count($lines) - 1; $index >= 0; $index--) {
+        try {
+            $event = json_decode($lines[$index], true, 512, JSON_THROW_ON_ERROR);
+        } catch (Throwable) {
+            continue;
+        }
+        if (is_array($event)
+            && ($event['workflow_id'] ?? null) === $workflowId
+            && ($featureKey === null || ($event['feature_key'] ?? null) === $featureKey)
+        ) {
+            return $event;
+        }
+    }
+
+    return null;
+}
+
+/** @return array<string, mixed> */
+function monitorSnapshot(string $root, string $workflowId, int $staleAfter, int $activityStaleAfter, ?string $controllerPath = null): array
+{
+    $controller = realpath($controllerPath ?? $root.'/bin/ralph-control');
+    if ($controller === false || ! is_executable($controller)) {
+        return ['health' => 'error', 'message' => 'bin/ralph-control não encontrado ou não executável'];
+    }
+
+    $command = escapeshellarg(PHP_BINARY).' '.escapeshellarg($controller)
+        .' status --workflow '.escapeshellarg($workflowId);
+    $status = monitorCommand($command, $root);
+    if ($status['exit'] !== 0) {
+        return [
+            'health' => 'error',
+            'message' => trim($status['stderr'] !== '' ? $status['stderr'] : $status['stdout']),
+        ];
+    }
+
+    try {
+        $payload = json_decode($status['stdout'], true, 512, JSON_THROW_ON_ERROR);
+    } catch (Throwable $exception) {
+        return ['health' => 'error', 'message' => 'status inválido: '.$exception->getMessage()];
+    }
+    if (! is_array($payload)) {
+        return ['health' => 'error', 'message' => 'status não retornou objeto JSON'];
+    }
+
+    $projection = is_array($payload['projection'] ?? null) ? $payload['projection'] : [];
+    $features = is_array($projection['features'] ?? null) ? $projection['features'] : [];
+    $cursor = is_string($projection['cursor'] ?? null) ? $projection['cursor'] : null;
+    $current = null;
+    foreach ($features as $feature) {
+        if (is_array($feature) && ($feature['feature_key'] ?? null) === $cursor) {
+            $current = $feature;
+            break;
+        }
+    }
+
+    $lastEvent = monitorLastEvent($root, $workflowId, $cursor);
+    $lastEventTimestamp = is_string($lastEvent['timestamp'] ?? null) ? $lastEvent['timestamp'] : null;
+    $lastEventAge = monitorAge($lastEventTimestamp);
+    $processes = monitorProcesses($workflowId);
+    $lastFacts = is_array($lastEvent['facts'] ?? null) ? $lastEvent['facts'] : [];
+    $lastProcessTree = is_array($lastFacts['process_tree'] ?? null) ? $lastFacts['process_tree'] : [];
+    $idleSeconds = is_int($lastFacts['idle_seconds'] ?? null) ? $lastFacts['idle_seconds'] : null;
+    $cpuMilli = is_int($lastProcessTree['cpu_milli'] ?? null) ? $lastProcessTree['cpu_milli'] : null;
+    $state = is_array($current) && is_string($current['state'] ?? null) ? $current['state'] : 'complete';
+    $doneStates = ['approved', 'released', 'knowledge_pending', 'knowledge_curated', 'knowledge_skipped'];
+    $done = count(array_filter($features, static fn (mixed $feature): bool => is_array($feature) && in_array($feature['state'] ?? null, $doneStates, true)));
+    $total = count($features);
+    $mandatoryGates = ['validation', 'quality', 'runtime_evidence', 'technical_review', 'curation'];
+    $passedGates = is_array($current) ? count(array_filter(
+        $mandatoryGates,
+        static fn (string $gate): bool => (($current['gates'][$gate] ?? null) === 'passed'),
+    )) : 0;
+    $featurePercent = $total > 0 ? round(($done / $total) * 100, 1) : 100.0;
+    $gatePercent = round(($passedGates / count($mandatoryGates)) * 100, 1);
+    $estimatedPercent = $total > 0
+        ? round((($done + ($current === null ? 0 : $passedGates / count($mandatoryGates))) / $total) * 100, 1)
+        : 100.0;
+
+    $health = match (true) {
+        $state === 'running' && $processes === [] => 'process_missing',
+        $state === 'running' && $lastEventAge !== null && $lastEventAge > $staleAfter => 'heartbeat_stale',
+        $state === 'running' && ($lastEvent['type'] ?? null) === 'command.heartbeat' && $idleSeconds !== null && $idleSeconds > $activityStaleAfter && ($cpuMilli ?? 0) <= 1000 => 'activity_stale',
+        $state === 'awaiting_gates' && $lastEventAge !== null && $lastEventAge > $staleAfter => 'gates_stale',
+        in_array($state, ['debugging_required', 'debugging_running', 'debugging_verified'], true) => 'debugging',
+        in_array($state, ['blocked', 'recovery_required'], true) => 'blocked',
+        $state === 'complete' => 'complete',
+        default => 'ok',
+    };
+
+    return [
+        'health' => $health,
+        'workflow_id' => $workflowId,
+        'cursor' => $cursor,
+        'state' => $state,
+        'position' => is_array($current) ? ($current['position'] ?? null) : null,
+        'title' => is_array($current) ? ($current['title'] ?? null) : null,
+        'attempt' => is_array($current) ? ($current['attempt'] ?? null) : null,
+        'total_features' => $total,
+        'completed_features' => $done,
+        'progress' => [
+            'feature_percent' => $featurePercent,
+            'gate_percent' => $gatePercent,
+            'estimated_percent' => $estimatedPercent,
+            'completed_features' => $done,
+            'total_features' => $total,
+            'passed_gates' => $passedGates,
+            'total_gates' => count($mandatoryGates),
+            'feature_bar' => monitorProgressBar($featurePercent),
+            'gate_bar' => monitorProgressBar($gatePercent),
+            'estimated_bar' => monitorProgressBar($estimatedPercent),
+        ],
+        'event_count' => $payload['event_count'] ?? null,
+        'last_event' => [
+            'type' => $lastEvent['type'] ?? null,
+            'summary' => $lastEvent['summary'] ?? null,
+            'timestamp' => $lastEventTimestamp,
+            'age_seconds' => $lastEventAge,
+            'idle_seconds' => $idleSeconds,
+            'cpu_milli' => $cpuMilli,
+        ],
+        'processes' => $processes,
+        'stale_after_seconds' => $staleAfter,
+        'activity_stale_after_seconds' => $activityStaleAfter,
+    ];
+}
+
+/** @param array<string, mixed> $snapshot */
+function monitorFeedback(array $snapshot): string
+{
+    $health = (string) ($snapshot['health'] ?? 'error');
+    $level = match ($health) {
+        'ok' => 'INFO',
+        'complete' => 'OK',
+        'blocked', 'process_missing', 'heartbeat_stale', 'activity_stale', 'gates_stale' => 'ALERTA',
+        'debugging' => 'INFO',
+        default => 'ERRO',
+    };
+    $feature = ($snapshot['cursor'] ?? null) ?: 'nenhuma';
+    $state = (string) ($snapshot['state'] ?? 'desconhecido');
+    $progress = (string) ($snapshot['completed_features'] ?? 0).'/'.(string) ($snapshot['total_features'] ?? 0);
+    $progressData = is_array($snapshot['progress'] ?? null) ? $snapshot['progress'] : [];
+    $estimated = (string) ($progressData['estimated_percent'] ?? 0).'%';
+    $gates = (string) ($progressData['passed_gates'] ?? 0).'/'.(string) ($progressData['total_gates'] ?? 5);
+    $estimatedBar = (string) ($progressData['estimated_bar'] ?? monitorProgressBar((float) ($progressData['estimated_percent'] ?? 0)));
+    $last = is_array($snapshot['last_event'] ?? null) ? $snapshot['last_event'] : [];
+    $processCount = is_array($snapshot['processes'] ?? null) ? count($snapshot['processes']) : 0;
+    $message = match ($health) {
+        'process_missing' => 'feature em execução, mas nenhum processo Ralph foi encontrado',
+        'heartbeat_stale' => 'processo existe, mas não há novo evento há '.monitorFormatAge($last['age_seconds'] ?? null),
+        'activity_stale' => 'heartbeat existe, mas não há saída/CPU observável há '.monitorFormatAge($last['idle_seconds'] ?? null),
+        'gates_stale' => 'aguardando gates há '.monitorFormatAge($last['age_seconds'] ?? null),
+        'blocked' => 'workflow bloqueado; recovery explícito necessário',
+        'debugging' => match ($state) {
+            'debugging_required' => 'falha entregue ao systematic debugging; o controlador precisa analisar antes de repetir',
+            'debugging_running' => 'systematic debugging em andamento; a árvore está sob observação read-only',
+            'debugging_verified' => 'causa raiz verificada; o controlador pode abrir nova tentativa',
+            default => 'systematic debugging em andamento',
+        },
+        'complete' => 'workflow concluído',
+        'error' => (string) ($snapshot['message'] ?? 'falha ao consultar o workflow'),
+        default => 'execução acompanhada normalmente',
+    };
+
+    return sprintf(
+        '[%s] [%s] Ralph %s | feature=%s | estado=%s | progresso=%s | estimativa=%s %s | gates=%s | processos=%d | último evento=%s há %s | %s',
+        (new DateTimeImmutable)->format('Y-m-d H:i:s'),
+        $level,
+        $snapshot['workflow_id'] ?? 'sem-workflow',
+        $feature,
+        $state,
+        $progress,
+        $estimated,
+        $estimatedBar,
+        $gates,
+        $processCount,
+        $last['type'] ?? 'indisponível',
+        monitorFormatAge($last['age_seconds'] ?? null),
+        $message,
+    );
+}
+
+function monitorSleep(int $seconds): void
+{
+    for ($remaining = $seconds; $remaining > 0; $remaining--) {
+        sleep(1);
+    }
+}
+
+$arguments = monitorArguments($argv);
+$root = realpath((string) ($arguments['root'] ?? getcwd()));
+$workflowId = monitorRequired($arguments, 'workflow');
+$interval = monitorInt($arguments, 'interval', 30, 1);
+$staleAfter = monitorInt($arguments, 'stale-after', max(180, $interval * 3), $interval);
+$activityStaleAfter = monitorInt($arguments, 'activity-stale-after', max(900, $staleAfter * 5), $interval);
+$once = monitorBool($arguments, 'once');
+$asJson = monitorBool($arguments, 'json');
+$controllerPath = is_string($arguments['controller'] ?? null) && trim((string) $arguments['controller']) !== ''
+    ? trim((string) $arguments['controller'])
+    : null;
+$feedbackFile = is_string($arguments['feedback-file'] ?? null) && trim((string) $arguments['feedback-file']) !== ''
+    ? trim((string) $arguments['feedback-file'])
+    : monitorDefaultFeedbackFile($root);
+
+if ($root === false || ! is_dir($root)) {
+    fwrite(STDERR, "erro: raiz do checkout não encontrada\n");
+    exit(2);
+}
+
+do {
+    $snapshot = monitorSnapshot($root, $workflowId, $staleAfter, $activityStaleAfter, $controllerPath);
+    monitorWriteFeedback($feedbackFile, $snapshot);
+    if ($asJson) {
+        fwrite(STDOUT, json_encode($snapshot, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)."\n");
+    } else {
+        fwrite(STDOUT, monitorFeedback($snapshot)."\n");
+    }
+    fflush(STDOUT);
+
+    if ($once || ($snapshot['health'] ?? null) === 'complete') {
+        break;
+    }
+    monitorSleep($interval);
+} while (true);

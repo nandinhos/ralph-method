@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+
+set -u
+
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+
+case "${1:-}" in
+  --workflow|--workflow=*)
+    exec "$REPO/bin/ralph-control" run "$@"
+    ;;
+esac
+
+exec "$REPO/bin/ralph-bloco" "$@"

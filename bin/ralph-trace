@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+TRACE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+TRACE_CONTROL="${RALPH_CONTROL:-$TRACE_ROOT/bin/ralph-control}"
+TRACE_COMMAND="${1:-report}"
+shift || true
+
+case "$TRACE_COMMAND" in
+  record)
+    exec "$TRACE_CONTROL" trace "$@"
+    ;;
+  report)
+    exec "$TRACE_CONTROL" trace-report "$@"
+    ;;
+  tree)
+    exec "$TRACE_CONTROL" trace-report --format terminal "$@"
+    ;;
+  *)
+    printf '%s\n' 'uso: bin/ralph-trace record|report|tree [opções]' >&2
+    exit 2
+    ;;
+esac

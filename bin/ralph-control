@@ -1,0 +1,3598 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+const RALPH_SCHEMA_VERSION = '1.1.0';
+const RALPH_COMPATIBLE_SCHEMA_VERSIONS = ['1.0.0', '1.1.0'];
+
+$root = realpath(getcwd()) ?: getcwd();
+$gitCommonDir = trim((string) shell_exec('git rev-parse --git-common-dir 2>/dev/null'));
+if ($gitCommonDir === '') {
+    fwrite(STDERR, "erro: o controlador precisa rodar dentro de um checkout Git.\n");
+    exit(2);
+}
+
+if (! str_starts_with($gitCommonDir, DIRECTORY_SEPARATOR)) {
+    $gitCommonDir = $root.DIRECTORY_SEPARATOR.$gitCommonDir;
+}
+
+$gitCommonDir = realpath($gitCommonDir) ?: $gitCommonDir;
+$runtime = $gitCommonDir.DIRECTORY_SEPARATOR.'ralph-control';
+$eventsFile = $runtime.DIRECTORY_SEPARATOR.'events.jsonl';
+$workflowFile = $runtime.DIRECTORY_SEPARATOR.'workflow.json';
+$lockFile = $runtime.DIRECTORY_SEPARATOR.'workflow.lock';
+$supervisorLockFile = $runtime.DIRECTORY_SEPARATOR.'supervisor.lock';
+$documentIndexFile = $runtime.DIRECTORY_SEPARATOR.'document-index.json';
+$gateSessionsDirectory = $runtime.DIRECTORY_SEPARATOR.'gate-sessions';
+
+const RALPH_DOCUMENT_SCHEMA_VERSION = '1.0.0';
+
+$documentKinds = [
+    'RPT' => 'relatório operacional',
+    'DBG' => 'relatório de systematic debugging',
+    'HND' => 'handoff de feature',
+    'EVD' => 'manifesto de evidências',
+    'CUR' => 'decisão de curadoria',
+    'TRC' => 'trace de orquestração',
+    'LES' => 'lição de engenharia',
+    'INC' => 'incidente de engenharia',
+    'PAT' => 'padrão de engenharia',
+    'ANT' => 'anti-padrão de engenharia',
+];
+
+$eventTypes = [
+    'workflow.initialized', 'feature.claimed', 'attempt.started', 'block.finished',
+    'command.started', 'command.heartbeat', 'command.passed', 'command.failed', 'failure.detected',
+    'fix.applied', 'fix.reverted', 'verification.passed', 'evidence.generated',
+    'gate.passed', 'gate.rejected', 'handoff.generated', 'handoff.committed', 'feature.approved',
+    'feature.released', 'knowledge.candidate_created', 'knowledge.curated',
+    'knowledge.rejected', 'knowledge.skipped', 'knowledge.review_required',
+    'debugging.required', 'debugging.started', 'debugging.verified', 'debugging.rejected',
+    'gate.session.reclaimed', 'feature.advanced', 'recovery.required', 'recovery.retry_started', 'recovery.resolved', 'lease.expired', 'policy.bypass_detected',
+    'delegation.started', 'delegation.completed', 'delegation.failed', 'delegation.reconciled',
+    'event.rejected',
+];
+
+function fail(string $message, int $code = 1): never
+{
+    fwrite(STDERR, "erro: {$message}\n");
+    exit($code);
+}
+
+function args(array $argv): array
+{
+    $result = ['_' => []];
+    for ($i = 1; $i < count($argv); $i++) {
+        $argument = $argv[$i];
+        if (! str_starts_with($argument, '--')) {
+            $result['_'][] = $argument;
+
+            continue;
+        }
+
+        $argument = substr($argument, 2);
+        if (str_contains($argument, '=')) {
+            [$key, $value] = explode('=', $argument, 2);
+            $result[$key] = $value;
+
+            continue;
+        }
+
+        $key = $argument;
+        $next = $argv[$i + 1] ?? null;
+        if ($next !== null && ! str_starts_with($next, '--')) {
+            $result[$key] = $next;
+            $i++;
+        } else {
+            $result[$key] = true;
+        }
+    }
+
+    return $result;
+}
+
+function required(array $arguments, string $name): string
+{
+    $value = $arguments[$name] ?? null;
+    if (! is_string($value) || trim($value) === '') {
+        fail("parâmetro obrigatório ausente: --{$name}", 2);
+    }
+
+    return trim($value);
+}
+
+function readJson(string $path): array
+{
+    if (! is_file($path)) {
+        fail("arquivo JSON não encontrado: {$path}");
+    }
+
+    $value = json_decode((string) file_get_contents($path), true, 512, JSON_THROW_ON_ERROR);
+    if (! is_array($value)) {
+        fail("JSON deve conter um objeto: {$path}");
+    }
+
+    return $value;
+}
+
+function writeJson(string $path, array $value): void
+{
+    $temporary = $path.'.tmp.'.bin2hex(random_bytes(6));
+    $json = json_encode(canonical($value), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)."\n";
+    if (file_put_contents($temporary, $json, LOCK_EX) === false || ! rename($temporary, $path)) {
+        @unlink($temporary);
+        fail("não foi possível escrever atomicamente: {$path}");
+    }
+}
+
+/** @return array{schema_version: string, documents: list<array<string, mixed>>} */
+function readDocumentIndex(): array
+{
+    global $documentIndexFile;
+
+    if (! is_file($documentIndexFile)) {
+        return ['schema_version' => RALPH_DOCUMENT_SCHEMA_VERSION, 'documents' => []];
+    }
+
+    $index = readJson($documentIndexFile);
+    if (($index['schema_version'] ?? null) !== RALPH_DOCUMENT_SCHEMA_VERSION || ! is_array($index['documents'] ?? null)) {
+        fail('índice local de documentos inválido');
+    }
+
+    return [
+        'schema_version' => RALPH_DOCUMENT_SCHEMA_VERSION,
+        'documents' => array_values(array_filter($index['documents'], static fn (mixed $document): bool => is_array($document))),
+    ];
+}
+
+/** @return list<string> */
+function documentRootsToScan(): array
+{
+    global $root, $runtime;
+
+    return array_values(array_unique(array_filter([
+        $root.DIRECTORY_SEPARATOR.'docs'.DIRECTORY_SEPARATOR.'engineering',
+        $root.DIRECTORY_SEPARATOR.'.ralph',
+        $runtime,
+    ], static fn (string $path): bool => is_dir($path))));
+}
+
+function maxDocumentSequenceFromFiles(string $kind, string $year): int
+{
+    $maximum = 0;
+    $pattern = '/\\b'.preg_quote($kind, '/').'-'.preg_quote($year, '/').'-([0-9]{4,})\\b/';
+    $legacyPatterns = match ($kind) {
+        'LES' => ['/\\bLESSON-'.preg_quote($year, '/').'-([0-9]{3,})\\b/'],
+        'INC' => ['/\\bINCIDENT-'.preg_quote($year, '/').'-([0-9]{3,})\\b/'],
+        default => [],
+    };
+
+    foreach (documentRootsToScan() as $scanRoot) {
+        $iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($scanRoot, FilesystemIterator::SKIP_DOTS),
+        );
+        foreach ($iterator as $file) {
+            if (! $file->isFile() || ! in_array(strtolower($file->getExtension()), ['json', 'md', 'yaml', 'yml', 'log'], true)) {
+                continue;
+            }
+            $content = (string) file_get_contents($file->getPathname());
+            foreach (array_merge([$pattern], $legacyPatterns) as $candidate) {
+                if (preg_match_all($candidate, $content, $matches) !== false) {
+                    foreach ($matches[1] as $sequence) {
+                        $maximum = max($maximum, (int) $sequence);
+                    }
+                }
+            }
+        }
+    }
+
+    return $maximum;
+}
+
+/**
+ * Aloca um ID de documento dentro de workflow.lock.
+ *
+ * A chave de alocação torna a operação idempotente após crash: repetir a
+ * mesma etapa devolve o mesmo ID em vez de abrir um segundo documento.
+ *
+ * @param  array<string, scalar|null>  $metadata
+ */
+function allocateDocumentId(string $kind, string $allocationKey, array $metadata = []): string
+{
+    global $documentKinds, $documentIndexFile;
+
+    $kind = strtoupper(trim($kind));
+    if (! isset($documentKinds[$kind])) {
+        fail('tipo de documento inválido; use '.implode(', ', array_keys($documentKinds)));
+    }
+    if (trim($allocationKey) === '') {
+        fail('chave de alocação de documento vazia');
+    }
+
+    $index = readDocumentIndex();
+    foreach ($index['documents'] as $document) {
+        if (($document['allocation_key'] ?? null) === $allocationKey && ($document['kind'] ?? null) === $kind) {
+            return (string) $document['id'];
+        }
+    }
+
+    $year = (string) ($metadata['year'] ?? gmdate('Y'));
+    if (preg_match('/^[0-9]{4}$/', $year) !== 1) {
+        fail('ano do documento inválido');
+    }
+    $sequence = 0;
+    foreach ($index['documents'] as $document) {
+        if (($document['kind'] ?? null) !== $kind || ($document['year'] ?? null) !== $year) {
+            continue;
+        }
+        $sequence = max($sequence, (int) ($document['sequence'] ?? 0));
+    }
+    $sequence = max($sequence, maxDocumentSequenceFromFiles($kind, $year)) + 1;
+    $id = sprintf('%s-%s-%04d', $kind, $year, $sequence);
+    $safeMetadata = sanitize($metadata);
+    $index['documents'][] = [
+        'id' => $id,
+        'kind' => $kind,
+        'label' => $documentKinds[$kind],
+        'year' => $year,
+        'sequence' => $sequence,
+        'allocation_key' => $allocationKey,
+        'workflow_id' => $safeMetadata['workflow_id'] ?? null,
+        'feature_key' => $safeMetadata['feature_key'] ?? null,
+        'attempt' => $safeMetadata['attempt'] ?? null,
+        'path' => $safeMetadata['path'] ?? null,
+    ];
+    usort($index['documents'], static fn (array $left, array $right): int => strcmp((string) $left['id'], (string) $right['id']));
+    writeJson($documentIndexFile, $index);
+
+    return $id;
+}
+
+function canonical(mixed $value): mixed
+{
+    if (is_array($value)) {
+        if (array_is_list($value)) {
+            return array_map(static fn (mixed $item): mixed => canonical($item), $value);
+        }
+
+        $keys = array_keys($value);
+        sort($keys, SORT_STRING);
+        $sorted = [];
+        foreach ($keys as $key) {
+            $sorted[$key] = canonical($value[$key]);
+        }
+
+        return $sorted;
+    }
+
+    if (is_float($value)) {
+        fail('floats não são permitidos no protocolo de eventos');
+    }
+
+    if (is_string($value)) {
+        return preg_replace('/\r\n?/', "\n", $value) ?? $value;
+    }
+
+    return $value;
+}
+
+function hashValue(string $value): string
+{
+    return 'sha256:'.hash('sha256', $value);
+}
+
+function fileHash(string $path): string
+{
+    if (! is_file($path)) {
+        fail("arquivo para hash não encontrado: {$path}");
+    }
+
+    return hashValue((string) file_get_contents($path));
+}
+
+function git(string $command, bool $allowFailure = false): string
+{
+    $output = [];
+    $exit = 0;
+    exec('git '.$command.' 2>&1', $output, $exit);
+    if ($exit !== 0 && ! $allowFailure) {
+        fail('comando Git falhou: git '.$command."\n".implode("\n", $output));
+    }
+
+    return trim(implode("\n", $output));
+}
+
+function commandOutput(string $command, int &$exitCode): string
+{
+    $output = [];
+    exec($command.' 2>&1', $output, $exitCode);
+
+    return implode("\n", $output);
+}
+
+/** @return array{exit_code: int, stdout: string, stderr: string, timed_out: bool, process_tree: array<string, mixed>} */
+function runReadOnlyCommand(string $command, int $timeoutSeconds, array $environment = []): array
+{
+    global $root;
+    $pipes = [];
+    $environment = array_merge((array) getenv(), $_ENV, $environment);
+    $process = proc_open('setsid '.$command, [
+        0 => ['file', '/dev/null', 'r'],
+        1 => ['pipe', 'w'],
+        2 => ['pipe', 'w'],
+    ], $pipes, $root, $environment);
+    if (! is_resource($process)) {
+        return ['exit_code' => 125, 'stdout' => '', 'stderr' => 'não foi possível iniciar o comando de systematic debugging', 'timed_out' => false, 'process_tree' => []];
+    }
+
+    $status = proc_get_status($process);
+    $pid = (int) ($status['pid'] ?? 0);
+    stream_set_blocking($pipes[1], false);
+    stream_set_blocking($pipes[2], false);
+    $stdout = '';
+    $stderr = '';
+    $startedAt = microtime(true);
+    $timedOut = false;
+    do {
+        $stdoutChunk = stream_get_contents($pipes[1]);
+        $stderrChunk = stream_get_contents($pipes[2]);
+        if (is_string($stdoutChunk)) {
+            $stdout .= $stdoutChunk;
+        }
+        if (is_string($stderrChunk)) {
+            $stderr .= $stderrChunk;
+        }
+        $status = proc_get_status($process);
+        if (! ($status['running'] ?? false)) {
+            break;
+        }
+        if (microtime(true) - $startedAt >= $timeoutSeconds) {
+            $timedOut = true;
+            $snapshot = processTreeSnapshot($pid);
+            if ($snapshot['alive']) {
+                terminateProcessTree($snapshot);
+            }
+            break;
+        }
+        usleep(100000);
+    } while (true);
+
+    $stdoutChunk = stream_get_contents($pipes[1]);
+    $stderrChunk = stream_get_contents($pipes[2]);
+    if (is_string($stdoutChunk)) {
+        $stdout .= $stdoutChunk;
+    }
+    if (is_string($stderrChunk)) {
+        $stderr .= $stderrChunk;
+    }
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    $exitCode = proc_close($process);
+    $tree = processTreeSnapshot($pid);
+
+    return [
+        'exit_code' => $timedOut ? 124 : $exitCode,
+        'stdout' => substr($stdout, 0, 50000),
+        'stderr' => substr($stderr, 0, 20000),
+        'timed_out' => $timedOut,
+        'process_tree' => $tree,
+    ];
+}
+
+/** @return array{root_pid: int, alive: bool, pids: list<int>, process_count: int, cpu_milli: int, pgids: list<int>, states: list<string>} */
+function processTreeSnapshot(int $rootPid): array
+{
+    $exitCode = 0;
+    $output = commandOutput('ps -eo pid=,ppid=,pgid=,stat=,pcpu=,etimes=,args=', $exitCode);
+    if ($exitCode !== 0) {
+        return [
+            'root_pid' => $rootPid,
+            'alive' => false,
+            'pids' => [],
+            'process_count' => 0,
+            'cpu_milli' => 0,
+            'pgids' => [],
+            'states' => [],
+        ];
+    }
+
+    $records = [];
+    foreach (preg_split('/\R/', $output) ?: [] as $line) {
+        if (preg_match('/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+([0-9.]+)\s+(\d+)\s+(.+)$/', $line, $matches) !== 1) {
+            continue;
+        }
+        $pid = (int) $matches[1];
+        $records[$pid] = [
+            'pid' => $pid,
+            'ppid' => (int) $matches[2],
+            'pgid' => (int) $matches[3],
+            'state' => $matches[4],
+            'cpu_milli' => (int) round(((float) $matches[5]) * 1000),
+            'elapsed' => (int) $matches[6],
+        ];
+    }
+
+    $pids = [$rootPid];
+    $changed = true;
+    while ($changed) {
+        $changed = false;
+        foreach ($records as $record) {
+            if (in_array($record['pid'], $pids, true) || ! in_array($record['ppid'], $pids, true)) {
+                continue;
+            }
+            $pids[] = $record['pid'];
+            $changed = true;
+        }
+    }
+
+    $pids = array_values(array_filter($pids, static fn (int $pid): bool => isset($records[$pid])));
+    $pgids = [];
+    $states = [];
+    $cpuMilli = 0;
+    foreach ($pids as $pid) {
+        $record = $records[$pid];
+        $pgids[] = $record['pgid'];
+        $states[] = $record['state'];
+        $cpuMilli += $record['cpu_milli'];
+    }
+
+    return [
+        'root_pid' => $rootPid,
+        'alive' => $pids !== [],
+        'pids' => $pids,
+        'process_count' => count($pids),
+        'cpu_milli' => $cpuMilli,
+        'pgids' => array_values(array_unique($pgids)),
+        'states' => array_values(array_unique($states)),
+    ];
+}
+
+/** @param array{pids: list<int>} $snapshot */
+function terminateProcessTree(array $snapshot): array
+{
+    if (! function_exists('posix_kill')) {
+        fail('extensão pcntl/posix necessária para recuperação do processo');
+    }
+
+    $currentPid = getmypid();
+    foreach (array_reverse($snapshot['pids']) as $pid) {
+        if ($pid === $currentPid) {
+            continue;
+        }
+        @posix_kill($pid, 15);
+    }
+
+    for ($attempt = 0; $attempt < 20; $attempt++) {
+        usleep(100000);
+        $remaining = processTreeSnapshot((int) ($snapshot['root_pid'] ?? 0));
+        if (! $remaining['alive']) {
+            return $remaining;
+        }
+    }
+
+    foreach (array_reverse($snapshot['pids']) as $pid) {
+        if ($pid === $currentPid) {
+            continue;
+        }
+        @posix_kill($pid, 9);
+    }
+
+    usleep(100000);
+
+    return processTreeSnapshot((int) ($snapshot['root_pid'] ?? 0));
+}
+
+function currentRepository(): array
+{
+    $commit = git('rev-parse HEAD');
+    $tree = git('rev-parse HEAD^{tree}');
+    $status = git('status --porcelain');
+    $branch = git('branch --show-current');
+    $worktree = git('rev-parse --show-toplevel');
+
+    return [
+        'commit' => $commit,
+        'tree_hash' => hashValue($tree),
+        'working_tree_clean' => $status === '',
+        'branch' => $branch,
+        'worktree_path' => $worktree,
+    ];
+}
+
+function sanitize(mixed $value): mixed
+{
+    if (is_array($value)) {
+        $result = [];
+        foreach ($value as $key => $item) {
+            $result[$key] = sanitize($item);
+        }
+
+        return $result;
+    }
+
+    if (! is_string($value)) {
+        return $value;
+    }
+
+    $patterns = [
+        '/-----BEGIN [A-Z ]*PRIVATE KEY-----/i',
+        '/\b(?:api[_-]?key|access[_-]?token|password|passwd|secret)\s*[:=]/i',
+        '/\b(?:sk|ghp|github_pat|glpat)-[A-Za-z0-9_-]{12,}\b/',
+        '/\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b/',
+        '/\b\d{3}\.\d{3}\.\d{3}-\d{2}\b/',
+    ];
+
+    foreach ($patterns as $pattern) {
+        if (preg_match($pattern, $value) === 1) {
+            fail('conteúdo sensível detectado; evento rejeitado');
+        }
+    }
+
+    return preg_replace('/\r\n?/', "\n", $value) ?? $value;
+}
+
+function runtimeInit(): void
+{
+    global $runtime, $eventsFile;
+    if (! is_dir($runtime) && ! mkdir($runtime, 0700, true) && ! is_dir($runtime)) {
+        fail("não foi possível criar {$runtime}");
+    }
+    if (! is_file($eventsFile) && file_put_contents($eventsFile, '') === false) {
+        fail("não foi possível criar {$eventsFile}");
+    }
+    @chmod($eventsFile, 0600);
+}
+
+function gateSessionPath(array $feature): string
+{
+    global $gateSessionsDirectory;
+
+    return $gateSessionsDirectory.'/'.hash('sha256', implode('|', [
+        (string) ($feature['feature_key'] ?? ''),
+        (string) ($feature['attempt'] ?? 0),
+    ])).'.json';
+}
+
+/** @return array<string, mixed>|null */
+function readGateSession(string $workflowId, array $feature): ?array
+{
+    $path = gateSessionPath($feature);
+    if (! is_file($path)) {
+        return null;
+    }
+
+    $session = readJson($path);
+    if (($session['workflow_id'] ?? null) !== $workflowId
+        || ($session['feature_key'] ?? null) !== ($feature['feature_key'] ?? null)
+        || (int) ($session['attempt'] ?? -1) !== (int) ($feature['attempt'] ?? -2)
+        || ! is_string($session['lease_token'] ?? null)
+        || ! is_string($session['lease_token_hash'] ?? null)
+        || ! hash_equals((string) $session['lease_token_hash'], leaseHash((string) $session['lease_token']))
+        || ! hash_equals((string) $session['lease_token_hash'], (string) ($feature['lease_token_hash'] ?? ''))) {
+        @unlink($path);
+
+        return null;
+    }
+
+    return $session;
+}
+
+/** @param array<string, mixed> $session */
+function writeGateSession(array $session): void
+{
+    global $gateSessionsDirectory;
+
+    if (! is_dir($gateSessionsDirectory) && ! mkdir($gateSessionsDirectory, 0700, true) && ! is_dir($gateSessionsDirectory)) {
+        fail('não foi possível criar sessões de gate');
+    }
+    $path = gateSessionPath($session);
+    writeJson($path, $session);
+    @chmod($path, 0600);
+}
+
+function clearGateSession(array $feature): void
+{
+    @unlink(gateSessionPath($feature));
+}
+
+function withLock(callable $callback): mixed
+{
+    global $runtime, $lockFile;
+    runtimeInit();
+    $handle = fopen($lockFile, 'c+');
+    if ($handle === false || ! flock($handle, LOCK_EX)) {
+        fail('não foi possível adquirir workflow.lock');
+    }
+
+    try {
+        return $callback();
+    } finally {
+        flock($handle, LOCK_UN);
+        fclose($handle);
+    }
+}
+
+function loadWorkflow(): array
+{
+    global $workflowFile;
+
+    return readJson($workflowFile);
+}
+
+function validateEventShape(array $event, int $lineNumber): void
+{
+    global $eventTypes;
+    $required = [
+        'schema_version', 'event_id', 'workflow_id', 'feature_key', 'attempt',
+        'lease_token_hash', 'type', 'timestamp', 'actor', 'correlation_id',
+        'causation_id', 'idempotency_key', 'summary', 'repository', 'evidence',
+        'facts', 'prev_event_hash', 'event_hash',
+    ];
+    foreach ($required as $field) {
+        if (! array_key_exists($field, $event)) {
+            fail("schema de evento inválido na linha {$lineNumber}: campo ausente {$field}");
+        }
+    }
+    if (! in_array($event['schema_version'], RALPH_COMPATIBLE_SCHEMA_VERSIONS, true) || ! in_array($event['type'], $eventTypes, true)) {
+        fail("schema de evento inválido na linha {$lineNumber}");
+    }
+    if (! is_string($event['event_id']) || ! str_starts_with($event['event_id'], 'evt_') || ! is_string($event['workflow_id']) || ! str_starts_with($event['workflow_id'], 'wf_')) {
+        fail("identificador de evento inválido na linha {$lineNumber}");
+    }
+    if (! is_int($event['attempt']) || $event['attempt'] < 0 || ! is_string($event['summary']) || ! is_array($event['actor']) || ! is_array($event['repository']) || ! is_array($event['evidence']) || ! is_array($event['facts'])) {
+        fail("tipos do evento inválidos na linha {$lineNumber}");
+    }
+    if (! is_string($event['prev_event_hash']) || ! preg_match('/^(GENESIS|sha256:[0-9a-f]{64})$/', $event['prev_event_hash']) || ! is_string($event['event_hash']) || ! preg_match('/^sha256:[0-9a-f]{64}$/', $event['event_hash'])) {
+        fail("hashes do evento inválidos na linha {$lineNumber}");
+    }
+    foreach (['commit', 'tree_hash', 'plan_hash', 'spec_hash'] as $field) {
+        if (! isset($event['repository'][$field]) || ! is_string($event['repository'][$field])) {
+            fail("repository incompleto na linha {$lineNumber}");
+        }
+    }
+    if (! isset($event['evidence']['artifact_refs']) || ! is_array($event['evidence']['artifact_refs'])) {
+        fail("evidence incompleto na linha {$lineNumber}");
+    }
+    foreach ($event['evidence']['artifact_refs'] as $ref) {
+        if (! is_string($ref) || preg_match('/^artifact_[A-Za-z0-9_-]+$/', $ref) !== 1) {
+            fail("artifact_ref inválido na linha {$lineNumber}");
+        }
+    }
+}
+
+function saveWorkflow(array $workflow): void
+{
+    global $workflowFile;
+    writeJson($workflowFile, $workflow);
+}
+
+function readEvents(): array
+{
+    global $eventsFile;
+    runtimeInit();
+    $lines = file($eventsFile, FILE_IGNORE_NEW_LINES);
+    if ($lines === false) {
+        fail('não foi possível ler o ledger');
+    }
+
+    $events = [];
+    $previous = 'GENESIS';
+    foreach ($lines as $lineNumber => $line) {
+        if (trim($line) === '') {
+            continue;
+        }
+        try {
+            $event = json_decode($line, true, 512, JSON_THROW_ON_ERROR);
+        } catch (Throwable $exception) {
+            fail('evento corrompido na linha '.($lineNumber + 1));
+        }
+        if (! is_array($event)) {
+            fail('evento corrompido na linha '.($lineNumber + 1));
+        }
+        validateEventShape($event, $lineNumber + 1);
+        if (($event['prev_event_hash'] ?? null) !== $previous) {
+            fail('hash chain inválida na linha '.($lineNumber + 1));
+        }
+        $eventHash = $event['event_hash'] ?? null;
+        unset($event['event_hash']);
+        $expected = hashValue(json_encode(canonical($event), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)."\n");
+        if ($eventHash !== $expected) {
+            fail('hash de evento inválido na linha '.($lineNumber + 1));
+        }
+        $event['event_hash'] = $eventHash;
+        $events[] = $event;
+        $previous = $eventHash;
+    }
+
+    return $events;
+}
+
+/** @return list<array{pid:int,command:string}> */
+function activeWorkflowProcesses(string $workflowId): array
+{
+    $exitCode = 0;
+    $output = commandOutput('ps -eo pid=,args=', $exitCode);
+    if ($exitCode !== 0) {
+        fail('não foi possível verificar processos antes da recuperação do ledger', 12);
+    }
+
+    $ignoredPids = [];
+    $parentPid = getmypid();
+    while ($parentPid > 1 && ! isset($ignoredPids[$parentPid])) {
+        $ignoredPids[$parentPid] = true;
+        $stat = @file_get_contents('/proc/'.$parentPid.'/stat');
+        if (! is_string($stat) || preg_match('/^\d+ \([^)]*\) \S+ (\d+)/', $stat, $matches) !== 1) {
+            break;
+        }
+        $parentPid = (int) $matches[1];
+    }
+
+    $processes = [];
+    foreach (preg_split('/\R/', $output) ?: [] as $line) {
+        if (! str_contains($line, $workflowId)
+            || ! preg_match('/ralph-control (supervise|run)|ralph\.sh|ralph-block|ralph-bloco/', $line)
+        ) {
+            continue;
+        }
+        if (preg_match('/^\s*(\d+)\s+(.+)$/', $line, $matches) !== 1) {
+            continue;
+        }
+        $pid = (int) $matches[1];
+        if (isset($ignoredPids[$pid])) {
+            continue;
+        }
+        $processes[] = ['pid' => $pid, 'command' => trim($matches[2])];
+    }
+
+    return $processes;
+}
+
+/** @return array{status:string,workflow_id:string,feature_key:string,report_id:string,backup_path:string,valid_events:int,corrupt_line:int} */
+function repairLedger(array $arguments): array
+{
+    global $eventsFile, $runtime;
+    $workflowId = required($arguments, 'workflow');
+
+    return withLock(function () use ($arguments, $workflowId, $eventsFile, $runtime): array {
+        $processes = activeWorkflowProcesses($workflowId);
+        if ($processes !== []) {
+            fail('não é seguro reparar o ledger enquanto o workflow possui processos ativos', 12);
+        }
+
+        $raw = file_get_contents($eventsFile);
+        if ($raw === false) {
+            fail('não foi possível ler o ledger para recuperação', 12);
+        }
+        $parts = preg_split('/(?<=\n)/', $raw, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        $validLines = [];
+        $corruptLine = null;
+        foreach ($parts as $index => $part) {
+            try {
+                $event = json_decode($part, true, 512, JSON_THROW_ON_ERROR);
+            } catch (Throwable) {
+                $corruptLine = $index + 1;
+                break;
+            }
+            if (! is_array($event)) {
+                $corruptLine = $index + 1;
+                break;
+            }
+            $validLines[] = $part;
+        }
+
+        if ($corruptLine === null) {
+            fail('não há evento parcial no final do ledger');
+        }
+        if ($corruptLine !== count($parts)) {
+            fail('corrupção encontrada no meio do ledger; recuperação automática recusada', 13);
+        }
+        $fragment = (string) ($parts[$corruptLine - 1] ?? '');
+        $validRaw = implode('', $validLines);
+        $ledgerHash = hashValue($raw);
+        $fragmentHash = hashValue($fragment);
+        $backupPath = $runtime.'/events.corrupt.'.gmdate('Ymd\THis\Z').'.'.substr(hash('sha256', $raw), 0, 12).'.jsonl';
+        $temporaryPath = $eventsFile.'.recovery.'.bin2hex(random_bytes(6));
+        if (! copy($eventsFile, $backupPath)) {
+            fail('não foi possível preservar o ledger original', 12);
+        }
+        @chmod($backupPath, 0600);
+
+        try {
+            if (file_put_contents($temporaryPath, $validRaw, LOCK_EX) === false || ! rename($temporaryPath, $eventsFile)) {
+                throw new RuntimeException('não foi possível materializar o prefixo íntegro do ledger');
+            }
+            @chmod($eventsFile, 0600);
+            $validEvents = readEvents();
+            if ($validEvents === []) {
+                throw new RuntimeException('o prefixo recuperado ficou vazio');
+            }
+
+            $projection = project(loadWorkflow(), $validEvents);
+            $feature = featureFrom($projection, $projection['cursor']);
+            $reportId = allocateDocumentId('RPT', implode(':', ['ledger-repair', $workflowId, $corruptLine, $fragmentHash]), [
+                'workflow_id' => $workflowId,
+                'feature_key' => $feature['feature_key'] ?? null,
+                'attempt' => $feature['attempt'] ?? null,
+                'scope' => 'ledger-repair',
+            ]);
+            $reportPath = $runtime.'/reports/'.$reportId.'.json';
+            if (! is_dir(dirname($reportPath)) && ! mkdir(dirname($reportPath), 0700, true) && ! is_dir(dirname($reportPath))) {
+                throw new RuntimeException('não foi possível criar o relatório de recuperação');
+            }
+            writeJson($reportPath, [
+                'document_id' => $reportId,
+                'workflow_id' => $workflowId,
+                'feature_key' => $feature['feature_key'] ?? null,
+                'attempt' => $feature['attempt'] ?? null,
+                'reason' => 'append interrompido durante queda de energia',
+                'corrupt_line' => $corruptLine,
+                'valid_events' => count($validEvents),
+                'ledger_hash_before_recovery' => $ledgerHash,
+                'fragment_hash' => $fragmentHash,
+                'backup_path' => $backupPath,
+                'fragment_bytes' => strlen($fragment),
+            ]);
+            @chmod($reportPath, 0600);
+            $artifactRef = 'artifact_ledger_repair_'.$feature['feature_key'].'_attempt_'.$feature['attempt'];
+            appendEvent(eventContext(array_merge($arguments, ['actor' => 'ralph-control']), $feature, 'recovery.required', 'Ledger recuperado após append interrompido; nova tentativa obrigatória', [
+                'reason' => 'power_loss_incomplete_event',
+                'corrupt_line' => $corruptLine,
+                'valid_events' => count($validEvents),
+                'ledger_hash_before_recovery' => $ledgerHash,
+                'fragment_hash' => $fragmentHash,
+                'backup_path' => $backupPath,
+                'report_id' => $reportId,
+                'artifact_refs' => [$artifactRef],
+                'process_verified_terminated' => true,
+            ]));
+        } catch (Throwable $exception) {
+            @unlink($temporaryPath);
+            @unlink($eventsFile);
+            if (! rename($backupPath, $eventsFile)) {
+                fail('falha crítica: não foi possível restaurar o ledger original após erro de recuperação', 14);
+            }
+            fail('recuperação do ledger falhou: '.$exception->getMessage(), 13);
+        }
+
+        return [
+            'status' => 'recovery_required',
+            'workflow_id' => $workflowId,
+            'feature_key' => $feature['feature_key'],
+            'report_id' => $reportId,
+            'backup_path' => $backupPath,
+            'valid_events' => count($validEvents),
+            'corrupt_line' => $corruptLine,
+        ];
+    });
+}
+
+function appendEvent(array $payload): array
+{
+    global $eventsFile, $eventTypes;
+    runtimeInit();
+    $type = $payload['type'] ?? null;
+    if (! is_string($type) || ! in_array($type, $eventTypes, true)) {
+        fail('tipo de evento inválido');
+    }
+
+    $events = readEvents();
+    $previous = $events === [] ? 'GENESIS' : (string) end($events)['event_hash'];
+    $facts = sanitize($payload['facts'] ?? []);
+    if (! is_array($facts)) {
+        fail('facts precisa ser um objeto');
+    }
+    $workflow = is_file($GLOBALS['workflowFile']) ? readJson($GLOBALS['workflowFile']) : [];
+    $repository = currentRepository();
+    $repositoryPayload = is_array($payload['repository'] ?? null) ? $payload['repository'] : [];
+    $repositoryEvent = [
+        'commit' => $repositoryPayload['commit'] ?? $repository['commit'],
+        'tree_hash' => $repositoryPayload['tree_hash'] ?? $repository['tree_hash'],
+        'plan_hash' => $repositoryPayload['plan_hash'] ?? $facts['plan_hash'] ?? $workflow['plan_hash'] ?? hashValue('unbound-plan'),
+        'spec_hash' => $repositoryPayload['spec_hash'] ?? $facts['spec_hash'] ?? $workflow['spec_hash'] ?? $workflow['plan_hash'] ?? hashValue('unbound-spec'),
+    ];
+    foreach (['base_commit', 'base_tree_hash'] as $field) {
+        if (isset($repositoryPayload[$field])) {
+            $repositoryEvent[$field] = $repositoryPayload[$field];
+        } elseif (isset($facts[$field])) {
+            $repositoryEvent[$field] = $facts[$field];
+        }
+    }
+    $evidenceRefs = $payload['evidence']['artifact_refs'] ?? $facts['artifact_refs'] ?? [];
+    if (! is_array($evidenceRefs)) {
+        fail('evidence.artifact_refs precisa ser uma lista');
+    }
+    foreach ($evidenceRefs as $ref) {
+        if (! is_string($ref) || preg_match('/^artifact_[A-Za-z0-9_-]+$/', $ref) !== 1) {
+            fail('referência de artefato inválida');
+        }
+    }
+    $actor = sanitize($payload['actor'] ?? ['type' => 'controller', 'name' => 'ralph-control']);
+    if (! is_array($actor) || ! isset($actor['type'], $actor['name'])) {
+        fail('actor inválido');
+    }
+    $event = [
+        'schema_version' => RALPH_SCHEMA_VERSION,
+        'event_id' => 'evt_'.bin2hex(random_bytes(12)),
+        'workflow_id' => (string) ($payload['workflow_id'] ?? ''),
+        'feature_key' => (string) ($payload['feature_key'] ?? 'workflow'),
+        'attempt' => (int) ($payload['attempt'] ?? 0),
+        'lease_token_hash' => $payload['lease_token_hash'] ?? null,
+        'type' => $type,
+        'timestamp' => gmdate('Y-m-d\TH:i:s\Z'),
+        'actor' => $actor,
+        'correlation_id' => (string) ($payload['correlation_id'] ?? 'corr_'.bin2hex(random_bytes(8))),
+        'causation_id' => $payload['causation_id'] ?? null,
+        'idempotency_key' => (string) ($payload['idempotency_key'] ?? 'idem_'.bin2hex(random_bytes(12))),
+        'summary' => sanitize((string) ($payload['summary'] ?? $type)),
+        'repository' => $repositoryEvent,
+        'evidence' => ['artifact_refs' => array_values($evidenceRefs)],
+        'facts' => $facts,
+        'prev_event_hash' => $previous,
+    ];
+    $event = canonical($event);
+
+    foreach ($events as $existing) {
+        if (($existing['idempotency_key'] ?? null) === $event['idempotency_key']) {
+            $existingCopy = $existing;
+            unset($existingCopy['event_id'], $existingCopy['timestamp'], $existingCopy['event_hash'], $existingCopy['prev_event_hash']);
+            $eventCopy = $event;
+            unset($eventCopy['event_id'], $eventCopy['timestamp'], $eventCopy['prev_event_hash']);
+            if (canonical($existingCopy) !== canonical($eventCopy)) {
+                fail('idempotency_key já usada com payload diferente', 3);
+            }
+
+            return $existing;
+        }
+    }
+
+    $event['event_hash'] = hashValue(json_encode($event, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)."\n");
+    $line = json_encode($event, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)."\n";
+    $handle = fopen($eventsFile, 'ab');
+    if ($handle === false || fwrite($handle, $line) !== strlen($line)) {
+        if (is_resource($handle)) {
+            fclose($handle);
+        }
+        fail('não foi possível anexar evento ao ledger');
+    }
+    fflush($handle);
+    fclose($handle);
+
+    return $event;
+}
+
+function project(array $workflow, array $events): array
+{
+    $features = [];
+    foreach ($workflow['features'] as $feature) {
+        $feature['state'] = 'pending';
+        $feature['attempt'] = 0;
+        $feature['gates'] = [];
+        $feature['knowledge_state'] = 'not_started';
+        $feature['delegations'] = [];
+        $features[$feature['feature_key']] = $feature;
+    }
+
+    $cursor = $workflow['features'][0]['feature_key'] ?? null;
+    foreach ($events as $event) {
+        $key = $event['feature_key'] ?? null;
+        if ($key !== null && isset($features[$key])) {
+            $feature = &$features[$key];
+            $feature['last_event_id'] = $event['event_id'];
+            $feature['attempt'] = max($feature['attempt'], (int) ($event['attempt'] ?? 0));
+            switch ($event['type']) {
+                case 'feature.claimed':
+                    $feature['state'] = 'running';
+                    $feature['lease_token_hash'] = $event['lease_token_hash'] ?? null;
+                    $feature['correlation_id'] = $event['correlation_id'] ?? null;
+                    $feature['claim'] = $event['facts'] ?? [];
+                    break;
+                case 'attempt.started': $feature['state'] = 'running';
+                    break;
+                case 'block.finished':
+                    $feature['state'] = (int) ($event['facts']['exit_code'] ?? 1) === 0 ? 'awaiting_gates' : 'debugging_required';
+                    $feature['result'] = $event['facts'];
+                    break;
+                case 'gate.passed': $feature['gates'][$event['facts']['gate'] ?? 'unknown'] = 'passed';
+                    break;
+                case 'gate.rejected':
+                    $feature['gates'][$event['facts']['gate'] ?? 'unknown'] = 'rejected';
+                    $feature['state'] = 'debugging_required';
+                    break;
+                case 'gate.session.reclaimed':
+                    $feature['state'] = 'awaiting_gates';
+                    $feature['lease_token_hash'] = $event['lease_token_hash'] ?? null;
+                    $feature['gate_session'] = $event['facts'] ?? [];
+                    break;
+                case 'debugging.required': $feature['state'] = 'debugging_required';
+                    break;
+                case 'debugging.started': $feature['state'] = 'debugging_running';
+                    break;
+                case 'debugging.verified':
+                    $feature['state'] = 'debugging_verified';
+                    $feature['debugging'] = $event['facts'] ?? [];
+                    break;
+                case 'debugging.rejected': $feature['state'] = 'recovery_required';
+                    $feature['debugging'] = $event['facts'] ?? [];
+                    break;
+                case 'feature.approved': $feature['state'] = 'approved';
+                    break;
+                case 'feature.released': $feature['state'] = 'released';
+                    break;
+                case 'recovery.required': $feature['state'] = 'recovery_required';
+                    break;
+                case 'recovery.retry_started':
+                    $feature['state'] = 'running';
+                    if (($event['attempt'] ?? 0) > ($feature['attempt'] ?? 0)) {
+                        $feature['gates'] = [];
+                        $feature['knowledge_state'] = 'not_started';
+                        unset($feature['result']);
+                    }
+                    if (isset($event['lease_token_hash'])) {
+                        $feature['lease_token_hash'] = $event['lease_token_hash'];
+                    }
+                    $feature['correlation_id'] = $event['correlation_id'] ?? $feature['correlation_id'] ?? null;
+                    break;
+                case 'recovery.resolved':
+                    $feature['state'] = 'pending';
+                    $feature['gates'] = [];
+                    $feature['knowledge_state'] = 'not_started';
+                    $feature['lease_token_hash'] = null;
+                    unset($feature['result']);
+                    break;
+                case 'knowledge.candidate_created': $feature['knowledge_state'] = 'knowledge_pending';
+                    break;
+                case 'knowledge.curated': $feature['knowledge_state'] = 'knowledge_curated';
+                    break;
+                case 'knowledge.rejected': $feature['knowledge_state'] = 'knowledge_rejected';
+                    break;
+                case 'knowledge.review_required': $feature['knowledge_state'] = 'knowledge_review_required';
+                    break;
+                case 'knowledge.skipped': $feature['knowledge_state'] = 'knowledge_skipped';
+                    break;
+                case 'delegation.started':
+                case 'delegation.completed':
+                case 'delegation.failed':
+                case 'delegation.reconciled':
+                    $delegation = $event['facts'] ?? [];
+                    $delegation['event_id'] = $event['event_id'];
+                    $delegation['event_type'] = $event['type'];
+                    $delegation['recorded_at'] = $event['timestamp'];
+                    $feature['delegations'][] = $delegation;
+                    break;
+            }
+            unset($feature);
+        }
+        if ($event['type'] === 'feature.advanced') {
+            $cursor = $event['facts']['next_feature'] ?? null;
+        }
+    }
+
+    return ['cursor' => $cursor, 'features' => array_values($features)];
+}
+
+function featureFrom(array $projection, string $featureKey): array
+{
+    foreach ($projection['features'] as $feature) {
+        if ($feature['feature_key'] === $featureKey) {
+            return $feature;
+        }
+    }
+    fail("feature não encontrada: {$featureKey}");
+}
+
+function leaseHash(string $token): string
+{
+    return hashValue($token);
+}
+
+function checkLease(array $feature, string $token): void
+{
+    $expected = $feature['lease_token_hash'] ?? null;
+    if (! is_string($expected) || ! hash_equals($expected, leaseHash($token))) {
+        fail('lease inválido ou vencido', 3);
+    }
+}
+
+function findEventFor(array $events, string $type, string $featureKey, int $attempt): ?array
+{
+    foreach (array_reverse($events) as $event) {
+        if (($event['type'] ?? null) === $type && ($event['feature_key'] ?? null) === $featureKey && (int) ($event['attempt'] ?? 0) === $attempt) {
+            return $event;
+        }
+    }
+
+    return null;
+}
+
+function repositoryTreeHash(): string
+{
+    return hashValue(git('rev-parse HEAD^{tree}'));
+}
+
+function commitParent(string $commit): string
+{
+    $parents = git('rev-list --parents -n 1 '.escapeshellarg($commit));
+    $parts = preg_split('/\s+/', $parents) ?: [];
+
+    return $parts[1] ?? '';
+}
+
+function eventContext(array $arguments, array $feature, string $type, string $summary, array $facts = []): array
+{
+    $idempotency = $arguments['idempotency-key'] ?? null;
+    if (! is_string($idempotency) || $idempotency === '') {
+        $idempotency = 'idem_'.substr(hash('sha256', $type.'|'.($feature['feature_key'] ?? '').'|'.($feature['attempt'] ?? 0).'|'.json_encode(canonical($facts), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)), 0, 32);
+    }
+
+    return [
+        'workflow_id' => (string) ($arguments['workflow'] ?? ''),
+        'feature_key' => $feature['feature_key'],
+        'attempt' => (int) $feature['attempt'],
+        'lease_token_hash' => $feature['lease_token_hash'] ?? null,
+        'type' => $type,
+        'summary' => $summary,
+        'facts' => $facts,
+        'correlation_id' => $feature['correlation_id'] ?? 'corr_'.bin2hex(random_bytes(8)),
+        'actor' => [
+            'type' => (string) ($arguments['actor-type'] ?? 'controller'),
+            'name' => (string) ($arguments['actor'] ?? 'ralph-control'),
+        ],
+        'idempotency_key' => $idempotency,
+    ];
+}
+
+function printJson(array $value): void
+{
+    echo json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR)."\n";
+}
+
+function supervisorFormatAge(?int $seconds): string
+{
+    if ($seconds === null) {
+        return 'indisponível';
+    }
+    if ($seconds < 60) {
+        return $seconds.'s';
+    }
+    if ($seconds < 3600) {
+        return intdiv($seconds, 60).'min '.($seconds % 60).'s';
+    }
+
+    return intdiv($seconds, 3600).'h '.intdiv($seconds % 3600, 60).'min';
+}
+
+/** @return array<string, mixed> */
+function supervisorSnapshot(array $arguments, string $workflowId, int $staleAfter, int $activityStaleAfter): array
+{
+    global $root;
+    $monitor = __DIR__.'/ralph-monitor';
+    if (! is_executable($monitor)) {
+        fail('bin/ralph-monitor não encontrado para supervisão');
+    }
+
+    $feedbackFile = $GLOBALS['runtime'].'/monitor/latest.json';
+    $command = escapeshellarg(PHP_BINARY).' '.escapeshellarg($monitor)
+        .' --root '.escapeshellarg($root)
+        .' --controller '.escapeshellarg(__FILE__)
+        .' --workflow '.escapeshellarg($workflowId)
+        .' --interval '.escapeshellarg((string) ($arguments['interval'] ?? 30))
+        .' --stale-after '.escapeshellarg((string) $staleAfter)
+        .' --activity-stale-after '.escapeshellarg((string) $activityStaleAfter)
+        .' --feedback-file '.escapeshellarg($feedbackFile)
+        .' --once --json';
+    $exit = 0;
+    $output = commandOutput($command, $exit);
+    if ($exit !== 0) {
+        fail($output !== '' ? $output : 'monitor não retornou snapshot', 12);
+    }
+
+    $snapshot = json_decode($output, true, 512, JSON_THROW_ON_ERROR);
+    if (! is_array($snapshot)) {
+        fail('snapshot do monitor não é um objeto', 12);
+    }
+
+    return $snapshot;
+}
+
+/** @param array<string, mixed> $snapshot */
+function supervisorFeedback(array $snapshot): string
+{
+    $lastEvent = is_array($snapshot['last_event'] ?? null) ? $snapshot['last_event'] : [];
+    $processes = is_array($snapshot['processes'] ?? null) ? $snapshot['processes'] : [];
+
+    return sprintf(
+        '[%s] [RALPH] saúde=%s | feature=%s | estado=%s | progresso=%s/%s | processos=%d | último evento=%s há %s',
+        (new DateTimeImmutable)->format('Y-m-d H:i:s'),
+        $snapshot['health'] ?? 'error',
+        $snapshot['cursor'] ?? 'nenhuma',
+        $snapshot['state'] ?? 'desconhecido',
+        $snapshot['completed_features'] ?? 0,
+        $snapshot['total_features'] ?? 0,
+        count($processes),
+        $lastEvent['type'] ?? 'indisponível',
+        supervisorFormatAge($lastEvent['age_seconds'] ?? null),
+    );
+}
+
+/** @param array<string, mixed> $feature @param array<string, mixed> $snapshot */
+function supervisorRecordRetry(array $arguments, array $feature, int $retry, array $snapshot): void
+{
+    withLock(function () use ($arguments, $feature, $retry, $snapshot): void {
+        appendEvent(eventContext($arguments, $feature, 'recovery.retry_started', 'Nova tentativa de execução após alerta do monitor', [
+            'retry' => $retry,
+            'health' => $snapshot['health'] ?? 'unknown',
+            'last_event' => $snapshot['last_event'] ?? [],
+            'processes' => $snapshot['processes'] ?? [],
+        ]));
+    });
+}
+
+/** @param array<string, mixed> $feature @param array<string, mixed> $snapshot */
+function supervisorRecordRequiredRecovery(array $arguments, array $feature, array $snapshot, string $reason): void
+{
+    withLock(function () use ($arguments, $feature, $snapshot, $reason): void {
+        appendEvent(eventContext($arguments, $feature, 'recovery.required', 'Supervisão não pôde continuar a tentativa', [
+            'reason' => $reason,
+            'health' => $snapshot['health'] ?? 'unknown',
+            'last_event' => $snapshot['last_event'] ?? [],
+            'processes' => $snapshot['processes'] ?? [],
+        ]));
+    });
+}
+
+/** @return array{process: resource, pid: int} */
+function supervisorStartRun(array $arguments, string $workflowId, string $featureKey, string $lease, int $heartbeatInterval, int $retry): array
+{
+    global $root, $runtime;
+    $self = escapeshellarg(PHP_BINARY).' '.escapeshellarg(__FILE__);
+    $runCommand = $self.' run --workflow '.escapeshellarg($workflowId)
+        .' --feature '.escapeshellarg($featureKey)
+        .' --lease '.escapeshellarg($lease)
+        .' --heartbeat-interval '.escapeshellarg((string) $heartbeatInterval);
+    if (is_string($arguments['command'] ?? null) && trim((string) $arguments['command']) !== '') {
+        $runCommand .= ' --command '.escapeshellarg((string) $arguments['command']);
+    }
+
+    $artifactDirectory = $runtime.'/artifacts';
+    if (! is_dir($artifactDirectory) && ! mkdir($artifactDirectory, 0700, true) && ! is_dir($artifactDirectory)) {
+        fail('não foi possível criar artifacts do supervisor');
+    }
+    $prefix = $artifactDirectory.'/supervisor-'.$featureKey.'-retry-'.$retry;
+    $pipes = [];
+    $process = proc_open('setsid '.$runCommand, [
+        0 => ['file', '/dev/null', 'r'],
+        1 => ['file', $prefix.'.stdout.log', 'ab'],
+        2 => ['file', $prefix.'.stderr.log', 'ab'],
+    ], $pipes, $root);
+    if (! is_resource($process)) {
+        fail('não foi possível iniciar o bloco sob supervisão', 12);
+    }
+
+    $status = proc_get_status($process);
+    $pid = (int) ($status['pid'] ?? 0);
+    if ($pid <= 0) {
+        proc_close($process);
+        fail('supervisor iniciou processo sem PID verificável', 12);
+    }
+
+    return ['process' => $process, 'pid' => $pid];
+}
+
+/** @return array<string, mixed> */
+function supervisorSystematicDebug(array $arguments, string $workflowId, string $featureKey, ?string $lease = null): array
+{
+    $debugCommand = $arguments['debug-command'] ?? getenv('RALPH_DEBUG_COMMAND') ?: null;
+    $debugArguments = array_merge($arguments, [
+        'workflow' => $workflowId,
+        'feature' => $featureKey,
+        'actor' => 'systematic-debugger',
+    ]);
+    if (is_string($lease) && $lease !== '') {
+        $debugArguments['lease'] = $lease;
+    }
+    if (is_string($debugCommand) && trim($debugCommand) !== '') {
+        $debugArguments['command'] = $debugCommand;
+    }
+
+    return runSystematicDebug($debugArguments);
+}
+
+function supervisorSelfCommand(): string
+{
+    return escapeshellarg(PHP_BINARY).' '.escapeshellarg(__FILE__);
+}
+
+/** @return array{exit_code: int, output: string, document_id: string, report_path: string} */
+function supervisorExecuteGateCommand(array $arguments, array $feature, string $lease, string $gate, string $command, string $producer): array
+{
+    global $runtime;
+    $workflowId = required($arguments, 'workflow');
+    $featureKey = required($arguments, 'feature');
+    $attempt = (int) $feature['attempt'];
+    $scope = str_replace('_', '-', $gate);
+    $documentCommand = supervisorSelfCommand().' document-id --kind RPT --workflow '.escapeshellarg($workflowId)
+        .' --feature '.escapeshellarg($featureKey).' --attempt '.escapeshellarg((string) $attempt)
+        .' --scope '.escapeshellarg($scope).' --plain';
+    $documentExit = 0;
+    $documentId = commandOutput($documentCommand, $documentExit);
+    if ($documentExit !== 0 || ! preg_match('/^RPT-[0-9]{4}-[0-9]{4}$/', trim($documentId))) {
+        fail('não foi possível alocar o relatório do gate '.$gate, 12);
+    }
+
+    $reportPath = $runtime.'/reports/'.trim($documentId).'.log';
+    if (! is_dir(dirname($reportPath)) && ! mkdir(dirname($reportPath), 0700, true) && ! is_dir(dirname($reportPath))) {
+        fail('não foi possível criar o diretório de relatórios dos gates', 12);
+    }
+    $before = workingTreeFingerprint();
+    $result = runReadOnlyCommand($command, max(1, (int) ($arguments['gate-timeout'] ?? 900)));
+    $after = workingTreeFingerprint();
+    $exitCode = (int) $result['exit_code'];
+    $treeChanged = $before !== $after;
+    if ($treeChanged && $exitCode === 0) {
+        $exitCode = 1;
+    }
+    $report = "gate={$gate}\nproducer={$producer}\nexit_code={$exitCode}\ntree_changed=".($treeChanged ? 'true' : 'false')."\n\n"
+        .substr($result['stdout']."\n".$result['stderr'], 0, 200000);
+    file_put_contents($reportPath, $report, LOCK_EX);
+    @chmod($reportPath, 0600);
+
+    $status = $exitCode === 0 && ! $treeChanged ? 'passed' : 'rejected';
+    $gateCommand = supervisorSelfCommand().' gate --workflow '.escapeshellarg($workflowId)
+        .' --feature '.escapeshellarg($featureKey).' --lease '.escapeshellarg($lease)
+        .' --gate '.escapeshellarg($gate).' --status '.escapeshellarg($status)
+        .' --exit-code '.escapeshellarg((string) $exitCode)
+        .' --artifact '.escapeshellarg('artifact_'.$featureKey.'_'.$gate)
+        .' --document-id '.escapeshellarg(trim($documentId))
+        .' --report-path '.escapeshellarg($reportPath)
+        .' --producer '.escapeshellarg($producer);
+    $gateExit = 0;
+    $gateOutput = commandOutput($gateCommand, $gateExit);
+    if ($gateExit !== 0) {
+        fail('controlador não registrou o gate '.$gate.': '.$gateOutput, $gateExit);
+    }
+
+    return ['exit_code' => $exitCode, 'output' => $gateOutput, 'document_id' => trim($documentId), 'report_path' => $reportPath];
+}
+
+/** @return array{exit_code: int, report_path: string, document_id: string} */
+function supervisorValidationGate(array $arguments, array $feature, string $lease): array
+{
+    global $runtime;
+    $workflowId = required($arguments, 'workflow');
+    $featureKey = required($arguments, 'feature');
+    $repository = currentRepository();
+    $result = $feature['result'] ?? [];
+    $valid = (int) ($result['exit_code'] ?? 1) === 0
+        && ($result['result_commit'] ?? null) === $repository['commit']
+        && ($result['result_tree_hash'] ?? null) === $repository['tree_hash']
+        && ($result['process_verified_terminated'] ?? false) === true
+        && $repository['working_tree_clean'];
+    $attempt = (int) $feature['attempt'];
+    $documentCommand = supervisorSelfCommand().' document-id --kind RPT --workflow '.escapeshellarg($workflowId)
+        .' --feature '.escapeshellarg($featureKey).' --attempt '.escapeshellarg((string) $attempt)
+        .' --scope validation --plain';
+    $documentExit = 0;
+    $documentId = trim(commandOutput($documentCommand, $documentExit));
+    if ($documentExit !== 0 || ! preg_match('/^RPT-[0-9]{4}-[0-9]{4}$/', $documentId)) {
+        fail('não foi possível alocar o relatório de validation', 12);
+    }
+    $reportPath = $runtime.'/reports/'.$documentId.'.log';
+    if (! is_dir(dirname($reportPath)) && ! mkdir(dirname($reportPath), 0700, true) && ! is_dir(dirname($reportPath))) {
+        fail('não foi possível criar o diretório de relatórios dos gates', 12);
+    }
+    file_put_contents($reportPath, json_encode([
+        'gate' => 'validation',
+        'status' => $valid ? 'passed' : 'rejected',
+        'attempt' => $attempt,
+        'result' => $result,
+        'repository' => $repository,
+    ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)."\n", LOCK_EX);
+    @chmod($reportPath, 0600);
+    $gateCommand = supervisorSelfCommand().' gate --workflow '.escapeshellarg($workflowId)
+        .' --feature '.escapeshellarg($featureKey).' --lease '.escapeshellarg($lease)
+        .' --gate validation --status '.($valid ? 'passed' : 'rejected')
+        .' --exit-code '.($valid ? '0' : '1')
+        .' --artifact '.escapeshellarg('artifact_'.$featureKey.'_validation')
+        .' --document-id '.escapeshellarg($documentId)
+        .' --report-path '.escapeshellarg($reportPath)
+        .' --producer validation-controller';
+    $gateExit = 0;
+    $gateOutput = commandOutput($gateCommand, $gateExit);
+    if ($gateExit !== 0) {
+        fail('controlador não registrou o gate validation: '.$gateOutput, $gateExit);
+    }
+
+    return ['exit_code' => $valid ? 0 : 1, 'report_path' => $reportPath, 'document_id' => $documentId];
+}
+
+function supervisorGateCommand(array $arguments, string $gate): ?string
+{
+    global $root;
+    $argumentName = str_replace('_', '-', $gate).'-command';
+    $environmentNames = ['RALPH_'.strtoupper(str_replace('-', '_', $argumentName))];
+    if ($gate === 'runtime_evidence') {
+        $environmentNames[] = 'RALPH_RUNTIME_EVIDENCE_CMD';
+    }
+    $command = $arguments[$argumentName] ?? null;
+    foreach ($environmentNames as $environmentName) {
+        if (is_string($command) && trim($command) !== '') {
+            break;
+        }
+        $command = getenv($environmentName) ?: null;
+    }
+    if (! is_string($command) || trim($command) === '') {
+        if ($gate === 'quality' && is_file($root.'/bin/check')) {
+            return './bin/check';
+        }
+
+        return null;
+    }
+
+    return trim($command);
+}
+
+/** @return array<string, mixed> */
+function supervisorRunGatePipeline(array $arguments, string $workflowId, string $featureKey): array
+{
+    $projection = project(loadWorkflow(), readEvents());
+    $initialFeature = featureFrom($projection, $featureKey);
+    $initialState = $initialFeature['state'] ?? null;
+    $session = beginGateSession(array_merge($arguments, ['workflow' => $workflowId, 'feature' => $featureKey]));
+    $lease = $session['lease_token'];
+    fwrite(STDERR, '[RALPH] sessão de gates '.($session['reused'] ? 'reutilizada' : 'retomada').' para '.$featureKey.' attempt '.$session['attempt']."\n");
+
+    if ($initialState === 'awaiting_gates') {
+        foreach (['validation', 'quality', 'runtime_evidence', 'technical_review', 'curation'] as $gate) {
+            $projection = project(loadWorkflow(), readEvents());
+            $feature = featureFrom($projection, $featureKey);
+            if (($feature['gates'][$gate] ?? null) === 'passed') {
+                fwrite(STDERR, '[RALPH] gate '.$gate.': já aprovado'."\n");
+                continue;
+            }
+            if (($feature['state'] ?? null) !== 'awaiting_gates') {
+                return ['status' => $feature['state'] ?? 'unknown', 'workflow_id' => $workflowId, 'feature_key' => $featureKey];
+            }
+            fwrite(STDERR, '[RALPH] gate '.$gate.': processando'."\n");
+            $result = $gate === 'validation'
+                ? supervisorValidationGate(array_merge($arguments, ['workflow' => $workflowId, 'feature' => $featureKey]), $feature, $lease)
+                : (function () use ($arguments, $workflowId, $featureKey, $feature, $lease, $gate): array {
+                    $command = supervisorGateCommand($arguments, $gate);
+                    if ($command === null) {
+                        return ['exit_code' => 125, 'configuration_required' => true, 'gate' => $gate];
+                    }
+
+                    return supervisorExecuteGateCommand(array_merge($arguments, ['workflow' => $workflowId, 'feature' => $featureKey]), $feature, $lease, $gate, $command, $gate === 'quality' ? 'quality-runner' : 'independent-'.$gate.'-runner');
+                })();
+            if (($result['configuration_required'] ?? false) === true) {
+                fwrite(STDERR, '[RALPH] gate '.$gate.': configuração ausente; sessão preservada para retomada'."\n");
+                return ['status' => 'gates_configuration_required', 'workflow_id' => $workflowId, 'feature_key' => $featureKey, 'missing_gate' => $gate];
+            }
+            fwrite(STDERR, '[RALPH] gate '.$gate.': '.((int) $result['exit_code'] === 0 ? 'aprovado' : 'rejeitado')."\n");
+            if ((int) $result['exit_code'] !== 0) {
+                return ['status' => 'debugging_required', 'workflow_id' => $workflowId, 'feature_key' => $featureKey, 'failed_gate' => $gate];
+            }
+        }
+    }
+
+    $output = $GLOBALS['root'].'/.ralph/handoffs/'.$featureKey;
+    $events = readEvents();
+    $featureAttempt = (int) $initialFeature['attempt'];
+    $transitions = [];
+    if (findEventFor($events, 'feature.approved', $featureKey, $featureAttempt) === null) {
+        $transitions[] = supervisorSelfCommand().' approve --workflow '.escapeshellarg($workflowId).' --feature '.escapeshellarg($featureKey).' --lease '.escapeshellarg($lease);
+    }
+    if (findEventFor($events, 'handoff.generated', $featureKey, $featureAttempt) === null) {
+        $transitions[] = supervisorSelfCommand().' handoff --workflow '.escapeshellarg($workflowId).' --feature '.escapeshellarg($featureKey).' --output '.escapeshellarg($output);
+    }
+    if (findEventFor($events, 'handoff.committed', $featureKey, $featureAttempt) === null) {
+        $transitions[] = supervisorSelfCommand().' handoff-commit --workflow '.escapeshellarg($workflowId).' --feature '.escapeshellarg($featureKey).' --lease '.escapeshellarg($lease);
+    }
+    if (findEventFor($events, 'feature.released', $featureKey, $featureAttempt) === null) {
+        $transitions[] = supervisorSelfCommand().' release --workflow '.escapeshellarg($workflowId).' --feature '.escapeshellarg($featureKey).' --lease '.escapeshellarg($lease);
+    }
+    if (findEventFor($events, 'feature.advanced', $featureKey, $featureAttempt) === null) {
+        $transitions[] = supervisorSelfCommand().' advance --workflow '.escapeshellarg($workflowId).' --feature '.escapeshellarg($featureKey).' --lease '.escapeshellarg($lease);
+    }
+    foreach ($transitions as $transition) {
+        $exit = 0;
+        $outputText = commandOutput($transition, $exit);
+        if ($exit !== 0) {
+            fail('transição automática não concluída: '.$outputText, $exit);
+        }
+    }
+
+    return ['status' => 'next_feature', 'workflow_id' => $workflowId, 'feature_key' => $featureKey];
+}
+
+function superviseWorkflow(array $arguments): void
+{
+    global $runtime, $supervisorLockFile;
+    $workflowId = required($arguments, 'workflow');
+    $interval = max(1, (int) ($arguments['interval'] ?? 30));
+    $staleAfter = max($interval, (int) ($arguments['stale-after'] ?? max(180, $interval * 3)));
+    $activityStaleAfter = max($interval, (int) ($arguments['activity-stale-after'] ?? max(900, $staleAfter * 5)));
+    $maxRetries = max(0, (int) ($arguments['max-retries'] ?? 3));
+    $heartbeatInterval = max(1, (int) ($arguments['heartbeat-interval'] ?? 15));
+    $lock = fopen($supervisorLockFile, 'c+');
+    if ($lock === false || ! flock($lock, LOCK_EX | LOCK_NB)) {
+        fail('já existe um supervisor ativo para este checkout', 12);
+    }
+
+    $run = null;
+    $retry = 0;
+    try {
+        while (true) {
+            $workflow = loadWorkflow();
+            $projection = project($workflow, readEvents());
+            $cursor = $projection['cursor'];
+            if ($cursor === null) {
+                printJson(['status' => 'complete', 'workflow_id' => $workflowId]);
+
+                return;
+            }
+            $feature = featureFrom($projection, $cursor);
+
+            if (($feature['state'] ?? null) === 'released') {
+                $self = escapeshellarg(PHP_BINARY).' '.escapeshellarg(__FILE__);
+                $exit = 0;
+                $output = commandOutput($self.' advance --workflow '.escapeshellarg($workflowId).' --feature '.escapeshellarg($cursor), $exit);
+                if ($exit !== 0) {
+                    fail($output, $exit);
+                }
+
+                continue;
+            }
+
+            if (in_array($feature['state'] ?? null, ['awaiting_gates', 'approved'], true)) {
+                $gateResult = supervisorRunGatePipeline($arguments, $workflowId, $cursor);
+                fwrite(STDERR, supervisorFeedback(supervisorSnapshot($arguments, $workflowId, $staleAfter, $activityStaleAfter))."\n");
+                if (($gateResult['status'] ?? null) === 'next_feature') {
+                    continue;
+                }
+                printJson($gateResult);
+
+                return;
+            }
+
+            $lease = null;
+            if (in_array($feature['state'] ?? null, ['debugging_required', 'debugging_verified', 'recovery_required'], true)) {
+                $debugResult = ($feature['state'] ?? null) === 'debugging_verified'
+                    ? ['status' => 'debugging_verified']
+                    : supervisorSystematicDebug($arguments, $workflowId, $cursor);
+                fwrite(STDERR, '[RALPH] systematic debugging: '.($debugResult['status'] ?? 'unknown')."\n");
+                if (($debugResult['status'] ?? null) !== 'debugging_verified') {
+                    fwrite(STDERR, supervisorFeedback(supervisorSnapshot($arguments, $workflowId, $staleAfter, $activityStaleAfter))."\n");
+                    printJson(array_merge($debugResult, ['workflow_id' => $workflowId, 'feature_key' => $cursor]));
+
+                    return;
+                }
+                if ($retry >= $maxRetries) {
+                    supervisorRecordRequiredRecovery($arguments, $feature, supervisorSnapshot($arguments, $workflowId, $staleAfter, $activityStaleAfter), 'systematic debugging concluiu, mas o limite de tentativas foi atingido');
+                    printJson(['status' => 'recovery_required', 'workflow_id' => $workflowId, 'feature_key' => $cursor, 'reason' => 'retry_limit_after_debug']);
+
+                    return;
+                }
+                $retry++;
+                $retryResult = beginFailedRetry(array_merge($arguments, [
+                    'actor' => 'supervisor',
+                    'feature' => $cursor,
+                    'reason' => 'retomada após systematic debugging verificado',
+                    'preserve-tree' => true,
+                ]));
+                $lease = $retryResult['lease_token'];
+                $feature = $retryResult['feature'];
+            } elseif (($feature['state'] ?? null) !== 'pending') {
+                fwrite(STDERR, supervisorFeedback(supervisorSnapshot($arguments, $workflowId, $staleAfter, $activityStaleAfter))."\n");
+                printJson(['status' => $feature['state'] ?? 'unknown', 'workflow_id' => $workflowId, 'feature_key' => $cursor]);
+
+                return;
+            } else {
+                $self = escapeshellarg(PHP_BINARY).' '.escapeshellarg(__FILE__);
+                $exit = 0;
+                $claimOutput = commandOutput($self.' claim --workflow '.escapeshellarg($workflowId).' --feature '.escapeshellarg($cursor).' --actor supervisor', $exit);
+                if ($exit !== 0) {
+                    fail($claimOutput, $exit);
+                }
+                $claim = json_decode($claimOutput, true, 512, JSON_THROW_ON_ERROR);
+                $lease = $claim['lease_token'] ?? null;
+                if (! is_string($lease) || $lease === '') {
+                    fail('claim do supervisor não devolveu lease', 12);
+                }
+            }
+
+            $run = supervisorStartRun($arguments, $workflowId, $cursor, $lease, $heartbeatInterval, $retry);
+            while (true) {
+                $snapshot = supervisorSnapshot($arguments, $workflowId, $staleAfter, $activityStaleAfter);
+                fwrite(STDERR, supervisorFeedback($snapshot)."\n");
+                fflush(STDOUT);
+                $health = $snapshot['health'] ?? 'error';
+                $status = proc_get_status($run['process']);
+                if (in_array($health, ['heartbeat_stale', 'activity_stale', 'process_missing'], true)) {
+                    if ($retry >= $maxRetries) {
+                        $tree = processTreeSnapshot($run['pid']);
+                        if ($tree['alive']) {
+                            terminateProcessTree($tree);
+                        }
+                        supervisorRecordRequiredRecovery($arguments, $feature, $snapshot, 'limite de recuperações do supervisor atingido');
+                        proc_close($run['process']);
+                        printJson(['status' => 'recovery_required', 'workflow_id' => $workflowId, 'feature_key' => $cursor, 'retry' => $retry]);
+
+                        return;
+                    }
+                    $tree = processTreeSnapshot($run['pid']);
+                    if ($tree['alive']) {
+                        terminateProcessTree($tree);
+                    }
+                    proc_close($run['process']);
+                    $retry++;
+                    supervisorRecordRetry($arguments, $feature, $retry, $snapshot);
+                    $run = supervisorStartRun($arguments, $workflowId, $cursor, $lease, $heartbeatInterval, $retry);
+
+                    continue;
+                }
+
+                if (! ($status['running'] ?? false)) {
+                    $runExit = proc_close($run['process']);
+                    $projection = project(loadWorkflow(), readEvents());
+                    $feature = featureFrom($projection, $cursor);
+                    if (in_array($feature['state'] ?? null, ['awaiting_gates', 'debugging_required'], true)) {
+                        if (($feature['state'] ?? null) === 'debugging_required' || (int) (($feature['result']['exit_code'] ?? 0)) !== 0) {
+                            $debugResult = supervisorSystematicDebug($arguments, $workflowId, $cursor, $lease);
+                            fwrite(STDERR, '[RALPH] systematic debugging: '.($debugResult['status'] ?? 'unknown')."\n");
+                            if (($debugResult['status'] ?? null) !== 'debugging_verified') {
+                                fwrite(STDERR, supervisorFeedback($snapshot)."\n");
+                                printJson(array_merge($debugResult, ['workflow_id' => $workflowId, 'feature_key' => $cursor, 'exit_code' => $runExit]));
+
+                                return;
+                            }
+                            if ($retry >= $maxRetries) {
+                                supervisorRecordRequiredRecovery($arguments, $feature, $snapshot, 'systematic debugging concluiu, mas o limite de recuperações foi atingido');
+                                fwrite(STDERR, supervisorFeedback($snapshot)."\n");
+                                printJson(['status' => 'recovery_required', 'workflow_id' => $workflowId, 'feature_key' => $cursor, 'exit_code' => $runExit, 'retry' => $retry]);
+
+                                return;
+                            }
+                            $retry++;
+                            $retryResult = beginFailedRetry(array_merge($arguments, [
+                                'actor' => 'supervisor',
+                                'feature' => $cursor,
+                                'reason' => 'retomada após systematic debugging verificado',
+                                'preserve-tree' => true,
+                            ]));
+                            $lease = $retryResult['lease_token'];
+                            $feature = $retryResult['feature'];
+                            $run = supervisorStartRun($arguments, $workflowId, $cursor, $lease, $heartbeatInterval, $retry);
+
+                            continue;
+                        }
+                        $gateResult = supervisorRunGatePipeline($arguments, $workflowId, $cursor);
+                        fwrite(STDERR, supervisorFeedback($snapshot)."\n");
+                        if (($gateResult['status'] ?? null) === 'next_feature') {
+                            $run = null;
+                            break;
+                        }
+                        printJson(array_merge($gateResult, ['exit_code' => $runExit]));
+
+                        return;
+                    }
+                    if (($feature['state'] ?? null) === 'released') {
+                        $run = null;
+                        break;
+                    }
+                    if ($retry >= $maxRetries) {
+                        supervisorRecordRequiredRecovery($arguments, $feature, $snapshot, 'processo terminou sem concluir a feature');
+                        printJson(['status' => 'recovery_required', 'workflow_id' => $workflowId, 'feature_key' => $cursor, 'exit_code' => $runExit, 'retry' => $retry]);
+
+                        return;
+                    }
+                    $retry++;
+                    supervisorRecordRetry($arguments, $feature, $retry, $snapshot);
+                    $run = supervisorStartRun($arguments, $workflowId, $cursor, $lease, $heartbeatInterval, $retry);
+
+                    continue;
+                }
+
+                sleep($interval);
+            }
+        }
+    } finally {
+        if (is_resource($lock)) {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
+    }
+}
+
+function initWorkflow(array $arguments): void
+{
+    global $root;
+    $workflowId = required($arguments, 'workflow');
+    $manifestPath = $arguments['manifest'] ?? null;
+    $planPath = $arguments['plan'] ?? null;
+    if (! is_string($manifestPath) && ! is_string($planPath)) {
+        fail('informe --manifest ou --plan', 2);
+    }
+
+    if (is_string($planPath)) {
+        $planPath = $root.DIRECTORY_SEPARATOR.$planPath;
+        if (! is_file($planPath)) {
+            fail("plano não encontrado: {$planPath}");
+        }
+        $content = (string) file_get_contents($planPath);
+        preg_match_all('/^## Phase ([0-9]+(?:\.[0-9]+)?):\s*(.+)$/m', $content, $matches, PREG_SET_ORDER | PREG_OFFSET_CAPTURE);
+        $features = [];
+        foreach ($matches as $match) {
+            $start = $match[0][1];
+            $nextStart = strlen($content);
+            foreach ($matches as $candidate) {
+                if ($candidate[0][1] > $start) {
+                    $nextStart = min($nextStart, $candidate[0][1]);
+                }
+            }
+            $section = substr($content, $start, $nextStart - $start);
+            if (preg_match('/^- \[ \]/m', $section) !== 1) {
+                continue;
+            }
+            $features[] = [
+                'feature_key' => 'phase-'.str_replace('.', '-', $match[1][0]),
+                'title' => trim($match[2][0]),
+                'position' => count($features) + 1,
+                'source_phase' => $match[1][0],
+                'status' => 'pending',
+            ];
+        }
+        if ($features === []) {
+            fail('nenhuma feature encontrada no plano');
+        }
+        $workflow = [
+            'schema_version' => RALPH_SCHEMA_VERSION,
+            'workflow_id' => $workflowId,
+            'plan_file' => str_replace($root.DIRECTORY_SEPARATOR, '', $planPath),
+            'plan_hash' => fileHash($planPath),
+            'knowledge_policy' => ['mode' => 'non_blocking'],
+            'features' => $features,
+        ];
+    } else {
+        $manifestPath = $root.DIRECTORY_SEPARATOR.ltrim((string) $manifestPath, DIRECTORY_SEPARATOR);
+        $workflow = readJson($manifestPath);
+        if (($workflow['workflow_id'] ?? null) !== $workflowId) {
+            fail('workflow_id do manifest não corresponde ao argumento');
+        }
+        if (! isset($workflow['features']) || ! is_array($workflow['features']) || $workflow['features'] === []) {
+            fail('manifest precisa conter features');
+        }
+        $workflow['schema_version'] ??= RALPH_SCHEMA_VERSION;
+        $workflow['knowledge_policy']['mode'] ??= 'non_blocking';
+        foreach ($workflow['features'] as $index => &$feature) {
+            $feature['position'] ??= $index + 1;
+            $feature['status'] ??= 'pending';
+        }
+        unset($feature);
+        if (! isset($workflow['plan_hash']) && is_string($workflow['plan_file'] ?? null)) {
+            $planCandidate = $root.DIRECTORY_SEPARATOR.ltrim($workflow['plan_file'], DIRECTORY_SEPARATOR);
+            if (is_file($planCandidate)) {
+                $workflow['plan_hash'] = fileHash($planCandidate);
+            }
+        }
+        $workflow['plan_hash'] ??= hashValue(json_encode(canonical($workflow['features']), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR));
+        $workflow['spec_hash'] ??= $workflow['plan_hash'];
+    }
+
+    $repository = currentRepository();
+    $workflow['checkout'] = [
+        'worktree_path' => $repository['worktree_path'],
+        'branch' => $repository['branch'],
+        'git_common_dir' => git('rev-parse --git-common-dir'),
+    ];
+    $workflow['initialized_at'] = gmdate('Y-m-d\TH:i:s\Z');
+
+    withLock(function () use ($workflow): void {
+        global $workflowFile;
+        runtimeInit();
+        if (is_file($workflowFile)) {
+            $existing = readJson($workflowFile);
+            if (($existing['workflow_id'] ?? null) !== $workflow['workflow_id']) {
+                fail('já existe outro workflow neste checkout');
+            }
+        }
+        saveWorkflow($workflow);
+        appendEvent([
+            'workflow_id' => $workflow['workflow_id'],
+            'type' => 'workflow.initialized',
+            'feature_key' => 'workflow',
+            'summary' => 'Workflow inicializado com política de conhecimento não bloqueante',
+            'facts' => ['feature_count' => count($workflow['features']), 'knowledge_policy' => $workflow['knowledge_policy']],
+        ]);
+    });
+
+    printJson(['workflow_id' => $workflowId, 'features' => count($workflow['features']), 'runtime' => $GLOBALS['runtime']]);
+}
+
+function claimFeature(array $arguments): void
+{
+    $workflowId = required($arguments, 'workflow');
+    $featureKey = required($arguments, 'feature');
+    $result = withLock(function () use ($arguments, $workflowId, $featureKey): array {
+        $workflow = loadWorkflow();
+        if (($workflow['workflow_id'] ?? null) !== $workflowId) {
+            fail('workflow incompatível');
+        }
+        $projection = project($workflow, readEvents());
+        $feature = featureFrom($projection, $featureKey);
+        if ($projection['cursor'] !== $featureKey) {
+            fail('feature não é a próxima posição autorizada');
+        }
+        if (($feature['state'] ?? 'pending') !== 'pending') {
+            fail('feature não está pendente; estado atual: '.($feature['state'] ?? 'desconhecido'));
+        }
+        $repository = currentRepository();
+        if (! $repository['working_tree_clean']) {
+            fail('working tree suja; o controlador não inicia uma tentativa');
+        }
+        $configuredCheckout = $workflow['checkout'] ?? [];
+        if (($configuredCheckout['worktree_path'] ?? $repository['worktree_path']) !== $repository['worktree_path'] || ($configuredCheckout['branch'] ?? $repository['branch']) !== $repository['branch']) {
+            fail('checkout atual não corresponde ao checkout registrado no workflow');
+        }
+        $planHash = $workflow['plan_hash'] ?? null;
+        if (! is_string($planHash) || ! str_starts_with($planHash, 'sha256:')) {
+            fail('workflow sem plan_hash válido');
+        }
+        $token = 'lease_'.bin2hex(random_bytes(24));
+        $feature['attempt'] = (int) $feature['attempt'] + 1;
+        $feature['lease_token_hash'] = leaseHash($token);
+        $feature['correlation_id'] = 'corr_'.bin2hex(random_bytes(8));
+        appendEvent(eventContext($arguments, $feature, 'feature.claimed', 'Feature reivindicada pelo controlador', [
+            'base_commit' => $repository['commit'],
+            'base_tree_hash' => $repository['tree_hash'],
+            'plan_hash' => $planHash,
+            'spec_hash' => $workflow['spec_hash'] ?? $planHash,
+            'checkout' => $workflow['checkout'],
+            'fencing_token' => $feature['attempt'],
+            'implementer' => $arguments['implementer'] ?? getenv('RALPH_IMPLEMENTER') ?: 'ralph',
+        ]));
+
+        return ['workflow_id' => $workflowId, 'feature_key' => $featureKey, 'attempt' => $feature['attempt'], 'lease_token' => $token, 'base' => $repository];
+    });
+    printJson($result);
+}
+
+function startAttempt(array $arguments): void
+{
+    $workflowId = required($arguments, 'workflow');
+    $featureKey = required($arguments, 'feature');
+    $lease = required($arguments, 'lease');
+    withLock(function () use ($arguments, $featureKey, $lease): void {
+        $workflow = loadWorkflow();
+        $projection = project($workflow, readEvents());
+        $feature = featureFrom($projection, $featureKey);
+        checkLease($feature, $lease);
+        if (($feature['state'] ?? null) !== 'running') {
+            fail('tentativa não está em running');
+        }
+        appendEvent(eventContext($arguments, $feature, 'attempt.started', 'Processo da feature iniciado', [
+            'pid' => (int) ($arguments['pid'] ?? getmypid()),
+            'pgid' => (int) ($arguments['pgid'] ?? 0),
+            'execution_nonce' => (string) ($arguments['execution-nonce'] ?? bin2hex(random_bytes(12))),
+        ]));
+    });
+    printJson(['status' => 'running', 'feature_key' => $featureKey]);
+}
+
+function finishBlock(array $arguments): void
+{
+    $workflowId = required($arguments, 'workflow');
+    $featureKey = required($arguments, 'feature');
+    $lease = required($arguments, 'lease');
+    $exitCode = (int) ($arguments['exit-code'] ?? 1);
+    withLock(function () use ($arguments, $featureKey, $lease, $exitCode): void {
+        $workflow = loadWorkflow();
+        $projection = project($workflow, readEvents());
+        $feature = featureFrom($projection, $featureKey);
+        checkLease($feature, $lease);
+        if (($feature['state'] ?? null) !== 'running') {
+            fail('bloco não está em running');
+        }
+        $events = readEvents();
+        $claim = findEventFor($events, 'feature.claimed', $featureKey, (int) $feature['attempt']);
+        if ($claim === null) {
+            fail('claim da tentativa não encontrado');
+        }
+        $repository = currentRepository();
+        $facts = [
+            'exit_code' => $exitCode,
+            'result_commit' => $repository['commit'],
+            'result_tree_hash' => $repository['tree_hash'],
+            'base_commit' => $claim['facts']['base_commit'] ?? null,
+            'base_tree_hash' => $claim['facts']['base_tree_hash'] ?? null,
+            'implementation_commit' => $arguments['implementation-commit'] ?? $repository['commit'],
+            'process_verified_terminated' => ($arguments['process-terminated'] ?? 'true') === 'true',
+        ];
+        if (! $facts['process_verified_terminated']) {
+            appendEvent(eventContext($arguments, $feature, 'recovery.required', 'Processo da tentativa não foi reconciliado', $facts));
+            fail('processo da tentativa não foi comprovadamente encerrado');
+        }
+        appendEvent(eventContext($arguments, $feature, 'block.finished', $exitCode === 0 ? 'Bloco terminou; aguardando gates' : 'Bloco terminou com falha; systematic debugging requerido', $facts));
+        if ($exitCode !== 0) {
+            appendEvent(eventContext($arguments, $feature, 'debugging.required', 'Falha do bloco encaminhada para systematic debugging', [
+                'reason' => 'block_finished_exit_code',
+                'exit_code' => $exitCode,
+                'artifact_refs' => $facts['artifact_refs'] ?? [],
+            ]));
+        }
+    });
+    printJson(['status' => $exitCode === 0 ? 'awaiting_gates' : 'debugging_required', 'feature_key' => $featureKey, 'exit_code' => $exitCode]);
+}
+
+/**
+ * Reconcile uma execução externa que terminou sem conseguir devolver o resultado
+ * ao controlador. O comando só aceita uma feature running, sem processo ativo,
+ * working tree limpa e commit diferente da base reivindicada.
+ */
+function reconcileExternalBlock(array $arguments): void
+{
+    $workflowId = required($arguments, 'workflow');
+    $featureKey = required($arguments, 'feature');
+
+    withLock(function () use ($arguments, $workflowId, $featureKey): void {
+        $active = activeWorkflowProcesses($workflowId);
+        if ($active !== []) {
+            fail('não é seguro reconciliar enquanto o workflow possui processos ativos', 12);
+        }
+
+        $workflow = loadWorkflow();
+        $events = readEvents();
+        $projection = project($workflow, $events);
+        $feature = featureFrom($projection, $featureKey);
+        if (($feature['state'] ?? null) !== 'running') {
+            fail('reconcile exige feature em running');
+        }
+
+        $claim = findEventFor($events, 'feature.claimed', $featureKey, (int) $feature['attempt']);
+        if ($claim === null) {
+            fail('claim da tentativa não encontrado');
+        }
+
+        $repository = currentRepository();
+        $baseCommit = (string) ($claim['facts']['base_commit'] ?? '');
+        if (! $repository['working_tree_clean']) {
+            fail('reconcile exige working tree limpa');
+        }
+        if ($baseCommit === '' || $repository['commit'] === $baseCommit) {
+            fail('reconcile exige commit de resultado diferente da base reivindicada');
+        }
+
+        $facts = [
+            'exit_code' => 0,
+            'result_commit' => $repository['commit'],
+            'result_tree_hash' => $repository['tree_hash'],
+            'base_commit' => $baseCommit,
+            'base_tree_hash' => $claim['facts']['base_tree_hash'] ?? null,
+            'implementation_commit' => $arguments['implementation-commit'] ?? $repository['commit'],
+            'process_verified_terminated' => true,
+            'reconciled_external_execution' => true,
+            'reason' => $arguments['reason'] ?? 'execução externa terminou sem retorno ao controlador',
+            'artifact_refs' => array_values(array_filter(array_map('trim', explode(',', (string) ($arguments['artifact-refs'] ?? ''))))),
+        ];
+        appendEvent(eventContext($arguments, $feature, 'block.finished', 'Execução externa reconciliada; aguardando gates', $facts));
+    });
+
+    printJson(['status' => 'awaiting_gates', 'workflow_id' => $workflowId, 'feature_key' => $featureKey]);
+}
+
+/** @return array{status: string, workflow_id: string, feature_key: string, attempt: int, lease_token: string, session_id: string, reused: bool} */
+function beginGateSession(array $arguments): array
+{
+    $workflowId = required($arguments, 'workflow');
+    $featureKey = required($arguments, 'feature');
+
+    return withLock(function () use ($arguments, $workflowId, $featureKey): array {
+        $workflow = loadWorkflow();
+        $projection = project($workflow, readEvents());
+        $feature = featureFrom($projection, $featureKey);
+        if ($projection['cursor'] !== $featureKey) {
+            fail('feature não é a posição autorizada para gates');
+        }
+        if (! in_array($feature['state'] ?? null, ['awaiting_gates', 'approved'], true)) {
+            fail('reclaim-gates exige estado awaiting_gates ou approved; estado atual: '.($feature['state'] ?? 'desconhecido'));
+        }
+
+        $session = readGateSession($workflowId, $feature);
+        if (is_array($session)) {
+            return [
+                'status' => 'gate_session_active',
+                'workflow_id' => $workflowId,
+                'feature_key' => $featureKey,
+                'attempt' => (int) $feature['attempt'],
+                'lease_token' => (string) $session['lease_token'],
+                'session_id' => (string) $session['session_id'],
+                'reused' => true,
+            ];
+        }
+        if (($feature['state'] ?? null) === 'approved') {
+            fail('sessão de gates ausente após approved; recovery explícito é obrigatório');
+        }
+
+        $result = $feature['result'] ?? [];
+        if ((int) ($result['exit_code'] ?? 1) !== 0) {
+            fail('a sessão de gates só pode ser retomada após bloco com exit code 0');
+        }
+        if (($result['process_verified_terminated'] ?? false) !== true
+            || (isset($result['process_tree_after_exit']['alive']) && $result['process_tree_after_exit']['alive'] === true)) {
+            fail('há processo do bloco sem encerramento comprovado; recovery explícito é obrigatório');
+        }
+        $repository = currentRepository();
+        if (($result['result_commit'] ?? null) !== $repository['commit'] || ($result['result_tree_hash'] ?? null) !== $repository['tree_hash']) {
+            fail('resultado do bloco ficou stale; a sessão de gates não pode ser retomada');
+        }
+        if (! $repository['working_tree_clean']) {
+            fail('working tree suja; a sessão de gates não pode ser retomada');
+        }
+
+        $token = 'lease_'.bin2hex(random_bytes(24));
+        $sessionId = 'gate_'.bin2hex(random_bytes(12));
+        $newFeature = $feature;
+        $newFeature['lease_token_hash'] = leaseHash($token);
+        $newFeature['gate_session'] = [
+            'session_id' => $sessionId,
+            'fencing_token' => gateFencingToken(readEvents(), $featureKey, (int) $feature['attempt']) + 1,
+        ];
+        $facts = [
+            'session_id' => $sessionId,
+            'fencing_token' => $newFeature['gate_session']['fencing_token'],
+            'previous_lease_token_hash' => $feature['lease_token_hash'] ?? null,
+            'reason' => $arguments['reason'] ?? 'retomada automática após término do bloco',
+            'result_commit' => $result['result_commit'],
+            'result_tree_hash' => $result['result_tree_hash'],
+            'process_verified_terminated' => true,
+        ];
+        appendEvent(eventContext(array_merge($arguments, ['idempotency-key' => $arguments['idempotency-key'] ?? '']), $newFeature, 'gate.session.reclaimed', 'Sessão de gates retomada pelo controlador', $facts));
+        writeGateSession([
+            'schema_version' => RALPH_SCHEMA_VERSION,
+            'workflow_id' => $workflowId,
+            'feature_key' => $featureKey,
+            'attempt' => (int) $feature['attempt'],
+            'session_id' => $sessionId,
+            'lease_token' => $token,
+            'lease_token_hash' => leaseHash($token),
+        ]);
+
+        return [
+            'status' => 'gate_session_reclaimed',
+            'workflow_id' => $workflowId,
+            'feature_key' => $featureKey,
+            'attempt' => (int) $feature['attempt'],
+            'lease_token' => $token,
+            'session_id' => $sessionId,
+            'reused' => false,
+        ];
+    });
+}
+
+function gateFencingToken(array $events, string $featureKey, int $attempt): int
+{
+    $maximum = $attempt;
+    foreach ($events as $event) {
+        if (($event['type'] ?? null) !== 'gate.session.reclaimed'
+            || ($event['feature_key'] ?? null) !== $featureKey
+            || (int) ($event['attempt'] ?? -1) !== $attempt) {
+            continue;
+        }
+        $maximum = max($maximum, (int) ($event['facts']['fencing_token'] ?? $maximum));
+    }
+
+    return $maximum;
+}
+
+function reclaimGates(array $arguments): void
+{
+    printJson(beginGateSession($arguments));
+}
+
+function recordGate(array $arguments): void
+{
+    $workflowId = required($arguments, 'workflow');
+    $featureKey = required($arguments, 'feature');
+    $lease = required($arguments, 'lease');
+    $gate = required($arguments, 'gate');
+    $status = required($arguments, 'status');
+    $allowed = ['validation', 'quality', 'runtime_evidence', 'technical_review', 'curation'];
+    if (! in_array($gate, $allowed, true) || ! in_array($status, ['passed', 'rejected'], true)) {
+        fail('gate ou status inválido');
+    }
+    withLock(function () use ($arguments, $featureKey, $lease, $gate, $status): void {
+        $workflow = loadWorkflow();
+        $projection = project($workflow, readEvents());
+        $feature = featureFrom($projection, $featureKey);
+        checkLease($feature, $lease);
+        if (($feature['state'] ?? null) !== 'awaiting_gates') {
+            fail('gates só podem ser registrados em awaiting_gates');
+        }
+        $type = $status === 'passed' ? 'gate.passed' : 'gate.rejected';
+        $events = readEvents();
+        foreach (array_reverse($events) as $existing) {
+            if (($existing['feature_key'] ?? null) !== $featureKey || (int) ($existing['attempt'] ?? 0) !== (int) $feature['attempt']) {
+                continue;
+            }
+            if (($existing['type'] ?? null) === $type && (($existing['facts']['gate'] ?? null) === $gate)) {
+                return;
+            }
+            if (in_array($existing['type'] ?? null, ['gate.passed', 'gate.rejected'], true) && (($existing['facts']['gate'] ?? null) === $gate)) {
+                fail("gate {$gate} já foi registrado com outro resultado");
+            }
+        }
+        $facts = [
+            'gate' => $gate,
+            'status' => $status,
+            'artifact_refs' => is_string($arguments['artifact'] ?? null) ? [$arguments['artifact']] : [],
+            'producer' => $arguments['producer'] ?? $arguments['actor'] ?? 'ralph-control',
+            'exit_code' => isset($arguments['exit-code']) ? (int) $arguments['exit-code'] : null,
+            'document_id' => is_string($arguments['document-id'] ?? null) ? $arguments['document-id'] : null,
+            'report_path' => is_string($arguments['report-path'] ?? null) ? $arguments['report-path'] : null,
+        ];
+        appendEvent(eventContext($arguments, $feature, $type, "Gate {$gate}: {$status}", $facts));
+        if ($status === 'rejected') {
+            appendEvent(eventContext($arguments, $feature, 'debugging.required', "Gate {$gate} rejeitado; systematic debugging requerido", [
+                'reason' => 'gate_rejected',
+                'gate' => $gate,
+                'artifact_refs' => $facts['artifact_refs'],
+            ]));
+        }
+    });
+    printJson(['gate' => $gate, 'status' => $status]);
+}
+
+function approveFeature(array $arguments): void
+{
+    $workflowId = required($arguments, 'workflow');
+    $featureKey = required($arguments, 'feature');
+    $lease = required($arguments, 'lease');
+    withLock(function () use ($arguments, $featureKey, $lease): void {
+        $workflow = loadWorkflow();
+        $events = readEvents();
+        $projection = project($workflow, $events);
+        $feature = featureFrom($projection, $featureKey);
+        checkLease($feature, $lease);
+        if (($feature['state'] ?? null) !== 'awaiting_gates') {
+            fail('feature não está aguardando gates');
+        }
+        $requiredGates = ['validation', 'quality', 'runtime_evidence', 'technical_review', 'curation'];
+        foreach ($requiredGates as $gate) {
+            if (($feature['gates'][$gate] ?? null) !== 'passed') {
+                fail("gate obrigatório não aprovado: {$gate}");
+            }
+        }
+        $implementer = $feature['claim']['implementer'] ?? 'ralph';
+        foreach (['technical_review', 'curation'] as $independentGate) {
+            $independentEvent = null;
+            foreach (array_reverse($events) as $event) {
+                if (($event['feature_key'] ?? null) === $featureKey && (int) ($event['attempt'] ?? 0) === (int) $feature['attempt'] && ($event['facts']['gate'] ?? null) === $independentGate) {
+                    $independentEvent = $event;
+                    break;
+                }
+            }
+            if (($independentEvent['facts']['producer'] ?? null) === $implementer) {
+                fail("{$independentGate} precisa ser produzido por actor diferente do implementador");
+            }
+        }
+        $result = $feature['result'] ?? [];
+        $repository = currentRepository();
+        if (($result['result_commit'] ?? null) !== $repository['commit'] || ($result['result_tree_hash'] ?? null) !== $repository['tree_hash']) {
+            fail('resultado do bloco ficou stale em relação ao checkout atual');
+        }
+        if (! $repository['working_tree_clean']) {
+            fail('working tree suja na aprovação');
+        }
+        if (($result['exit_code'] ?? 1) !== 0) {
+            fail('exit code do bloco não é zero');
+        }
+        if (($result['base_commit'] ?? '') !== commitParent($repository['commit'])) {
+            fail('commit da feature não tem o base_commit da tentativa como pai imediato');
+        }
+        if (git('rev-list --count '.escapeshellarg((string) $result['base_commit']).'..'.escapeshellarg($repository['commit'])) !== '1') {
+            fail('a tentativa precisa produzir exatamente um commit de implementação');
+        }
+        appendEvent(eventContext($arguments, $feature, 'feature.approved', 'Todos os cinco gates foram aprovados', [
+            'gates' => $feature['gates'],
+            'implementation_commit' => $repository['commit'],
+        ]));
+    });
+    printJson(['status' => 'approved', 'feature_key' => $featureKey]);
+}
+
+function generateHandoff(array $arguments): void
+{
+    global $root;
+    $workflowId = required($arguments, 'workflow');
+    $featureKey = required($arguments, 'feature');
+    $output = required($arguments, 'output');
+    withLock(function () use ($arguments, $workflowId, $featureKey, $output, $root): void {
+        $workflow = loadWorkflow();
+        $projection = project($workflow, readEvents());
+        $feature = featureFrom($projection, $featureKey);
+        if (($feature['state'] ?? null) !== 'approved') {
+            fail('handoff só pode ser gerado após approved');
+        }
+        if (! is_dir($output) && ! mkdir($output, 0770, true) && ! is_dir($output)) {
+            fail("não foi possível criar diretório do handoff: {$output}");
+        }
+        $documentMetadata = [
+            'workflow_id' => $workflowId,
+            'feature_key' => $featureKey,
+            'attempt' => (int) $feature['attempt'],
+        ];
+        $handoffId = allocateDocumentId('HND', "handoff:{$workflowId}:{$featureKey}:{$feature['attempt']}", $documentMetadata);
+        $bugReportId = allocateDocumentId('RPT', "handoff-bug-report:{$workflowId}:{$featureKey}:{$feature['attempt']}", $documentMetadata);
+        $evidenceManifestId = allocateDocumentId('EVD', "handoff-evidence:{$workflowId}:{$featureKey}:{$feature['attempt']}", $documentMetadata);
+        $summary = [
+            'schema_version' => RALPH_SCHEMA_VERSION,
+            'document_id' => $handoffId,
+            'document_kind' => 'handoff',
+            'workflow_id' => $workflowId,
+            'feature_key' => $featureKey,
+            'attempt' => $feature['attempt'],
+            'state' => 'approved',
+            'gates' => $feature['gates'],
+            'implementation_commit' => $feature['result']['implementation_commit'] ?? null,
+            'result_commit' => $feature['result']['result_commit'] ?? null,
+            'result_tree_hash' => $feature['result']['result_tree_hash'] ?? null,
+            'knowledge_policy' => $workflow['knowledge_policy']['mode'] ?? 'non_blocking',
+        ];
+        writeJson($output.DIRECTORY_SEPARATOR.'bug-report.json', [
+            'schema_version' => RALPH_SCHEMA_VERSION,
+            'document_id' => $bugReportId,
+            'document_kind' => 'report',
+            'handoff_id' => $handoffId,
+            'feature_key' => $featureKey,
+            'incidents' => [],
+            'status' => 'no_incidents_or_not_recorded',
+        ]);
+        writeJson($output.DIRECTORY_SEPARATOR.'evidence-manifest.json', [
+            'schema_version' => RALPH_SCHEMA_VERSION,
+            'document_id' => $evidenceManifestId,
+            'document_kind' => 'evidence-manifest',
+            'handoff_id' => $handoffId,
+            'feature_key' => $featureKey,
+            'gates' => $feature['gates'],
+            'artifacts' => [],
+        ]);
+        writeJson($output.DIRECTORY_SEPARATOR.'execution-summary.json', $summary);
+        file_put_contents($output.DIRECTORY_SEPARATOR.'bug-report.md', "# {$bugReportId} — Incidentes de {$featureKey}\n\n- Handoff: {$handoffId}\n\nNenhum incidente sanitizado foi registrado nesta tentativa.\n");
+        file_put_contents($output.DIRECTORY_SEPARATOR.'execution-summary.md', "# {$handoffId} — Handoff de {$featureKey}\n\n- Documento: {$handoffId}\n- Workflow: {$workflowId}\n- Tentativa: {$feature['attempt']}\n- Estado: approved\n- Commit de implementação: ".($summary['implementation_commit'] ?? 'não informado')."\n- Política de conhecimento: {$summary['knowledge_policy']}\n");
+        $arguments['output'] = $output;
+        $realRoot = realpath($root);
+        $realOutput = realpath($output);
+        $handoffPath = $output;
+        if ($realRoot !== false && $realOutput !== false && str_starts_with($realOutput, $realRoot.DIRECTORY_SEPARATOR)) {
+            $handoffPath = ltrim(str_replace($realRoot, '', $realOutput), DIRECTORY_SEPARATOR);
+        }
+        appendEvent(eventContext($arguments, $feature, 'handoff.generated', 'Handoff contextual sanitizado gerado', [
+            'path' => $handoffPath,
+            'files' => ['bug-report.json', 'bug-report.md', 'evidence-manifest.json', 'execution-summary.md'],
+            'documents' => [
+                ['id' => $handoffId, 'kind' => 'HND'],
+                ['id' => $bugReportId, 'kind' => 'RPT'],
+                ['id' => $evidenceManifestId, 'kind' => 'EVD'],
+            ],
+        ]));
+    });
+    printJson(['status' => 'handoff_generated', 'output' => $output]);
+}
+
+function releaseFeature(array $arguments): void
+{
+    $workflowId = required($arguments, 'workflow');
+    $featureKey = required($arguments, 'feature');
+    $lease = required($arguments, 'lease');
+    withLock(function () use ($arguments, $workflowId, $featureKey, $lease): void {
+        $workflow = loadWorkflow();
+        $events = readEvents();
+        $projection = project($workflow, $events);
+        $feature = featureFrom($projection, $featureKey);
+        checkLease($feature, $lease);
+        if (($feature['state'] ?? null) !== 'approved') {
+            fail('feature só pode ser liberada após approved');
+        }
+        $handoffCommit = findEventFor($events, 'handoff.committed', $featureKey, (int) $feature['attempt']);
+        if ($handoffCommit === null) {
+            fail('handoff ainda não foi versionado no Commit B');
+        }
+        $curationId = allocateDocumentId('CUR', "candidate:{$workflowId}:{$featureKey}:{$feature['attempt']}", [
+            'workflow_id' => $workflowId,
+            'feature_key' => $featureKey,
+            'attempt' => (int) $feature['attempt'],
+        ]);
+        appendEvent(eventContext($arguments, $feature, 'feature.released', 'Feature liberada após handoff contextual', [
+            'implementation_commit' => $feature['result']['implementation_commit'] ?? null,
+            'handoff_commit' => $handoffCommit['facts']['commit'] ?? null,
+            'knowledge_policy' => $workflow['knowledge_policy']['mode'] ?? 'non_blocking',
+        ]));
+        appendEvent(eventContext($arguments, $feature, 'knowledge.candidate_created', 'Curadoria de conhecimento agendada sem bloquear a entrega', [
+            'policy' => 'non_blocking',
+            'curation_id' => $curationId,
+        ]));
+        clearGateSession($feature);
+    });
+    printJson(['status' => 'released', 'feature_key' => $featureKey, 'knowledge' => 'pending_non_blocking']);
+}
+
+function commitHandoff(array $arguments): void
+{
+    $workflowId = required($arguments, 'workflow');
+    $featureKey = required($arguments, 'feature');
+    $lease = required($arguments, 'lease');
+    withLock(function () use ($arguments, $featureKey, $lease): void {
+        global $root;
+        $workflow = loadWorkflow();
+        $events = readEvents();
+        $projection = project($workflow, $events);
+        $feature = featureFrom($projection, $featureKey);
+        checkLease($feature, $lease);
+        if (($feature['state'] ?? null) !== 'approved') {
+            fail('Commit B só pode ser criado após approved');
+        }
+        $handoff = findEventFor($events, 'handoff.generated', $featureKey, (int) $feature['attempt']);
+        if ($handoff === null) {
+            fail('handoff ainda não foi gerado');
+        }
+        $output = (string) ($handoff['facts']['path'] ?? '');
+        $realOutput = realpath($output);
+        $realRoot = realpath($root);
+        if ($realOutput === false || $realRoot === false || ! str_starts_with($realOutput, $realRoot.DIRECTORY_SEPARATOR)) {
+            fail('handoff precisa estar dentro do checkout');
+        }
+        $relative = ltrim(str_replace($realRoot, '', $realOutput), DIRECTORY_SEPARATOR);
+        if (! str_starts_with($relative, '.ralph/handoffs/')) {
+            fail('somente .ralph/handoffs pode entrar no Commit B');
+        }
+        foreach (['bug-report.json', 'bug-report.md', 'evidence-manifest.json', 'execution-summary.md'] as $file) {
+            if (! is_file($realOutput.'/'.$file)) {
+                fail("arquivo obrigatório ausente no handoff: {$file}");
+            }
+        }
+        if (git('diff --cached --name-only') !== '') {
+            fail('há mudanças já staged; o Commit B não assume staging de outro trabalho');
+        }
+        git('add -- '.escapeshellarg($relative));
+        $staged = array_values(array_filter(explode("\n", git('diff --cached --name-only'))));
+        if ($staged === [] || array_filter($staged, static fn (string $path): bool => ! str_starts_with($path, $relative.'/')) !== []) {
+            fail('handoff não possui mudanças para o Commit B');
+        }
+        $message = '[docs] (ralph): registra handoff contextual da '.$featureKey;
+        git('commit -q -m '.escapeshellarg($message));
+        $commit = git('rev-parse HEAD');
+        appendEvent(eventContext($arguments, $feature, 'handoff.committed', 'Commit B de handoff contextual criado', [
+            'commit' => $commit,
+            'path' => $relative,
+        ]));
+    });
+    printJson(['status' => 'handoff_committed', 'feature_key' => $featureKey]);
+}
+
+function advanceFeature(array $arguments): void
+{
+    $workflowId = required($arguments, 'workflow');
+    $featureKey = required($arguments, 'feature');
+    $lease = is_string($arguments['lease'] ?? null) ? $arguments['lease'] : null;
+    $nextFeature = withLock(function () use ($arguments, $featureKey, $lease): ?string {
+        $workflow = loadWorkflow();
+        $events = readEvents();
+        foreach (array_reverse($events) as $existing) {
+            if (($existing['type'] ?? null) === 'feature.advanced' && ($existing['feature_key'] ?? null) === $featureKey) {
+                return $existing['facts']['next_feature'] ?? null;
+            }
+        }
+        $projection = project($workflow, $events);
+        $feature = featureFrom($projection, $featureKey);
+        if (($feature['state'] ?? null) !== 'released') {
+            fail('somente feature released pode avançar');
+        }
+        if ($lease !== null) {
+            checkLease($feature, $lease);
+        }
+        $features = $projection['features'];
+        $next = null;
+        foreach ($features as $index => $item) {
+            if ($item['feature_key'] === $featureKey) {
+                $next = $features[$index + 1]['feature_key'] ?? null;
+                break;
+            }
+        }
+        appendEvent(eventContext($arguments, $feature, 'feature.advanced', 'Posição liberada para a próxima feature', [
+            'next_feature' => $next,
+            'knowledge_state' => $feature['knowledge_state'] ?? 'knowledge_pending',
+            'lease_released' => true,
+        ]));
+
+        return $next;
+    });
+    printJson(['status' => 'next_feature', 'next_feature' => $nextFeature]);
+}
+
+function continueWorkflow(array $arguments): void
+{
+    $workflowId = required($arguments, 'workflow');
+    $workflow = loadWorkflow();
+    $projection = project($workflow, readEvents());
+    $cursor = $projection['cursor'];
+    if ($cursor === null) {
+        printJson(['status' => 'complete', 'workflow_id' => $workflowId]);
+
+        return;
+    }
+    $feature = featureFrom($projection, $cursor);
+    if (($feature['state'] ?? null) === 'released') {
+        $self = escapeshellarg(PHP_BINARY).' '.escapeshellarg(__FILE__);
+        $exit = 0;
+        $output = commandOutput($self.' advance --workflow '.escapeshellarg($workflowId).' --feature '.escapeshellarg($cursor), $exit);
+        if ($exit !== 0) {
+            fail($output, $exit);
+        }
+        $projection = project(loadWorkflow(), readEvents());
+        $cursor = $projection['cursor'];
+        if ($cursor === null) {
+            printJson(['status' => 'complete', 'workflow_id' => $workflowId]);
+
+            return;
+        }
+        $feature = featureFrom($projection, $cursor);
+    }
+    if (($feature['state'] ?? null) !== 'pending') {
+        printJson([
+            'status' => $feature['state'],
+            'workflow_id' => $workflowId,
+            'feature_key' => $cursor,
+            'knowledge_state' => $feature['knowledge_state'] ?? 'not_started',
+        ]);
+
+        return;
+    }
+    $self = escapeshellarg(PHP_BINARY).' '.escapeshellarg(__FILE__);
+    $command = $arguments['command'] ?? null;
+    $runCommand = $self.' run --workflow '.escapeshellarg($workflowId).' --feature '.escapeshellarg($cursor);
+    if (is_string($command) && trim($command) !== '') {
+        $runCommand .= ' --command '.escapeshellarg($command);
+    }
+    $exit = 0;
+    $output = commandOutput($runCommand, $exit);
+    if ($exit !== 0) {
+        fail($output, $exit);
+    }
+    $result = json_decode($output, true, 512, JSON_THROW_ON_ERROR);
+    $result['workflow_id'] = $workflowId;
+    printJson($result);
+}
+
+function recoverFeature(array $arguments): void
+{
+    $workflowId = required($arguments, 'workflow');
+    $featureKey = required($arguments, 'feature');
+    withLock(function () use ($arguments, $featureKey): void {
+        $workflow = loadWorkflow();
+        $projection = project($workflow, readEvents());
+        $feature = featureFrom($projection, $featureKey);
+        if (! in_array($feature['state'] ?? null, ['recovery_required', 'blocked'], true)) {
+            fail('recover exige estado recovery_required ou blocked');
+        }
+        appendEvent(eventContext($arguments, $feature, 'recovery.resolved', 'Recuperação explícita autorizou nova tentativa', [
+            'reason' => $arguments['reason'] ?? 'recovery explícito',
+            'previous_attempt' => $feature['attempt'],
+        ]));
+    });
+    printJson(['status' => 'pending', 'feature_key' => $featureKey]);
+}
+
+/** @param array<string, mixed> $arguments @return array{lease_token: string, feature: array<string, mixed>} */
+function beginFailedRetry(array $arguments): array
+{
+    $workflowId = required($arguments, 'workflow');
+    $featureKey = required($arguments, 'feature');
+
+    return withLock(function () use ($arguments, $featureKey): array {
+        $workflow = loadWorkflow();
+        $events = readEvents();
+        $projection = project($workflow, $events);
+        $feature = featureFrom($projection, $featureKey);
+        $result = $feature['result'] ?? [];
+        $gateFailure = in_array('rejected', array_values($feature['gates'] ?? []), true);
+        $failedBlock = ($feature['state'] ?? null) === 'debugging_verified'
+            && ((int) ($result['exit_code'] ?? 0) !== 0 || $gateFailure);
+        if (! $failedBlock && ($feature['state'] ?? null) !== 'recovery_required') {
+            fail('retry exige falha encaminhada ao systematic debugging ou recovery_required');
+        }
+        $repository = currentRepository();
+        if (($feature['state'] ?? null) === 'recovery_required' && ! $repository['working_tree_clean']) {
+            $preserveTree = ($arguments['preserve-tree'] ?? false) === true || ($arguments['preserve-tree'] ?? null) === 'true';
+            if (! $preserveTree) {
+                fail('retry em recovery_required exige --preserve-tree para manter a árvore parcial');
+            }
+        }
+
+        $token = 'lease_'.bin2hex(random_bytes(24));
+        $attempt = (int) $feature['attempt'] + 1;
+        $newFeature = $feature;
+        $newFeature['attempt'] = $attempt;
+        $newFeature['lease_token_hash'] = leaseHash($token);
+        $newFeature['correlation_id'] = 'corr_'.bin2hex(random_bytes(8));
+        $reason = (string) ($arguments['reason'] ?? 'nova tentativa após falha do bloco');
+        appendEvent(eventContext($arguments, $feature, 'recovery.retry_started', 'Nova tentativa preservando a árvore parcial', [
+            'previous_attempt' => $feature['attempt'],
+            'new_attempt' => $attempt,
+            'reason' => $reason,
+            'preserved_tree' => ! $repository['working_tree_clean'],
+        ]));
+        appendEvent(eventContext(array_merge($arguments, ['actor' => 'ralph-control']), $newFeature, 'feature.claimed', 'Feature reivindicada para recuperação controlada', [
+            'base_commit' => $repository['commit'],
+            'base_tree_hash' => $repository['tree_hash'],
+            'plan_hash' => $workflow['plan_hash'],
+            'spec_hash' => $workflow['spec_hash'] ?? $workflow['plan_hash'],
+            'checkout' => $workflow['checkout'],
+            'fencing_token' => $attempt,
+            'implementer' => $arguments['implementer'] ?? 'ralph',
+            'recovery' => true,
+            'previous_attempt' => $feature['attempt'],
+        ]));
+
+        return ['lease_token' => $token, 'feature' => $newFeature];
+    });
+}
+
+function retryFeature(array $arguments): void
+{
+    $result = beginFailedRetry($arguments);
+    printJson([
+        'status' => 'running',
+        'workflow_id' => required($arguments, 'workflow'),
+        'feature_key' => required($arguments, 'feature'),
+        'attempt' => $result['feature']['attempt'],
+        'lease_token' => $result['lease_token'],
+    ]);
+}
+
+function workingTreeFingerprint(): string
+{
+    $status = git('status --porcelain=v1 --untracked-files=all');
+    $diff = git('diff --binary');
+    $cached = git('diff --cached --binary');
+
+    return hashValue($status."\n--DIFF--\n".$diff."\n--CACHED--\n".$cached);
+}
+
+/** @return list<string> */
+function debugReportErrors(array $report, string $workflowId, string $featureKey, int $attempt): array
+{
+    $compatibleSchema = defined('RALPH_COMPATIBLE_SCHEMA_VERSIONS')
+        ? RALPH_COMPATIBLE_SCHEMA_VERSIONS
+        : [RALPH_SCHEMA_VERSION];
+    $errors = [];
+    if (! in_array($report['schema_version'] ?? null, $compatibleSchema, true)) {
+        $errors[] = 'schema_version incompatível';
+    }
+    foreach (['workflow_id', 'feature_key', 'incident_id', 'symptom', 'severity', 'root_cause', 'correction_plan'] as $field) {
+        if (! is_string($report[$field] ?? null) || trim((string) $report[$field]) === '') {
+            $errors[] = "campo obrigatório ausente: {$field}";
+        }
+    }
+    if (($report['workflow_id'] ?? null) !== $workflowId || ($report['feature_key'] ?? null) !== $featureKey || (int) ($report['attempt'] ?? -1) !== $attempt) {
+        $errors[] = 'contexto do relatório não corresponde à tentativa';
+    }
+    if (($report['status'] ?? null) !== 'verified') {
+        $errors[] = 'status do relatório precisa ser verified';
+    }
+    $hypotheses = $report['hypotheses'] ?? null;
+    if (! is_array($hypotheses) || $hypotheses === []) {
+        $errors[] = 'é necessária ao menos uma hipótese';
+    } else {
+        $confirmed = false;
+        foreach ($hypotheses as $hypothesis) {
+            if (! is_array($hypothesis) || ! is_string($hypothesis['id'] ?? null) || ! is_string($hypothesis['statement'] ?? null) || ! in_array($hypothesis['status'] ?? null, ['confirmed', 'rejected', 'unverified'], true)) {
+                $errors[] = 'hipótese sem id, statement ou status válido';
+
+                continue;
+            }
+            if (($hypothesis['status'] ?? null) === 'confirmed') {
+                $confirmed = true;
+            }
+        }
+        if (! $confirmed) {
+            $errors[] = 'nenhuma hipótese foi confirmada';
+        }
+    }
+    $references = $report['official_references'] ?? null;
+    if (! is_array($references) || $references === []) {
+        $errors[] = 'é necessária ao menos uma referência oficial';
+    } else {
+        foreach ($references as $reference) {
+            if (! is_array($reference) || ! is_string($reference['provider'] ?? null) || ! is_string($reference['source'] ?? null) || ! is_string($reference['section'] ?? null)) {
+                $errors[] = 'referência oficial sem provider, source ou section';
+
+                continue;
+            }
+            if (! in_array($reference['provider'], ['Context7', 'official'], true) || ! str_starts_with($reference['source'], 'https://')) {
+                $errors[] = 'referência oficial precisa usar provider Context7/official e URL HTTPS';
+            }
+        }
+    }
+    $validation = $report['validation'] ?? null;
+    if (! is_array($validation) || ($validation['status'] ?? null) !== 'passed' || (int) ($validation['exit_code'] ?? -1) !== 0 || ! is_array($validation['evidence_refs'] ?? null) || $validation['evidence_refs'] === []) {
+        $errors[] = 'validação do diagnóstico não está verde ou não possui evidência';
+    }
+    $candidate = $report['knowledge_candidate'] ?? null;
+    if (! is_array($candidate) || ! is_string($candidate['title'] ?? null) || ! is_string($candidate['summary'] ?? null) || ! is_array($candidate['applicability'] ?? null) || ! is_array($candidate['limitations'] ?? null)) {
+        $errors[] = 'knowledge_candidate incompleto';
+    }
+    $serialized = json_encode($report, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    if (is_string($serialized) && preg_match('/-----BEGIN [A-Z ]*PRIVATE KEY-----|\b(?:api[_-]?key|access[_-]?token|password|passwd|secret)\s*[:=]|\b(?:sk|ghp|github_pat|glpat)-[A-Za-z0-9_-]{12,}\b|\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b/i', $serialized) === 1) {
+        $errors[] = 'relatório contém possível segredo ou dado sensível';
+    }
+
+    return array_values(array_unique($errors));
+}
+
+function debugReportMarkdown(array $report): string
+{
+    $hypotheses = '';
+    foreach (($report['hypotheses'] ?? []) as $hypothesis) {
+        if (! is_array($hypothesis)) {
+            continue;
+        }
+        $hypotheses .= '- `'.($hypothesis['id'] ?? 'sem-id').'` — '.($hypothesis['status'] ?? 'sem-status').': '.($hypothesis['statement'] ?? '')."\n";
+    }
+    $references = '';
+    foreach (($report['official_references'] ?? []) as $reference) {
+        if (! is_array($reference)) {
+            continue;
+        }
+        $references .= '- '.($reference['provider'] ?? 'provider').': '.($reference['source'] ?? '').' — '.($reference['section'] ?? '')."\n";
+    }
+    $candidate = is_array($report['knowledge_candidate'] ?? null) ? $report['knowledge_candidate'] : [];
+
+    return '# '.($report['document_id'] ?? 'DBG-sem-id')." — Systematic debugging — {$report['feature_key']}\n\n"
+        .'- Documento: '.($report['document_id'] ?? 'não informado')."\n"
+        ."- Workflow: {$report['workflow_id']}\n"
+        ."- Tentativa: {$report['attempt']}\n"
+        ."- Incidente: {$report['incident_id']}\n"
+        ."- Severidade: {$report['severity']}\n\n"
+        ."## Sintoma\n\n{$report['symptom']}\n\n"
+        ."## Causa raiz\n\n{$report['root_cause']}\n\n"
+        ."## Hipóteses\n\n{$hypotheses}\n"
+        ."## Plano de correção\n\n{$report['correction_plan']}\n\n"
+        ."## Referências oficiais\n\n{$references}\n"
+        ."## Validação do diagnóstico\n\nStatus: `".($report['validation']['status'] ?? 'unknown').'`; exit code: `'.($report['validation']['exit_code'] ?? 'unknown')."`.\n\n"
+        ."## Candidato a conhecimento\n\n**Título:** ".($candidate['title'] ?? 'não informado')."\n\n"
+        .($candidate['summary'] ?? '')."\n";
+}
+
+/** @return array{status: string, report_path?: string, report?: array<string, mixed>, errors?: list<string>} */
+function runSystematicDebug(array $arguments): array
+{
+    global $runtime;
+    $workflowId = required($arguments, 'workflow');
+    $featureKey = required($arguments, 'feature');
+    $command = $arguments['command'] ?? $arguments['debug-command'] ?? getenv('RALPH_DEBUG_COMMAND') ?: null;
+    if (! is_string($command) || trim($command) === '') {
+        withLock(function () use ($arguments, $featureKey): void {
+            $projection = project(loadWorkflow(), readEvents());
+            $feature = featureFrom($projection, $featureKey);
+            if (($feature['state'] ?? null) === 'debugging_required') {
+                appendEvent(eventContext($arguments, $feature, 'debugging.required', 'Feature aguarda comando de systematic debugging', [
+                    'reason' => 'debug_command_not_configured',
+                ]));
+            }
+        });
+
+        return ['status' => 'debugging_required', 'workflow_id' => $workflowId, 'feature_key' => $featureKey, 'reason' => 'debug command não configurado'];
+    }
+
+    $context = withLock(function () use ($arguments, $workflowId, $featureKey, $command): array {
+        $workflow = loadWorkflow();
+        $projection = project($workflow, readEvents());
+        $feature = featureFrom($projection, $featureKey);
+        if (! in_array($feature['state'] ?? null, ['debugging_required', 'recovery_required'], true)) {
+            if (($feature['state'] ?? null) === 'debugging_verified') {
+                return ['already_verified' => true, 'feature' => $feature];
+            }
+            fail('systematic debugging exige estado debugging_required ou recovery_required');
+        }
+        $lease = $arguments['lease'] ?? null;
+        if (is_string($lease) && $lease !== '') {
+            checkLease($feature, $lease);
+        }
+        $artifactRef = 'artifact_debug_'.$featureKey.'_attempt_'.$feature['attempt'];
+        $documentId = allocateDocumentId('DBG', "debug:{$workflowId}:{$featureKey}:{$feature['attempt']}", [
+            'workflow_id' => $workflowId,
+            'feature_key' => $featureKey,
+            'attempt' => (int) $feature['attempt'],
+        ]);
+        appendEvent(eventContext($arguments, $feature, 'debugging.started', 'Systematic debugging iniciado pelo controlador', [
+            'artifact_refs' => [$artifactRef],
+            'command_fingerprint' => hashValue($command),
+            'attempt' => $feature['attempt'],
+            'readonly_required' => true,
+            'document_id' => $documentId,
+        ]));
+
+        return [
+            'workflow' => $workflow,
+            'feature' => $feature,
+            'artifact_ref' => $artifactRef,
+            'document_id' => $documentId,
+            'tree_fingerprint' => workingTreeFingerprint(),
+            'command' => $command,
+        ];
+    });
+
+    if (($context['already_verified'] ?? false) === true) {
+        return ['status' => 'debugging_verified', 'workflow_id' => $workflowId, 'feature_key' => $featureKey, 'attempt' => $context['feature']['attempt']];
+    }
+
+    $feature = $context['feature'];
+    $attempt = (int) $feature['attempt'];
+    $artifactRef = (string) $context['artifact_ref'];
+    $commandResult = runReadOnlyCommand((string) $context['command'], max(5, (int) ($arguments['debug-timeout'] ?? 300)), [
+        'RALPH_DEBUG_WORKFLOW_ID' => $workflowId,
+        'RALPH_DEBUG_FEATURE_KEY' => $featureKey,
+        'RALPH_DEBUG_ATTEMPT' => (string) $attempt,
+        'RALPH_DEBUG_REPORT_REF' => $artifactRef,
+    ]);
+    $treeChanged = workingTreeFingerprint() !== $context['tree_fingerprint'];
+    $report = null;
+    $errors = [];
+    if ($commandResult['exit_code'] !== 0) {
+        $errors[] = $commandResult['timed_out'] ? 'comando de systematic debugging excedeu o timeout' : 'comando de systematic debugging terminou com exit code diferente de zero';
+    } else {
+        try {
+            $decoded = json_decode(trim($commandResult['stdout']), true, 512, JSON_THROW_ON_ERROR);
+            if (is_array($decoded)) {
+                $report = $decoded;
+            } else {
+                $errors[] = 'saída do systematic debugging não é um objeto JSON';
+            }
+        } catch (Throwable) {
+            $errors[] = 'saída do systematic debugging não é JSON válido';
+        }
+    }
+    if ($treeChanged) {
+        $errors[] = 'o comando de systematic debugging alterou a working tree';
+    }
+    if (is_array($report)) {
+        $errors = array_merge($errors, debugReportErrors($report, $workflowId, $featureKey, $attempt));
+    }
+
+    $reportDirectory = $runtime.'/reports';
+    if (! is_dir($reportDirectory) && ! mkdir($reportDirectory, 0700, true) && ! is_dir($reportDirectory)) {
+        fail('não foi possível criar reports do systematic debugging');
+    }
+    $documentId = (string) $context['document_id'];
+    $reportPath = $reportDirectory.'/'.$documentId.'.json';
+    if (is_array($report) && $errors === []) {
+        $report['document_id'] = $documentId;
+        $report['document_kind'] = 'systematic-debugging';
+        writeJson($reportPath, $report);
+        file_put_contents(substr($reportPath, 0, -5).'.md', debugReportMarkdown($report), LOCK_EX);
+        @chmod($reportPath, 0600);
+        @chmod(substr($reportPath, 0, -5).'.md', 0600);
+    }
+
+    withLock(function () use ($arguments, $featureKey, $artifactRef, $report, $errors, $reportPath, $commandResult, $documentId): void {
+        $projection = project(loadWorkflow(), readEvents());
+        $feature = featureFrom($projection, $featureKey);
+        if ($errors !== [] || ! is_array($report)) {
+            appendEvent(eventContext($arguments, $feature, 'debugging.rejected', 'Systematic debugging rejeitado por falta de evidência verificável', [
+                'artifact_refs' => [$artifactRef],
+                'errors' => array_slice($errors, 0, 8),
+                'command_exit_code' => $commandResult['exit_code'],
+                'timed_out' => $commandResult['timed_out'],
+                'tree_unchanged' => ! in_array('o comando de systematic debugging alterou a working tree', $errors, true),
+            ]));
+
+            return;
+        }
+        appendEvent(eventContext($arguments, $feature, 'debugging.verified', 'Causa raiz e hipóteses verificadas com evidência oficial', [
+            'artifact_refs' => [$artifactRef],
+            'report_path' => $reportPath,
+            'document_id' => $documentId,
+            'incident_id' => $report['incident_id'],
+            'root_cause' => $report['root_cause'],
+            'confirmed_hypotheses' => count(array_filter($report['hypotheses'], static fn (mixed $hypothesis): bool => is_array($hypothesis) && ($hypothesis['status'] ?? null) === 'confirmed')),
+            'official_reference_count' => count($report['official_references']),
+            'knowledge_candidate' => $report['knowledge_candidate'],
+            'validation' => $report['validation'],
+        ]));
+    });
+
+    if ($errors !== [] || ! is_array($report)) {
+        return ['status' => 'recovery_required', 'workflow_id' => $workflowId, 'feature_key' => $featureKey, 'attempt' => $attempt, 'errors' => array_slice($errors, 0, 8)];
+    }
+
+    return ['status' => 'debugging_verified', 'workflow_id' => $workflowId, 'feature_key' => $featureKey, 'attempt' => $attempt, 'report_path' => $reportPath];
+}
+
+function debugFeature(array $arguments): void
+{
+    $result = runSystematicDebug($arguments);
+    printJson($result);
+    if (in_array($result['status'] ?? null, ['recovery_required'], true)) {
+        exit(11);
+    }
+}
+
+function singleFeatureInput(array $workflow, array $feature, int $attempt): string
+{
+    global $runtime, $root;
+    $source = $feature['input_file'] ?? $workflow['plan_file'] ?? null;
+    if (! is_string($source) || $source === '') {
+        fail('feature sem input_file ou plan_file para execução controlada');
+    }
+    $sourcePath = $root.DIRECTORY_SEPARATOR.ltrim($source, DIRECTORY_SEPARATOR);
+    if (! is_file($sourcePath)) {
+        fail("input da feature não encontrado: {$sourcePath}");
+    }
+    $content = (string) file_get_contents($sourcePath);
+    $phase = (string) ($feature['source_phase'] ?? preg_replace('/^phase-/', '', $feature['feature_key']));
+    $phase = str_replace('-', '.', $phase);
+    if (preg_match('/^## Phase '.preg_quote($phase, '/').':.*$/m', $content, $heading, PREG_OFFSET_CAPTURE) !== 1) {
+        return $sourcePath;
+    }
+    $start = $heading[0][1];
+    $rest = substr($content, $start + strlen($heading[0][0]));
+    $end = strlen($rest);
+    if (preg_match('/^## Phase .*$/m', $rest, $next, PREG_OFFSET_CAPTURE) === 1) {
+        $end = $next[0][1];
+    }
+    $section = $heading[0][0].substr($rest, 0, $end);
+    $debugReports = [];
+    $debugReportPath = $feature['debugging']['report_path'] ?? null;
+    if (is_string($debugReportPath) && is_file($debugReportPath)) {
+        $debugReports[] = $debugReportPath;
+    }
+    $debugReports = array_merge($debugReports, glob($runtime.'/reports/DBG-*.json') ?: []);
+    $debugReports = array_merge($debugReports, glob($runtime.'/reports/'.preg_replace('/[^A-Za-z0-9._-]/', '_', $feature['feature_key']).'-attempt-*-debug.json') ?: []);
+    if ($debugReports !== []) {
+        usort($debugReports, static fn (string $left, string $right): int => filemtime($right) <=> filemtime($left));
+        $latestDebug = json_decode((string) file_get_contents($debugReports[0]), true);
+        if (is_array($latestDebug) && ($latestDebug['status'] ?? null) === 'verified') {
+            $context = [
+                'incident_id' => $latestDebug['incident_id'] ?? null,
+                'symptom' => $latestDebug['symptom'] ?? null,
+                'root_cause' => $latestDebug['root_cause'] ?? null,
+                'hypotheses' => $latestDebug['hypotheses'] ?? [],
+                'correction_plan' => $latestDebug['correction_plan'] ?? null,
+                'official_references' => $latestDebug['official_references'] ?? [],
+                'validation' => $latestDebug['validation'] ?? [],
+                'knowledge_candidate' => $latestDebug['knowledge_candidate'] ?? [],
+            ];
+            $section .= "\n\n## Contexto de systematic debugging\n\nO controlador anexou somente o diagnóstico verificado da tentativa anterior. Use-o como orientação técnica; confirme a correção no contexto atual e preserve os cinco gates.\n\n```json\n".substr((string) json_encode($context, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE), 0, 12000)."\n```\n";
+        }
+    }
+    $directory = $runtime.'/manifests';
+    if (! is_dir($directory) && ! mkdir($directory, 0700, true) && ! is_dir($directory)) {
+        fail('não foi possível criar manifests do runtime');
+    }
+    $path = $directory.'/'.preg_replace('/[^A-Za-z0-9._-]/', '_', $feature['feature_key']).'-attempt-'.$attempt.'.md';
+    file_put_contents($path, $section, LOCK_EX);
+    @chmod($path, 0600);
+
+    return $path;
+}
+
+function configuredRalph(array $arguments): string
+{
+    global $root;
+    $engine = (string) ($arguments['engine'] ?? 'codex');
+    if (! in_array($engine, ['codex', 'claude'], true)) {
+        fail('engine inválido; use codex ou claude');
+    }
+    $profile = $root.'/.ralph/'.$engine.'.env';
+    $ralph = null;
+    if (is_file($profile)) {
+        foreach (file($profile, FILE_IGNORE_NEW_LINES) ?: [] as $line) {
+            if (str_starts_with($line, 'RALPH_BIN=')) {
+                $ralph = trim(substr($line, strlen('RALPH_BIN=')), " \t\"");
+                break;
+            }
+        }
+    }
+    $ralph ??= getenv('RALPH_BIN') ?: '';
+    if ($ralph === '' || ! is_executable($ralph)) {
+        fail('RALPH_BIN não encontrado ou não executável');
+    }
+
+    return $ralph;
+}
+
+function runControlled(array $arguments): void
+{
+    global $root, $runtime;
+    $workflowId = required($arguments, 'workflow');
+    $featureKey = required($arguments, 'feature');
+    $command = $arguments['command'] ?? null;
+    if (! is_string($command) || trim($command) === '') {
+        $ralph = configuredRalph($arguments);
+        $engine = (string) ($arguments['engine'] ?? 'codex');
+        $workflow = loadWorkflow();
+        $projection = project($workflow, readEvents());
+        $feature = featureFrom($projection, $featureKey);
+        $input = singleFeatureInput($workflow, $feature, (int) $feature['attempt'] + 1);
+        $command = escapeshellarg($ralph).' --engine '.escapeshellarg($engine).' --test-cmd '.escapeshellarg('bin/check').' '.escapeshellarg($input);
+    }
+
+    $lease = $arguments['lease'] ?? null;
+    if (! is_string($lease) || $lease === '') {
+        $self = escapeshellarg(PHP_BINARY).' '.escapeshellarg(__FILE__);
+        $claimCommand = $self.' claim --workflow '.escapeshellarg($workflowId).' --feature '.escapeshellarg($featureKey).' --actor controller';
+        $exit = 0;
+        $claimOutput = commandOutput($claimCommand, $exit);
+        if ($exit !== 0) {
+            fail($claimOutput, $exit);
+        }
+        $claim = json_decode($claimOutput, true, 512, JSON_THROW_ON_ERROR);
+        $lease = $claim['lease_token'];
+    }
+
+    $workflow = loadWorkflow();
+    $projection = project($workflow, readEvents());
+    $feature = featureFrom($projection, $featureKey);
+    checkLease($feature, $lease);
+    if (($feature['state'] ?? null) !== 'running') {
+        fail('run exige feature em running; use claim antes de executar');
+    }
+    $attempt = (int) $feature['attempt'];
+    appendEvent(eventContext($arguments, $feature, 'attempt.started', 'Processo controlado do Ralph iniciado', [
+        'command_fingerprint' => hashValue($command),
+        'execution_nonce' => bin2hex(random_bytes(12)),
+    ]));
+
+    $environment = array_merge((array) getenv(), $_ENV, [
+        'RALPH_WORKFLOW_ID' => $workflowId,
+        'RALPH_FEATURE_KEY' => $featureKey,
+        'RALPH_LEASE_TOKEN' => $lease,
+        'RALPH_HOOK' => $root.'/scripts/ralph-hook.sh',
+    ]);
+    $pipes = [];
+    $process = proc_open('setsid '.$command, [
+        0 => ['pipe', 'r'],
+        1 => ['pipe', 'w'],
+        2 => ['pipe', 'w'],
+    ], $pipes, $root, $environment);
+    if (! is_resource($process)) {
+        appendEvent(eventContext($arguments, $feature, 'recovery.required', 'Não foi possível iniciar o processo do Ralph', []));
+        fail('não foi possível iniciar o processo do Ralph');
+    }
+    fclose($pipes[0]);
+    $status = proc_get_status($process);
+    $pid = (int) ($status['pid'] ?? 0);
+    $processSnapshot = processTreeSnapshot($pid);
+    appendEvent(eventContext($arguments, $feature, 'command.started', 'Grupo de processo do Ralph registrado', [
+        'pid' => $pid,
+        'process_tree' => $processSnapshot,
+        'command_fingerprint' => hashValue($command),
+    ]));
+    stream_set_blocking($pipes[1], false);
+    stream_set_blocking($pipes[2], false);
+    $stdout = '';
+    $stderr = '';
+    $heartbeatInterval = max(1, (int) ($arguments['heartbeat-interval'] ?? getenv('RALPH_HEARTBEAT_INTERVAL') ?: 15));
+    $lastHeartbeatAt = microtime(true);
+    $lastActivityAt = $lastHeartbeatAt;
+    $heartbeatSequence = 0;
+    do {
+        $stdoutChunk = stream_get_contents($pipes[1]);
+        $stderrChunk = stream_get_contents($pipes[2]);
+        if (is_string($stdoutChunk) && $stdoutChunk !== '') {
+            $stdout .= $stdoutChunk;
+            $lastActivityAt = microtime(true);
+        }
+        if (is_string($stderrChunk) && $stderrChunk !== '') {
+            $stderr .= $stderrChunk;
+            $lastActivityAt = microtime(true);
+        }
+
+        $status = proc_get_status($process);
+        $processSnapshot = processTreeSnapshot($pid);
+        $now = microtime(true);
+        if ($now - $lastHeartbeatAt >= $heartbeatInterval) {
+            $heartbeatSequence++;
+            $heartbeatFacts = [
+                'pid' => $pid,
+                'process_tree' => $processSnapshot,
+                'heartbeat_sequence' => $heartbeatSequence,
+                'stdout_bytes' => strlen($stdout),
+                'stderr_bytes' => strlen($stderr),
+                'idle_seconds' => (int) floor($now - $lastActivityAt),
+                'child_running' => (bool) ($status['running'] ?? false),
+            ];
+            withLock(function () use ($arguments, $feature, $heartbeatFacts): void {
+                appendEvent(eventContext($arguments, $feature, 'command.heartbeat', 'Heartbeat do processo controlado', $heartbeatFacts));
+            });
+            $lastHeartbeatAt = $now;
+        }
+
+        if (! ($status['running'] ?? false)) {
+            break;
+        }
+
+        usleep(250000);
+    } while (true);
+    $stdoutChunk = stream_get_contents($pipes[1]);
+    $stderrChunk = stream_get_contents($pipes[2]);
+    if (is_string($stdoutChunk)) {
+        $stdout .= $stdoutChunk;
+    }
+    if (is_string($stderrChunk)) {
+        $stderr .= $stderrChunk;
+    }
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    $exitCode = proc_close($process);
+    $processSnapshot = processTreeSnapshot($pid);
+    $groupGone = ! $processSnapshot['alive'];
+    $artifactDirectory = $runtime.'/artifacts';
+    if (! is_dir($artifactDirectory)) {
+        mkdir($artifactDirectory, 0700, true);
+    }
+    $prefix = $artifactDirectory.'/'.$featureKey.'-attempt-'.$attempt;
+    file_put_contents($prefix.'.stdout.log', $stdout, LOCK_EX);
+    file_put_contents($prefix.'.stderr.log', $stderr, LOCK_EX);
+    @chmod($prefix.'.stdout.log', 0600);
+    @chmod($prefix.'.stderr.log', 0600);
+
+    $workflow = loadWorkflow();
+    $projection = project($workflow, readEvents());
+    $feature = featureFrom($projection, $featureKey);
+    checkLease($feature, $lease);
+    $repository = currentRepository();
+    $facts = [
+        'exit_code' => $exitCode,
+        'result_commit' => $repository['commit'],
+        'result_tree_hash' => $repository['tree_hash'],
+        'base_commit' => $feature['claim']['base_commit'] ?? null,
+        'base_tree_hash' => $feature['claim']['base_tree_hash'] ?? null,
+        'implementation_commit' => $repository['commit'],
+        'process_verified_terminated' => $groupGone,
+        'process_tree_after_exit' => $processSnapshot,
+        'artifact_refs' => ['artifact_'.$featureKey.'_stdout', 'artifact_'.$featureKey.'_stderr'],
+    ];
+    if (! $groupGone) {
+        appendEvent(eventContext($arguments, $feature, 'recovery.required', 'Grupo do Ralph continua vivo após o retorno', $facts));
+        fail('grupo do processo do Ralph não foi encerrado; workflow exige recovery explícito');
+    }
+    appendEvent(eventContext($arguments, $feature, 'block.finished', $exitCode === 0 ? 'Bloco controlado terminou' : 'Bloco controlado terminou com falha; systematic debugging requerido', $facts));
+    if ($exitCode !== 0) {
+        appendEvent(eventContext($arguments, $feature, 'debugging.required', 'Falha do bloco encaminhada para systematic debugging', [
+            'reason' => 'block_finished_exit_code',
+            'exit_code' => $exitCode,
+            'artifact_refs' => $facts['artifact_refs'],
+        ]));
+    }
+    printJson(['status' => $exitCode === 0 ? 'awaiting_gates' : 'debugging_required', 'feature_key' => $featureKey, 'exit_code' => $exitCode, 'artifacts' => [$prefix.'.stdout.log', $prefix.'.stderr.log']]);
+}
+
+function traceDelegation(array $arguments): void
+{
+    $workflowId = required($arguments, 'workflow');
+    $featureKey = required($arguments, 'feature');
+    $lease = required($arguments, 'lease');
+    $executionId = required($arguments, 'execution-id');
+    $runner = required($arguments, 'runner');
+    $role = required($arguments, 'role');
+    $action = required($arguments, 'event');
+    $eventTypesByAction = [
+        'started' => 'delegation.started',
+        'completed' => 'delegation.completed',
+        'failed' => 'delegation.failed',
+        'reconciled' => 'delegation.reconciled',
+    ];
+    if (! isset($eventTypesByAction[$action])) {
+        fail('evento de trace inválido; use started, completed, failed ou reconciled', 2);
+    }
+    if (preg_match('/^exec_[A-Za-z0-9_-]+$/', $executionId) !== 1 || preg_match('/^[a-z][a-z0-9._-]{1,63}$/', $runner) !== 1) {
+        fail('identificador de execução ou runner inválido', 2);
+    }
+    $optional = static function (array $arguments, string $name): ?string {
+        $value = $arguments[$name] ?? null;
+
+        return is_string($value) && trim($value) !== '' ? trim($value) : null;
+    };
+    $parentExecutionId = $optional($arguments, 'parent-execution-id');
+    $rootExecutionId = $optional($arguments, 'root-execution-id');
+    foreach (['parent' => $parentExecutionId, 'root' => $rootExecutionId] as $label => $id) {
+        if ($id !== null && preg_match('/^exec_[A-Za-z0-9_-]+$/', $id) !== 1) {
+            fail("{$label} execution_id inválido", 2);
+        }
+    }
+    $identityStatus = $optional($arguments, 'identity-status') ?? 'unavailable';
+    if (! in_array($identityStatus, ['exact', 'declared', 'observed', 'partial', 'unavailable'], true)) {
+        fail('identity-status inválido', 2);
+    }
+    $model = $optional($arguments, 'model');
+    $requestedModel = $optional($arguments, 'requested-model') ?? $model;
+    $effectiveModel = $optional($arguments, 'effective-model') ?? $model;
+    if ($identityStatus === 'exact' && $effectiveModel === null) {
+        fail('identity-status exact exige effective-model ou model', 2);
+    }
+    $fallbackUsed = filter_var((string) ($arguments['fallback-used'] ?? 'false'), FILTER_VALIDATE_BOOLEAN);
+    $eventType = $eventTypesByAction[$action];
+    $idempotencyKey = $arguments['idempotency-key'] ?? "trace:{$eventType}:{$workflowId}:{$featureKey}:{$executionId}";
+    if (! is_string($idempotencyKey) || trim($idempotencyKey) === '') {
+        fail('idempotency-key inválida', 2);
+    }
+    $facts = [
+        'execution_id' => $executionId,
+        'parent_execution_id' => $parentExecutionId,
+        'root_execution_id' => $rootExecutionId,
+        'role' => $role,
+        'purpose' => $optional($arguments, 'purpose') ?? $role,
+        'runner' => $runner,
+        'runner_version' => $optional($arguments, 'runner-version'),
+        'provider' => $optional($arguments, 'provider'),
+        'requested_model' => $requestedModel,
+        'effective_model' => $effectiveModel,
+        'session_id' => $optional($arguments, 'session-id'),
+        'conversation_id' => $optional($arguments, 'conversation-id'),
+        'identity_status' => $identityStatus,
+        'identity_source' => $optional($arguments, 'identity-source') ?? 'not_exposed',
+        'fallback_used' => $fallbackUsed,
+        'status' => $action,
+        'reason' => $optional($arguments, 'reason'),
+    ];
+    withLock(function () use ($arguments, $workflowId, $featureKey, $lease, $runner, $eventType, $facts, $idempotencyKey): void {
+        $workflow = loadWorkflow();
+        if (($workflow['workflow_id'] ?? null) !== $workflowId) {
+            fail('workflow incompatível com o checkout observado', 2);
+        }
+        $projection = project($workflow, readEvents());
+        $feature = featureFrom($projection, $featureKey);
+        checkLease($feature, $lease);
+        if (! in_array($feature['state'] ?? null, ['running', 'debugging_running', 'debugging_verified', 'awaiting_gates', 'approved'], true)) {
+            fail('trace exige feature em execução ou em validação');
+        }
+        $traceArguments = array_merge($arguments, [
+            'workflow' => $workflowId,
+            'actor-type' => 'agent',
+            'actor' => $runner,
+            'idempotency-key' => $idempotencyKey,
+        ]);
+        appendEvent(eventContext($traceArguments, $feature, $eventType, "Delegação {$eventType} registrada", $facts));
+    });
+    printJson(['status' => $eventType, 'execution_id' => $executionId, 'feature_key' => $featureKey]);
+}
+
+function traceReport(array $arguments): void
+{
+    $workflowId = required($arguments, 'workflow');
+    $featureFilter = is_string($arguments['feature'] ?? null) ? $arguments['feature'] : null;
+    $format = (string) ($arguments['format'] ?? 'terminal');
+    if (! in_array($format, ['terminal', 'json'], true)) {
+        fail('formato de trace inválido; use terminal ou json', 2);
+    }
+    $workflow = loadWorkflow();
+    if (($workflow['workflow_id'] ?? null) !== $workflowId) {
+        fail('workflow incompatível com o checkout observado', 2);
+    }
+    $projection = project($workflow, readEvents());
+    $features = array_values(array_filter($projection['features'], static function (array $feature) use ($featureFilter): bool {
+        return ($featureFilter === null || ($feature['feature_key'] ?? null) === $featureFilter) && ($feature['delegations'] ?? []) !== [];
+    }));
+    $report = [
+        'schema_version' => RALPH_SCHEMA_VERSION,
+        'workflow_id' => $workflowId,
+        'feature_filter' => $featureFilter,
+        'delegation_count' => array_sum(array_map(static fn (array $feature): int => count($feature['delegations'] ?? []), $features)),
+        'features' => array_map(static fn (array $feature): array => [
+            'feature_key' => $feature['feature_key'],
+            'state' => $feature['state'],
+            'attempt' => $feature['attempt'],
+            'delegations' => $feature['delegations'] ?? [],
+        ], $features),
+    ];
+    if (($arguments['output'] ?? null) !== null) {
+        $output = required($arguments, 'output');
+        $directory = dirname($output);
+        if (! is_dir($directory) && ! mkdir($directory, 0700, true) && ! is_dir($directory)) {
+            fail("não foi possível criar diretório do trace: {$directory}");
+        }
+        $report['document_id'] = withLock(function () use ($workflowId, $featureFilter, $output): string {
+            return allocateDocumentId('TRC', "trace:{$workflowId}:".($featureFilter ?? 'workflow'), [
+                'workflow_id' => $workflowId,
+                'feature_key' => $featureFilter,
+                'path' => $output,
+            ]);
+        });
+        writeJson($output, $report);
+    }
+    if ($format === 'json') {
+        printJson($report);
+
+        return;
+    }
+    echo "RALPH TRACE\n";
+    echo 'Workflow: '.$workflowId."\n";
+    echo 'Delegações: '.$report['delegation_count']."\n\n";
+    if ($features === []) {
+        echo "Nenhuma delegação registrada.\n";
+
+        return;
+    }
+    foreach ($report['features'] as $feature) {
+        echo "Feature {$feature['feature_key']} · estado {$feature['state']} · tentativa {$feature['attempt']}\n";
+        foreach ($feature['delegations'] as $delegation) {
+            echo '  - '.($delegation['role'] ?? 'sem papel').': '.($delegation['runner'] ?? 'unknown');
+            $model = $delegation['effective_model'] ?? $delegation['requested_model'] ?? null;
+            if ($model !== null) {
+                echo ' / '.$model;
+            }
+            echo ' · '.($delegation['status'] ?? 'unknown').' · identidade '.($delegation['identity_status'] ?? 'unavailable')."\n";
+        }
+    }
+}
+
+function observe(array $arguments): void
+{
+    $workflowId = (string) ($arguments['workflow'] ?? getenv('RALPH_WORKFLOW_ID') ?: '');
+    $featureKey = (string) ($arguments['feature'] ?? getenv('RALPH_FEATURE_KEY') ?: '');
+    $event = (string) ($arguments['event'] ?? getenv('RALPH_EVENT') ?: ($arguments['_'][1] ?? ''));
+    $detail = (string) ($arguments['detail'] ?? getenv('RALPH_EVENT_DETAIL') ?: ($arguments['_'][2] ?? ''));
+    if ($workflowId === '' || $featureKey === '') {
+        fail('observe exige workflow e feature; o hook não deve inventar contexto', 2);
+    }
+    $workflow = loadWorkflow();
+    $projection = project($workflow, readEvents());
+    $feature = featureFrom($projection, $featureKey);
+    $type = ($feature['lease_token_hash'] ?? null) === null ? 'policy.bypass_detected' : 'command.started';
+    withLock(function () use ($arguments, $workflowId, $feature, $type, $event, $detail): void {
+        appendEvent(eventContext(array_merge($arguments, ['workflow' => $workflowId]), $feature, $type, 'Hook observou evento do Ralph', [
+            'upstream_event' => $event,
+            'detail' => $detail,
+        ]));
+    });
+    printJson(['observed' => true, 'event' => $event]);
+}
+
+/** @return list<array<string, mixed>> */
+function engineeringDocumentEntries(): array
+{
+    global $root;
+
+    $base = $root.DIRECTORY_SEPARATOR.'docs'.DIRECTORY_SEPARATOR.'engineering';
+    $directories = [
+        'lessons' => 'lesson',
+        'patterns' => 'pattern',
+        'anti-patterns' => 'anti-pattern',
+        'incidents' => 'incident',
+    ];
+    $entries = [];
+    foreach ($directories as $directory => $type) {
+        $path = $base.DIRECTORY_SEPARATOR.$directory;
+        if (! is_dir($path)) {
+            continue;
+        }
+        foreach (glob($path.DIRECTORY_SEPARATOR.'*.yaml') ?: [] as $yamlPath) {
+            $yaml = (string) file_get_contents($yamlPath);
+            preg_match('/^id:\s*([^\s]+)$/m', $yaml, $idMatch);
+            preg_match('/^title:\s*"?(.*?)"?$/m', $yaml, $titleMatch);
+            preg_match('/^status:\s*([^\s]+)$/m', $yaml, $statusMatch);
+            preg_match('/^curation_id:\s*([^\s]+)$/m', $yaml, $curationMatch);
+            $id = trim($idMatch[1] ?? basename($yamlPath, '.yaml'));
+            $entries[$id] = [
+                'id' => $id,
+                'kind' => $type,
+                'status' => trim($statusMatch[1] ?? 'unknown'),
+                'title' => trim($titleMatch[1] ?? $id),
+                'path' => ltrim(str_replace($root, '', $yamlPath), DIRECTORY_SEPARATOR),
+                'markdown_path' => ltrim(str_replace($root, '', $path.DIRECTORY_SEPARATOR.basename($yamlPath, '.yaml').'.md'), DIRECTORY_SEPARATOR),
+                'curation_id' => trim($curationMatch[1] ?? ''),
+                'content_hash' => fileHash($yamlPath),
+            ];
+        }
+        foreach (glob($path.DIRECTORY_SEPARATOR.'*.md') ?: [] as $markdownPath) {
+            $basename = basename($markdownPath, '.md');
+            if (is_file($path.DIRECTORY_SEPARATOR.$basename.'.yaml')) {
+                continue;
+            }
+            $markdown = (string) file_get_contents($markdownPath);
+            preg_match('/^#\s+(?:\[([^\]]+)\]|([^\s—]+))/', $markdown, $idMatch);
+            $id = trim(($idMatch[1] ?? '') !== '' ? $idMatch[1] : (($idMatch[2] ?? '') !== '' ? $idMatch[2] : $basename));
+            $title = trim((string) strtok((string) preg_replace('/^#\s+/', '', $markdown), "\n"));
+            $entries[$id] = [
+                'id' => $id,
+                'kind' => $type,
+                'status' => 'legacy',
+                'title' => $title !== '' ? $title : $id,
+                'path' => ltrim(str_replace($root, '', $markdownPath), DIRECTORY_SEPARATOR),
+                'markdown_path' => ltrim(str_replace($root, '', $markdownPath), DIRECTORY_SEPARATOR),
+                'curation_id' => '',
+                'content_hash' => fileHash($markdownPath),
+            ];
+        }
+    }
+    $entries = array_values($entries);
+    usort($entries, static fn (array $left, array $right): int => strcmp((string) $left['id'], (string) $right['id']));
+
+    return $entries;
+}
+
+function rebuildEngineeringIndex(): void
+{
+    global $root;
+
+    $directory = $root.DIRECTORY_SEPARATOR.'docs'.DIRECTORY_SEPARATOR.'engineering';
+    if (! is_dir($directory) && ! mkdir($directory, 0775, true) && ! is_dir($directory)) {
+        fail('não foi possível criar docs/engineering');
+    }
+    $entries = engineeringDocumentEntries();
+    writeJson($directory.DIRECTORY_SEPARATOR.'index.json', [
+        'schema_version' => RALPH_DOCUMENT_SCHEMA_VERSION,
+        'documents' => $entries,
+    ]);
+    $markdown = "# Índice de engenharia\n\n"
+        ."Índice gerado pelo `ralph-control`; IDs canônicos seguem `TIPO-ANO-SEQUÊNCIA` com sequência de quatro dígitos.\n\n"
+        ."| ID | Tipo | Status | Documento | Curadoria |\n"
+        ."|---|---|---|---|---|\n";
+    foreach ($entries as $entry) {
+        $markdown .= '| `'.str_replace('|', '\\|', (string) $entry['id']).'`'
+            .'| '.str_replace('|', '\\|', (string) $entry['kind'])
+            .'| '.str_replace('|', '\\|', (string) $entry['status'])
+            .'| `'.str_replace('|', '\\|', (string) $entry['path']).'`'
+            .'| `'.str_replace('|', '\\|', (string) ($entry['curation_id'] ?? ''))."` |\n";
+    }
+    file_put_contents($directory.DIRECTORY_SEPARATOR.'INDEX.md', $markdown, LOCK_EX);
+}
+
+function knowledge(array $arguments): void
+{
+    global $root;
+    $action = $arguments['_'][1] ?? '';
+    if ($action === 'retrieve') {
+        retrieveKnowledge($arguments);
+
+        return;
+    }
+    $workflowId = required($arguments, 'workflow');
+    $featureKey = required($arguments, 'feature');
+    $type = match ($action) {
+        'candidate' => 'knowledge.candidate_created',
+        'curated' => 'knowledge.curated',
+        'rejected' => 'knowledge.rejected',
+        'review-required' => 'knowledge.review_required',
+        'skipped' => 'knowledge.skipped',
+        default => fail('ação de conhecimento inválida; use candidate, curated, rejected, review-required ou skipped', 2),
+    };
+    $result = withLock(function () use ($arguments, $workflowId, $featureKey, $type, $action, $root): array {
+        $workflow = loadWorkflow();
+        $projection = project($workflow, readEvents());
+        $feature = featureFrom($projection, $featureKey);
+        if (! in_array($feature['state'], ['released', 'approved'], true)) {
+            fail('conhecimento só pode ser registrado após release');
+        }
+        $attempt = (int) $feature['attempt'];
+        $curationId = allocateDocumentId('CUR', "curation:{$workflowId}:{$featureKey}:{$attempt}:{$action}", [
+            'workflow_id' => $workflowId,
+            'feature_key' => $featureKey,
+            'attempt' => $attempt,
+        ]);
+        $lessonId = $arguments['lesson'] ?? null;
+        $indexPath = null;
+        if ($action === 'curated') {
+            $lessonId = is_string($lessonId) && $lessonId !== ''
+                ? $lessonId
+                : allocateDocumentId('LES', "lesson:{$workflowId}:{$featureKey}:{$attempt}", [
+                    'workflow_id' => $workflowId,
+                    'feature_key' => $featureKey,
+                    'attempt' => $attempt,
+                ]);
+            if (! preg_match('/^(?:LES-[0-9]{4}-[0-9]{4}|LESSON-[0-9]{4}-[A-Z0-9-]+)$/', $lessonId)) {
+                fail('lesson_id inválido');
+            }
+            $lessonDirectory = $root.'/docs/engineering/lessons';
+            if (! is_dir($lessonDirectory) && ! mkdir($lessonDirectory, 0775, true) && ! is_dir($lessonDirectory)) {
+                fail('não foi possível criar docs/engineering/lessons');
+            }
+            $title = (string) ($arguments['title'] ?? 'Lição curada sem título');
+            $summary = (string) ($arguments['summary'] ?? '');
+            $category = (string) ($arguments['category'] ?? 'engineering');
+            $rootCause = (string) ($arguments['root-cause'] ?? 'not-specified');
+            $commit = (string) ($arguments['commit'] ?? ($feature['result']['implementation_commit'] ?? ''));
+            $test = (string) ($arguments['test'] ?? '');
+            $yaml = sanitize("schema_version: \"1.0.0\"\nid: {$lessonId}\ntitle: \"".str_replace('"', '\\"', $title)."\"\nstatus: validated\ncuration_id: {$curationId}\ndocument_id: {$lessonId}\ndocument_kind: lesson\nindex_ref: docs/engineering/INDEX.md\n\nsource:\n  workflow_id: {$workflowId}\n  feature_key: {$featureKey}\n\nclassification:\n  category: {$category}\n  root_cause: {$rootCause}\n\ndecision:\n  summary: \"".str_replace('"', '\\"', $summary)."\"\n\nevidence:\n  commit: {$commit}\n  tests:\n    - {$test}\n\napplicability:\n  applies_when:\n    - O contexto técnico corresponde à causa raiz registrada.\n  does_not_apply_when:\n    - A evidência não puder ser reproduzida.\n");
+            $yamlPath = $lessonDirectory.'/'.$lessonId.'.yaml';
+            $markdownPath = $lessonDirectory.'/'.$lessonId.'.md';
+            if (is_file($yamlPath) && (string) file_get_contents($yamlPath) !== $yaml) {
+                fail('lição existente com o mesmo ID possui conteúdo diferente');
+            }
+            file_put_contents($yamlPath, $yaml, LOCK_EX);
+            file_put_contents($markdownPath, "# {$lessonId} — {$title}\n\n- Curadoria: {$curationId}\n- Índice: `docs/engineering/INDEX.md`\n\n## Contexto\n\n{$summary}\n\n## Causa raiz\n\n`{$rootCause}`\n\n## Correção validada\n\nCommit `{$commit}`; teste `{$test}`.\n\n## Origem\n\nWorkflow `{$workflowId}`, feature `{$featureKey}`.\n", LOCK_EX);
+            rebuildEngineeringIndex();
+            $indexPath = 'docs/engineering/INDEX.md';
+        }
+        appendEvent(eventContext($arguments, $feature, $type, 'Resultado da curadoria de conhecimento', [
+            'reason' => $arguments['reason'] ?? null,
+            'lesson_id' => $lessonId,
+            'curation_id' => $curationId,
+            'index_path' => $indexPath,
+            'status' => $action,
+        ]));
+
+        return ['lesson_id' => $lessonId, 'curation_id' => $curationId, 'index_path' => $indexPath];
+    });
+    printJson(['knowledge' => $action, 'blocking' => false] + $result);
+}
+
+function retrieveKnowledge(array $arguments): void
+{
+    $query = required($arguments, 'query');
+    $limit = max(1, min(10, (int) ($arguments['limit'] ?? 5)));
+    $lessonDirectory = dirname(__DIR__).'/docs/engineering/lessons';
+    $terms = array_values(array_filter(preg_split('/[^a-z0-9_-]+/i', strtolower($query)) ?: [], static fn (string $term): bool => strlen($term) >= 3));
+    $matches = [];
+    foreach (glob($lessonDirectory.'/*.yaml') ?: [] as $path) {
+        $content = (string) file_get_contents($path);
+        if (! preg_match('/^status:\s*validated\s*$/m', $content)) {
+            continue;
+        }
+        $score = 0;
+        $normalized = strtolower($content);
+        foreach ($terms as $term) {
+            $score += substr_count($normalized, $term);
+        }
+        if ($score === 0) {
+            continue;
+        }
+        preg_match('/^id:\s*(.+)$/m', $content, $idMatch);
+        preg_match('/^title:\s*"?(.*?)"?$/m', $content, $titleMatch);
+        $matches[] = [
+            'lesson_id' => trim($idMatch[1] ?? basename($path, '.yaml')),
+            'title' => trim($titleMatch[1] ?? ''),
+            'score' => $score,
+            'content_hash' => fileHash($path),
+            'content' => $content,
+        ];
+    }
+    usort($matches, static fn (array $left, array $right): int => $right['score'] <=> $left['score']);
+    $selected = array_slice($matches, 0, $limit);
+    $context = '';
+    foreach ($selected as $match) {
+        $remaining = 12000 - strlen($context);
+        if ($remaining <= 0) {
+            break;
+        }
+        $context .= substr($match['content'], 0, $remaining)."\n";
+    }
+    unset($match);
+    printJson([
+        'query' => $query,
+        'limit' => $limit,
+        'lessons' => array_map(static fn (array $match): array => [
+            'lesson_id' => $match['lesson_id'],
+            'title' => $match['title'],
+            'score' => $match['score'],
+            'content_hash' => $match['content_hash'],
+        ], $selected),
+        'context' => $context,
+    ]);
+}
+
+function documentIdCommand(array $arguments): void
+{
+    $kind = required($arguments, 'kind');
+    $workflowId = required($arguments, 'workflow');
+    $featureKey = required($arguments, 'feature');
+    $scope = required($arguments, 'scope');
+    $attempt = (int) ($arguments['attempt'] ?? 0);
+    if ($attempt < 1) {
+        $projection = project(loadWorkflow(), readEvents());
+        $attempt = (int) featureFrom($projection, $featureKey)['attempt'];
+    }
+    $allocationKey = implode(':', ['report', $kind, $workflowId, $featureKey, $attempt, $scope]);
+    $documentId = withLock(static function () use ($kind, $allocationKey, $workflowId, $featureKey, $attempt, $scope): string {
+        return allocateDocumentId($kind, $allocationKey, [
+            'workflow_id' => $workflowId,
+            'feature_key' => $featureKey,
+            'attempt' => $attempt,
+            'scope' => $scope,
+        ]);
+    });
+
+    if (($arguments['plain'] ?? false) === true) {
+        echo $documentId."\n";
+
+        return;
+    }
+    printJson([
+        'document_id' => $documentId,
+        'kind' => strtoupper($kind),
+        'workflow_id' => $workflowId,
+        'feature_key' => $featureKey,
+        'attempt' => $attempt,
+        'scope' => $scope,
+    ]);
+}
+
+function documentIndexCommand(): void
+{
+    rebuildEngineeringIndex();
+    printJson([
+        'status' => 'document_index_rebuilt',
+        'path' => 'docs/engineering/INDEX.md',
+        'machine_path' => 'docs/engineering/index.json',
+        'documents' => count(engineeringDocumentEntries()),
+    ]);
+}
+
+function status(): void
+{
+    $workflow = loadWorkflow();
+    $events = readEvents();
+    printJson([
+        'workflow' => $workflow,
+        'projection' => project($workflow, $events),
+        'event_count' => count($events),
+    ]);
+}
+
+$arguments = args($argv);
+$command = $arguments['_'][0] ?? '';
+
+try {
+    switch ($command) {
+        case 'init': initWorkflow($arguments);
+            break;
+        case 'claim': claimFeature($arguments);
+            break;
+        case 'start': startAttempt($arguments);
+            break;
+        case 'finish': finishBlock($arguments);
+            break;
+        case 'reconcile': reconcileExternalBlock($arguments);
+            break;
+        case 'gate': recordGate($arguments);
+            break;
+        case 'approve': approveFeature($arguments);
+            break;
+        case 'handoff': generateHandoff($arguments);
+            break;
+        case 'handoff-commit': commitHandoff($arguments);
+            break;
+        case 'release': releaseFeature($arguments);
+            break;
+        case 'advance': advanceFeature($arguments);
+            break;
+        case 'recover': recoverFeature($arguments);
+            break;
+        case 'retry': retryFeature($arguments);
+            break;
+        case 'debug': debugFeature($arguments);
+            break;
+        case 'supervise': superviseWorkflow($arguments);
+            break;
+        case 'continue': continueWorkflow($arguments);
+            break;
+        case 'run': runControlled($arguments);
+            break;
+        case 'trace': traceDelegation($arguments);
+            break;
+        case 'trace-report': traceReport($arguments);
+            break;
+        case 'reclaim-gates': reclaimGates($arguments);
+            break;
+        case 'repair-ledger': printJson(repairLedger($arguments));
+            break;
+        case 'observe': observe($arguments);
+            break;
+        case 'knowledge': knowledge($arguments);
+            break;
+        case 'document-id': documentIdCommand($arguments);
+            break;
+        case 'document-index': documentIndexCommand();
+            break;
+        case 'status': status();
+            break;
+        case 'verify': readEvents();
+            echo "ledger íntegro\n";
+            break;
+        default:
+            fail('comando inválido. Use init, claim, start, run, finish, reconcile, reclaim-gates, repair-ledger, gate, approve, handoff, handoff-commit, release, advance, recover, retry, debug, supervise, continue, trace, trace-report, observe, knowledge, document-id, document-index, status ou verify', 2);
+    }
+} catch (JsonException $exception) {
+    fail('JSON inválido: '.$exception->getMessage());
+}

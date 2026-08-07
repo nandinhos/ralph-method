@@ -1,0 +1,1020 @@
+#!/usr/bin/env bash
+#
+# test-ralph.sh — suite red/green do scripts/ralph.sh com engine mock.
+#
+# Nenhuma chamada de rede, nenhum token gasto: binarios fake `claude` e `codex`
+# entram no PATH e o comportamento e escolhido por MOCK_SCENARIO.
+#
+# Uso: scripts/test-ralph.sh [nome-do-caso]   (exit 0 = tudo verde)
+
+set -uo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# RALPH_BIN permite apontar para uma copia patchada (prova red dos testes).
+RALPH="${RALPH_BIN:-$ROOT/scripts/ralph.sh}"
+ONLY="${1:-}"
+
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+
+PASS=0
+FAIL=0
+
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
+
+ok()   { PASS=$((PASS + 1)); echo -e "  ${GREEN}ok${NC}   $1"; }
+bad()  { FAIL=$((FAIL + 1)); echo -e "  ${RED}FAIL${NC} $1"; }
+
+assert_eq() {
+  local expected="$1" actual="$2" msg="$3"
+  if [ "$expected" = "$actual" ]; then ok "$msg"; else bad "$msg (esperado '$expected', veio '$actual')"; fi
+}
+
+assert_contains() {
+  local haystack_file="$1" needle="$2" msg="$3"
+  if grep -qF -- "$needle" "$haystack_file"; then ok "$msg"; else bad "$msg (nao achou '$needle')"; fi
+}
+
+assert_not_contains() {
+  local haystack_file="$1" needle="$2" msg="$3"
+  if grep -qF -- "$needle" "$haystack_file"; then bad "$msg (achou '$needle')"; else ok "$msg"; fi
+}
+
+# ---------------------------------------------------------------------------
+# Mock engine — vale para claude e codex (dispatch por basename)
+# ---------------------------------------------------------------------------
+
+make_mocks() {
+  local bin="$1"
+  mkdir -p "$bin"
+
+  cat > "$bin/mock-engine" <<'MOCK'
+#!/usr/bin/env bash
+set -uo pipefail
+
+name=$(basename "$0")
+state="${MOCK_STATE:?}"
+scenario="${MOCK_SCENARIO:-ok}"
+prompt=""
+verify=0
+original_args=("$@")
+
+bump() {
+  local f="$state/$1" n=0
+  [ -f "$f" ] && n=$(cat "$f")
+  n=$((n + 1))
+  echo "$n" > "$f"
+  echo "$n"
+}
+
+model=""
+profile=""
+effort=""
+
+if [ "$name" = "claude" ]; then
+  # claude -p real le stdin quando nao e TTY: se o ralph nao redirecionar
+  # < /dev/null, o mock engole o stream de quem chamou (ex: manifest do loop).
+  [ -t 0 ] || cat > /dev/null
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -p) prompt="$2"; shift 2 ;;
+      --allowedTools) verify=1; shift 2 ;;
+      --model) model="$2"; shift 2 ;;
+      --effort) effort="$2"; shift 2 ;;
+      --output-format) shift 2 ;;
+      *) shift ;;
+    esac
+  done
+else
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --sandbox) [ "$2" = "read-only" ] && verify=1; shift 2 ;;
+      --model) model="$2"; shift 2 ;;
+      --profile) profile="$2"; shift 2 ;;
+      -c) shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  prompt=$(cat)
+fi
+
+grep -q '^RALPH_VERIFY' <<< "$prompt" && verify=1
+
+if [ "$verify" -eq 1 ]; then
+  printf '%s\n' "${original_args[@]}" > "$state/verify_args"
+else
+  printf '%s\n' "${original_args[@]}" > "$state/impl_args"
+fi
+[ -n "$profile" ] && echo "$profile" > "$state/codex_profile"
+
+# Grava o modelo pedido para a sessao verificadora (assert do teste de modelo).
+if [ "$verify" -eq 1 ] && [ -n "$model" ]; then
+  echo "$model" > "$state/verify_model"
+fi
+if [ "$verify" -eq 1 ] && [ -n "$effort" ]; then
+  echo "$effort" > "$state/verify_effort"
+fi
+
+# --- verificador independente ------------------------------------------------
+# Verifica o CODIGO REAL, como o verificador de verdade: sem arquivo de
+# implementacao no repo, a fase esta incompleta.
+if [ "$verify" -eq 1 ]; then
+  n=$(bump verify_calls)
+  tasks=$(grep -cE '^[[:space:]]*- \[[ xX]\]' <<< "$prompt")
+
+  implemented=0
+  compgen -G "src/impl-*.txt" > /dev/null 2>&1 && implemented=1
+
+  if [ "$implemented" -eq 0 ]; then
+    for i in $(seq 1 "$tasks"); do echo "TASK $i: INCOMPLETE — nenhum codigo encontrado"; done
+    exit 0
+  fi
+
+  if [ "$scenario" = "verify-incomplete-once" ] && [ "$n" -eq 1 ]; then
+    echo "TASK 1: INCOMPLETE — o arquivo nao foi criado"
+    for i in $(seq 2 "$tasks"); do echo "TASK $i: DONE"; done
+  elif [ "$scenario" = "verify-duplicate-markdown" ]; then
+    for i in $(seq 1 "$tasks"); do
+      echo "- **TASK $i: DONE**"
+      echo "- **TASK $i: DONE**"
+    done
+  elif [ "$scenario" = "verify-conflict" ]; then
+    echo "TASK 1: DONE"
+    echo "TASK 1: INCOMPLETE — conflito proposital"
+    for i in $(seq 2 "$tasks"); do echo "TASK $i: DONE"; done
+  elif [ "$scenario" = "verify-exit-after-done" ]; then
+    for i in $(seq 1 "$tasks"); do echo "TASK $i: DONE"; done
+    exit 9
+  elif [ "$scenario" = "verify-mutates-plan" ]; then
+    for i in $(seq 1 "$tasks"); do echo "TASK $i: DONE"; done
+    printf '\n<!-- alterado pelo verificador -->\n' >> .spec/init/project-phases.md
+  else
+    for i in $(seq 1 "$tasks"); do echo "TASK $i: DONE"; done
+  fi
+  exit 0
+fi
+
+# --- sessao de implementacao -------------------------------------------------
+n=$(bump impl_calls)
+
+emit_claude_ok()    { echo '{"type":"result","subtype":"success","is_error":false,"result":"implementado"}'; }
+emit_claude_limit() { echo "{\"type\":\"result\",\"subtype\":\"error\",\"is_error\":true,\"result\":\"Claude AI usage limit reached|$1\"}"; }
+
+case "$scenario" in
+  limit-epoch)
+    if [ "$n" -eq 1 ]; then
+      emit_claude_limit "$(date +%s)"
+      exit 1
+    fi
+    ;;
+  limit-generic)
+    if [ "$n" -eq 1 ]; then
+      echo "Rate limit reached. Try again later."
+      exit 1
+    fi
+    ;;
+esac
+
+# stall-after-red: escreve no 1o ciclo (teste vermelho), depois trava sem
+# escrever nada. already-done: o codigo ja existe em HEAD, o engine nao escreve.
+write=1
+[ "$scenario" = "empty-diff" ] && write=0
+[ "$scenario" = "already-done" ] && write=0
+[ "$scenario" = "stall-after-red" ] && [ "$n" -gt 1 ] && write=0
+
+if [ "$write" -eq 1 ]; then
+  mkdir -p src
+  echo "impl $n" > "src/impl-$n.txt"
+fi
+
+if [ "$scenario" = "mutate-plan" ]; then
+  printf '\n<!-- alterado pelo executor -->\n' >> .spec/init/project-phases.md
+fi
+
+if [ "$scenario" = "agent-commit" ]; then
+  git add -A
+  git commit -q -m "feat: commit indevido do agente"
+fi
+
+if [ "$scenario" = "false-429" ]; then
+  # 429 no MEIO do log: e output de teste do projeto, nao limite de uso.
+  echo "FAIL tests/HttpClientTest: expected 429 Too Many Requests, got 200"
+  for i in $(seq 1 25); do echo "linha de ruido $i"; done
+  echo "Suite corrigida. Done."
+  exit 0
+fi
+
+if [ "$name" = "claude" ]; then emit_claude_ok; else echo "Done."; fi
+exit 0
+MOCK
+
+  chmod +x "$bin/mock-engine"
+  cp "$bin/mock-engine" "$bin/claude"
+  cp "$bin/mock-engine" "$bin/codex"
+}
+
+make_testcmd() {
+  cat > "$1" <<'TESTCMD'
+#!/usr/bin/env bash
+set -uo pipefail
+state="${MOCK_STATE:?}"
+scenario="${MOCK_SCENARIO:-ok}"
+# sail test real (docker compose exec) anexa stdin: mesmo risco do claude -p.
+[ -t 0 ] || cat > /dev/null
+f="$state/test_calls"; n=0
+[ -f "$f" ] && n=$(cat "$f")
+n=$((n + 1)); echo "$n" > "$f"
+
+if [ "$scenario" = "test-red-once" ] || [ "$scenario" = "stall-after-red" ]; then
+  if [ "$n" -eq 1 ]; then
+    echo "1 failing test: ExpectedFooTest"
+    exit 1
+  fi
+fi
+if [ "$scenario" = "test-mutates-plan" ]; then
+  printf '\n<!-- alterado pelo teste -->\n' >> .spec/init/project-phases.md
+fi
+echo "all green"
+exit 0
+TESTCMD
+  chmod +x "$1"
+}
+
+PHASES_FIXTURE='# Test Project — Project Phases
+
+<!-- inputs: project-description.md@sha256:000000000000 -->
+
+## Overview
+
+Projeto de teste.
+
+## Phase 1: Foundation
+
+- [ ] **Task:** cria o arquivo A
+  - **Acceptance criteria:**
+    - o arquivo existe
+- [ ] **Task:** cria o arquivo B
+  - **Acceptance criteria:**
+    - o arquivo existe
+
+## Phase 2: Feature
+
+- [ ] **Task:** cria o arquivo C
+  - **Acceptance criteria:**
+    - o arquivo existe
+
+## Open Questions
+
+- nenhuma
+'
+
+# Fixture de projeto Laravel + Sail. `sail ps` responde conforme SAIL_UP.
+make_sail_fixture() {
+  local repo="$1" up="$2"
+
+  touch "$repo/artisan"
+  cat > "$repo/composer.json" <<'JSON'
+{
+  "require-dev": { "laravel/sail": "^1.0" },
+  "scripts": { "test": "phpunit" }
+}
+JSON
+
+  mkdir -p "$repo/vendor/bin"
+  cat > "$repo/vendor/bin/sail" <<SAILMOCK
+#!/usr/bin/env bash
+set -uo pipefail
+if [ "\${1:-}" = "ps" ]; then
+  if [ "$up" = "up" ]; then
+    echo "NAME                IMAGE            STATUS"
+    echo "proj-laravel.test-1 sail-8.3/app     Up 2 hours"
+    exit 0
+  fi
+  echo "Sail is not running."
+  exit 1
+fi
+if [ "\${1:-}" = "test" ]; then
+  exec "\$MOCK_TEST_CMD"
+fi
+exit 0
+SAILMOCK
+  chmod +x "$repo/vendor/bin/sail"
+}
+
+# new_case <nome> -> ecoa o diretorio do repo fixture
+new_case() {
+  local name="$1"
+  local dir="$TMP/$name"
+  mkdir -p "$dir/repo" "$dir/state" "$dir/bin"
+  make_mocks "$dir/bin"
+  make_testcmd "$dir/test.sh"
+
+  (
+    cd "$dir/repo" || exit 1
+    git init -q
+    git config user.email "test@ralph"
+    git config user.name "Ralph Test"
+    mkdir -p .spec/init
+    printf '%s' "$PHASES_FIXTURE" > .spec/init/project-phases.md
+    git add -A
+    git commit -q -m "chore: fixture"
+  )
+  echo "$dir"
+}
+
+# run_ralph <dir> <scenario> [args...] -> ecoa o exit code; log em <dir>/out.log
+run_ralph() {
+  local dir="$1" scenario="$2"; shift 2
+  local rc=0
+  (
+    cd "$dir/repo" || exit 1
+    PATH="$dir/bin:$PATH" \
+    MOCK_STATE="$dir/state" \
+    MOCK_SCENARIO="$scenario" \
+    MOCK_TEST_CMD="$dir/test.sh" \
+    RALPH_LIMIT_WAIT_DEFAULT=1 \
+    RALPH_LIMIT_BUFFER=1 \
+    RALPH_VERIFY="${CASE_VERIFY:-}" \
+    RALPH_VERIFY_MODEL="${CASE_VERIFY_MODEL:-}" \
+    RALPH_CODEX_PROFILE="${CASE_CODEX_PROFILE:-}" \
+    RALPH_CODEX_MODEL="${CASE_CODEX_MODEL:-}" \
+    RALPH_CODEX_REASONING_EFFORT="${CASE_CODEX_EFFORT:-}" \
+    RALPH_CLAUDE_VERIFY_EFFORT="${CASE_CLAUDE_VERIFY_EFFORT:-}" \
+    RALPH_HOOK_TIMEOUT="${CASE_HOOK_TIMEOUT:-}" \
+    RALPH_HOOK_KILL_AFTER="${CASE_HOOK_KILL_AFTER:-}" \
+      bash "$RALPH" "$@" > "$dir/out.log" 2>&1
+  ) || rc=$?
+  echo "$rc"
+}
+
+commits() { git -C "$1/repo" rev-list --count HEAD; }
+
+case_enabled() { [ -z "$ONLY" ] || [ "$ONLY" = "$1" ]; }
+
+header() { echo -e "\n${YELLOW}== $1${NC}"; }
+
+# ---------------------------------------------------------------------------
+# 1. Fase ok de primeira -> 1 commit por fase, progresso gravado
+# ---------------------------------------------------------------------------
+if case_enabled ok-first; then
+  header "1. fase ok de primeira"
+  d=$(new_case ok-first)
+  rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "exit 0"
+  assert_eq 3 "$(commits "$d")" "2 commits de fase (1 fixture + 2)"
+  assert_contains "$d/repo/.phases/.progress" "phase-01.md" "progresso registra phase-01"
+  assert_contains "$d/repo/.phases/.progress" "phase-02.md" "progresso registra phase-02"
+  assert_eq "feat(phase-2): Feature" "$(git -C "$d/repo" log -1 --pretty=%s)" "mensagem de commit da ultima fase"
+  assert_eq 2 "$(cat "$d/state/impl_calls")" "1 sessao de implementacao por fase (2 fases)"
+  assert_eq 2 "$(cat "$d/state/verify_calls")" "gate 3 (default always) rodou em toda fase"
+fi
+
+# ---------------------------------------------------------------------------
+# 2. Gate 2 vermelho 1x -> ciclo de correcao -> verde -> 1 commit so
+# ---------------------------------------------------------------------------
+if case_enabled test-red-once; then
+  header "2. gate 2 vermelho uma vez -> ciclo de correcao"
+  d=$(new_case test-red-once)
+  rc=$(run_ralph "$d" test-red-once --engine claude --test-cmd "$d/test.sh" --max-cycles 2)
+  assert_eq 0 "$rc" "exit 0"
+  assert_eq 3 "$(commits "$d")" "1 commit por fase (ciclo intermediario nao commita)"
+  assert_contains "$d/out.log" "Gate 2 vermelho" "gate 2 reportado vermelho"
+  assert_contains "$d/out.log" "Ciclo de correcao 2/2" "entrou em ciclo de correcao"
+  # o prompt de correcao carrega a causa REAL, nao "os testes falharam" generico
+  assert_contains "$d/repo/.phases/prompts/phase-01.cycle-2.txt" "ExpectedFooTest" "prompt de correcao carrega a saida do teste"
+  assert_contains "$d/repo/.phases/prompts/phase-01.cycle-2.txt" "## Fase a completar" "prompt de correcao e auto-contido (fase inteira)"
+  # logs por ciclo, nunca sobrescritos
+  if test -f "$d/repo/.phases/logs/phase-01.cycle-1.log" \
+    && test -f "$d/repo/.phases/logs/phase-01.cycle-2.log"; then
+    ok "logs por ciclo preservados"
+  else
+    bad "logs por ciclo preservados"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 3. Engine nao escreve nada e a fase esta incompleta -> falha sem commit
+#    (gate 1 sinaliza; quem reprova e o verificador, contra o codigo real)
+# ---------------------------------------------------------------------------
+if case_enabled empty-diff; then
+  header "3. engine nao escreve nada + fase incompleta -> falha sem commit"
+  d=$(new_case empty-diff)
+  rc=$(run_ralph "$d" empty-diff --engine claude --test-cmd "$d/test.sh" --max-cycles 2)
+  assert_eq 1 "$rc" "exit 1"
+  assert_eq 1 "$(commits "$d")" "nenhum commit criado (sem --allow-empty)"
+  assert_contains "$d/out.log" "a sessao nao escreveu nada" "gate 1 sinalizou a sessao vazia"
+  assert_contains "$d/out.log" "Gate 3 vermelho" "verificador reprovou contra o codigo real"
+  assert_contains "$d/out.log" "Parando na primeira fase que falhou" "politica default = parar"
+  assert_contains "$d/repo/.phases/prompts/phase-01.cycle-2.txt" "sem alterar nenhum arquivo" "causa do ciclo cita a sessao vazia"
+fi
+
+# ---------------------------------------------------------------------------
+# 4. Verificador INCOMPLETE 1x -> ciclo -> DONE -> commit
+# ---------------------------------------------------------------------------
+if case_enabled verify-incomplete; then
+  header "4. verificador INCOMPLETE uma vez -> ciclo -> DONE"
+  d=$(new_case verify-incomplete)
+  rc=$(run_ralph "$d" verify-incomplete-once --engine claude --test-cmd "$d/test.sh" --max-cycles 2)
+  assert_eq 0 "$rc" "exit 0"
+  assert_eq 3 "$(commits "$d")" "1 commit por fase"
+  assert_contains "$d/out.log" "Gate 3 vermelho" "gate 3 reportado vermelho"
+  assert_contains "$d/repo/.phases/prompts/phase-01.cycle-2.txt" "TASK 1: INCOMPLETE" "prompt de correcao carrega as tasks incompletas verbatim"
+  if test -f "$d/repo/.phases/logs/phase-01.verify-1.log"; then
+    ok "log do verificador por ciclo"
+  else
+    bad "log do verificador por ciclo"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 5. Limite com epoch -> espera -> re-executa a MESMA fase sem consumir ciclo
+# ---------------------------------------------------------------------------
+if case_enabled limit-epoch; then
+  header "5. limite com epoch -> espera -> mesma fase"
+  d=$(new_case limit-epoch)
+  # --max-cycles 1: se a espera consumisse um ciclo, a fase falharia
+  rc=$(run_ralph "$d" limit-epoch --engine claude --test-cmd "$d/test.sh" --max-cycles 1)
+  assert_eq 0 "$rc" "exit 0 (limite nao consome ciclo)"
+  assert_eq 3 "$(commits "$d")" "fases commitadas apos a espera"
+  assert_contains "$d/out.log" "Limite de uso atingido" "limite detectado"
+  assert_contains "$d/out.log" "Reset previsto para" "epoch de reset extraido do log"
+fi
+
+# ---------------------------------------------------------------------------
+# 6. Limite generico sem epoch -> fallback wait
+# ---------------------------------------------------------------------------
+if case_enabled limit-generic; then
+  header "6. limite generico sem epoch -> fallback"
+  d=$(new_case limit-generic)
+  rc=$(run_ralph "$d" limit-generic --engine codex --test-cmd "$d/test.sh" --max-cycles 1)
+  assert_eq 0 "$rc" "exit 0"
+  assert_contains "$d/out.log" "Sem horario de reset no output" "usou o fallback de espera"
+  assert_eq 3 "$(commits "$d")" "fases commitadas apos a espera"
+fi
+
+# ---------------------------------------------------------------------------
+# 7. "429 Too Many Requests" no MEIO do log -> NAO dispara espera (regressao)
+# ---------------------------------------------------------------------------
+if case_enabled false-429; then
+  header "7. 429 no meio do log nao dispara espera"
+  d=$(new_case false-429)
+  start=$(date +%s)
+  rc=$(run_ralph "$d" false-429 --engine codex --test-cmd "$d/test.sh" --max-cycles 1)
+  elapsed=$(($(date +%s) - start))
+  assert_eq 0 "$rc" "exit 0"
+  assert_not_contains "$d/out.log" "Limite de uso atingido" "nao interpretou 429 de teste como limite"
+  assert_contains "$d/repo/.phases/logs/phase-01.cycle-1.log" "429 Too Many Requests" "o 429 realmente estava no log"
+  if [ "$elapsed" -lt 5 ]; then
+    ok "sem espera (${elapsed}s)"
+  else
+    bad "sem espera (${elapsed}s)"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 8. Segunda execucao com mesmo input -> fases feitas puladas (resume vivo)
+# ---------------------------------------------------------------------------
+if case_enabled resume; then
+  header "8. resume: segunda execucao pula fases feitas"
+  d=$(new_case resume)
+  rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "primeira execucao verde"
+  before=$(commits "$d")
+  rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "segunda execucao verde"
+  assert_eq "$before" "$(commits "$d")" "nenhum commit novo"
+  assert_contains "$d/out.log" "Progresso anterior preservado" "progresso preservado (input inalterado)"
+  assert_contains "$d/out.log" "(ja completada)" "fases puladas"
+fi
+
+# ---------------------------------------------------------------------------
+# 9. Input mutado entre execucoes -> progresso invalidado com aviso
+# ---------------------------------------------------------------------------
+if case_enabled resume-invalidated; then
+  header "9. input mutado -> progresso invalidado"
+  d=$(new_case resume-invalidated)
+  rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "primeira execucao verde"
+  before=$(commits "$d")
+  (
+    cd "$d/repo" || exit 1
+    printf '\n## Phase 3: Extra\n\n- [ ] **Task:** cria o arquivo D\n  - **Acceptance criteria:**\n    - o arquivo existe\n' >> .spec/init/project-phases.md
+    git add -A && git commit -q -m "chore: nova fase"
+  )
+  rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "segunda execucao verde"
+  assert_contains "$d/out.log" "progresso zerado" "progresso invalidado com aviso"
+  assert_eq $((before + 4)) "$(commits "$d")" "3 fases re-executadas + commit da mutacao"
+fi
+
+# ---------------------------------------------------------------------------
+# 10. Arvore suja no preflight -> abort antes de qualquer sessao
+# ---------------------------------------------------------------------------
+if case_enabled dirty-tree; then
+  header "10. arvore suja -> abort no preflight"
+  d=$(new_case dirty-tree)
+  echo "trabalho nao commitado" > "$d/repo/rascunho.txt"
+  rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 1 "$rc" "exit 1"
+  assert_contains "$d/out.log" "Arvore de trabalho suja" "abortou com instrucao"
+  if test -f "$d/state/impl_calls"; then
+    bad "nenhuma sessao de engine iniciada"
+  else
+    ok "nenhuma sessao de engine iniciada"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 11. Contrato de formato do input -> abort antes de gastar token
+# ---------------------------------------------------------------------------
+if case_enabled bad-format; then
+  header "11. heading de fase torto -> abort no preflight"
+  d=$(new_case bad-format)
+  (
+    cd "$d/repo" || exit 1
+    sed -i 's/^## Phase 2: Feature$/## Phase Two — Feature/' .spec/init/project-phases.md
+    git add -A && git commit -q -m "chore: heading torto"
+  )
+  rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  # "## Phase Two" nao casa com '^## Phase [0-9]+: ' -> heading malformado
+  assert_eq 1 "$rc" "exit 1"
+  assert_contains "$d/out.log" "Contrato de formato violado" "abortou por formato invalido"
+  if test -f "$d/state/impl_calls"; then
+    bad "nenhuma sessao de engine iniciada"
+  else
+    ok "nenhuma sessao de engine iniciada"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 12. Ciclo de correcao que nao escreve nada, mas o codigo do ciclo anterior
+#     esta completo e verde -> a fase passa (o verificador manda, nao o diff)
+# ---------------------------------------------------------------------------
+if case_enabled stall-after-red; then
+  header "12. ciclo sem escrita + codigo completo -> gate 3 decide, fase passa"
+  d=$(new_case stall-after-red)
+  rc=$(run_ralph "$d" stall-after-red --engine claude --test-cmd "$d/test.sh" --max-cycles 2)
+  assert_eq 0 "$rc" "exit 0"
+  # o mock so escreve na 1a sessao: fase 1 commita apos o ciclo 2; fase 2 cai
+  # no caminho "ja implementada" (o verificador ve o codigo e aprova)
+  assert_eq 2 "$(commits "$d")" "1 commit (fase 1); fase 2 nao tinha o que commitar"
+  assert_contains "$d/out.log" "Gate 2 vermelho" "o ciclo comecou por um gate 2 vermelho"
+  assert_contains "$d/out.log" "a sessao nao escreveu nada" "gate 1 sinalizou a sessao vazia do ciclo 2"
+  assert_contains "$d/out.log" "feat(phase-1)" "fase 1 commitada apos o ciclo de correcao"
+fi
+
+# ---------------------------------------------------------------------------
+# 17. Fase JA implementada em HEAD (run anterior commitada) -> reconhecida
+#     sem commit, sem falhar. Regressao do bug real: o engine nao escreve
+#     porque nao ha o que escrever, e o gate 1 reprovava isso.
+# ---------------------------------------------------------------------------
+if case_enabled already-done; then
+  header "17. fase ja implementada em HEAD -> reconhecida sem commit"
+  d=$(new_case already-done)
+  # simula a run anterior: codigo implementado e commitado a mao, progress vazio
+  mkdir -p "$d/repo/src"
+  echo "impl previo" > "$d/repo/src/impl-1.txt"
+  git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "feat: trabalho da run anterior"
+  before=$(commits "$d")
+
+  rc=$(run_ralph "$d" already-done --engine claude --test-cmd "$d/test.sh" --max-cycles 1)
+  assert_eq 0 "$rc" "exit 0 (nao reprova fase ja implementada)"
+  assert_contains "$d/out.log" "JA IMPLEMENTADA" "reconheceu a fase como feita"
+  assert_eq "$before" "$(commits "$d")" "nenhum commit criado (nada a commitar)"
+  assert_contains "$d/repo/.phases/.progress" "phase-01.md" "progresso registra a fase"
+  assert_contains "$d/repo/.phases/.progress" "phase-02.md" "progresso registra a fase seguinte"
+fi
+
+# ---------------------------------------------------------------------------
+# 18. Fase falhou -> avisa que o trabalho parcial ficou na arvore
+# ---------------------------------------------------------------------------
+if case_enabled dirty-after-fail; then
+  header "18. fase falhou com trabalho na arvore -> instrui o dev"
+  d=$(new_case dirty-after-fail)
+  # verify-incomplete-once com 1 ciclo: escreve, testes verdes, verificador reprova
+  rc=$(run_ralph "$d" verify-incomplete-once --engine claude --test-cmd "$d/test.sh" --max-cycles 1)
+  assert_eq 1 "$rc" "exit 1"
+  assert_eq 1 "$(commits "$d")" "nenhum commit"
+  assert_contains "$d/out.log" "trabalho parcial desta fase ficou na arvore" "avisou sobre a arvore suja"
+  assert_contains "$d/out.log" "git status --short" "orientou inspecao antes de qualquer descarte"
+  assert_not_contains "$d/out.log" "git clean -fd" "nao sugeriu limpeza global destrutiva"
+fi
+
+# ---------------------------------------------------------------------------
+# 19. --no-verify desliga o gate 3 mesmo no caminho suspeito (sessao sem
+#     escrita). Escolha explicita do dev: o ralph confia no gate 2 sozinho.
+# ---------------------------------------------------------------------------
+if case_enabled no-verify; then
+  header "19. --no-verify desliga o gate 3 ate no caminho suspeito"
+  d=$(new_case no-verify)
+  rc=$(run_ralph "$d" empty-diff --engine claude --test-cmd "$d/test.sh" --max-cycles 1 --no-verify)
+  assert_eq 0 "$rc" "exit 0 (gate 2 verde decide sozinho)"
+  assert_contains "$d/out.log" "Gate 3 pulado (--no-verify)" "skip explicito logado"
+  assert_contains "$d/out.log" "Gate 2 verde contra o codigo em HEAD" "mensagem nao menciona gate 3 (nao rodou)"
+  if test -f "$d/state/verify_calls"; then
+    bad "nenhuma sessao verificadora gasta"
+  else
+    ok "nenhuma sessao verificadora gasta"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 20. RALPH_VERIFY=auto (opt-in): caminho feliz (sessao escreveu + suite verde)
+#     pula o gate 3; a fase ainda commita.
+# ---------------------------------------------------------------------------
+if case_enabled verify-auto; then
+  header "20. RALPH_VERIFY=auto pula o gate 3 no caminho feliz"
+  d=$(new_case verify-auto)
+  rc=$(CASE_VERIFY=auto run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "exit 0"
+  assert_eq 3 "$(commits "$d")" "fases commitadas"
+  assert_contains "$d/out.log" "Gate 3 pulado: a sessao escreveu codigo" "skip logado com a causa"
+  if test -f "$d/state/verify_calls"; then
+    bad "nenhuma sessao verificadora gasta"
+  else
+    ok "nenhuma sessao verificadora gasta"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 21. Verificador Claude roda com Sonnet/high por default;
+#     RALPH_VERIFY_MODEL e RALPH_CLAUDE_VERIFY_EFFORT sobrepoem.
+# ---------------------------------------------------------------------------
+if case_enabled verify-model; then
+  header "21. verificador Claude usa Sonnet/high (env sobrepoe)"
+  d=$(new_case verify-model)
+  # fase ja implementada em HEAD: sessao nao escreve -> gate 3 roda em auto
+  mkdir -p "$d/repo/src"
+  echo "impl previo" > "$d/repo/src/impl-1.txt"
+  git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "feat: trabalho previo"
+  rc=$(run_ralph "$d" already-done --engine claude --test-cmd "$d/test.sh" --max-cycles 1)
+  assert_eq 0 "$rc" "exit 0"
+  assert_eq "sonnet" "$(cat "$d/state/verify_model" 2>/dev/null)" "verify chamado com --model sonnet (Sonnet mais recente)"
+  assert_eq "high" "$(cat "$d/state/verify_effort" 2>/dev/null)" "verify chamado com --effort high"
+  assert_contains "$d/out.log" "modelo: sonnet" "log do gate 3 informa o modelo"
+
+  d2=$(new_case verify-model-override)
+  mkdir -p "$d2/repo/src"
+  echo "impl previo" > "$d2/repo/src/impl-1.txt"
+  git -C "$d2/repo" add -A && git -C "$d2/repo" commit -q -m "feat: trabalho previo"
+  rc=$(CASE_VERIFY_MODEL=opus CASE_CLAUDE_VERIFY_EFFORT=xhigh run_ralph "$d2" already-done --engine claude --test-cmd "$d2/test.sh" --max-cycles 1)
+  assert_eq 0 "$rc" "exit 0 (override)"
+  assert_eq "opus" "$(cat "$d2/state/verify_model" 2>/dev/null)" "RALPH_VERIFY_MODEL sobrepoe o default"
+  assert_eq "xhigh" "$(cat "$d2/state/verify_effort" 2>/dev/null)" "RALPH_CLAUDE_VERIFY_EFFORT sobrepoe o default"
+fi
+
+# ---------------------------------------------------------------------------
+# 13. Laravel Sail com containers de pe -> gate 2 usa `vendor/bin/sail test`
+#     (e NAO `composer test`, que rodaria no host sem PHP nem banco)
+# ---------------------------------------------------------------------------
+if case_enabled sail-up; then
+  header "13. Laravel Sail up -> gate 2 roda sail test"
+  d=$(new_case sail-up)
+  make_sail_fixture "$d/repo" up
+  git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "chore: sail"
+  rc=$(run_ralph "$d" ok --engine claude)   # sem --test-cmd: exercita a deteccao
+  assert_eq 0 "$rc" "exit 0"
+  assert_contains "$d/out.log" "comando de teste (detectado): vendor/bin/sail test" "detectou sail test"
+  assert_not_contains "$d/out.log" "composer test" "composer test nao foi escolhido"
+  assert_contains "$d/out.log" "Sail: containers de pe" "checou containers no preflight"
+  # base = 2 commits (fixture + chore: sail) + 2 fases
+  assert_eq 4 "$(commits "$d")" "fases commitadas (gate 2 rodou de verdade)"
+  assert_eq 2 "$(cat "$d/state/test_calls")" "a suite rodou 1x por fase, via sail"
+  # o agente precisa saber qual runner usar, senao roda php artisan test no host
+  assert_contains "$d/repo/.phases/prompts/phase-01.cycle-1.txt" "vendor/bin/sail test" "prompt informa o comando de teste"
+  assert_contains "$d/repo/.phases/prompts/phase-01.cycle-1.txt" "Nunca rode essas ferramentas no host" "prompt avisa sobre o container"
+fi
+
+# ---------------------------------------------------------------------------
+# 14. Sail com containers parados -> abort no preflight, zero tokens
+# ---------------------------------------------------------------------------
+if case_enabled sail-down; then
+  header "14. Laravel Sail down -> abort no preflight"
+  d=$(new_case sail-down)
+  make_sail_fixture "$d/repo" down
+  git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "chore: sail"
+  rc=$(run_ralph "$d" ok --engine claude)
+  assert_eq 1 "$rc" "exit 1"
+  assert_contains "$d/out.log" "containers nao estao de pe" "abortou com a causa"
+  assert_contains "$d/out.log" "vendor/bin/sail up -d" "instruiu como subir o ambiente"
+  assert_eq 2 "$(commits "$d")" "nenhum commit de fase"
+  if test -f "$d/state/impl_calls"; then
+    bad "nenhuma sessao de engine iniciada"
+  else
+    ok "nenhuma sessao de engine iniciada"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 15. --test-cmd sobrepoe a deteccao de Sail
+# ---------------------------------------------------------------------------
+if case_enabled sail-override; then
+  header "15. --test-cmd sobrepoe a deteccao de Sail"
+  d=$(new_case sail-override)
+  make_sail_fixture "$d/repo" down   # containers parados, mas o cmd nao usa sail
+  git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "chore: sail"
+  rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "exit 0 (nao checa containers para cmd sem sail)"
+  assert_contains "$d/out.log" "comando de teste (--test-cmd)" "override respeitado"
+  assert_eq 4 "$(commits "$d")" "fases commitadas"
+fi
+
+# ---------------------------------------------------------------------------
+# 16. Laravel sem Sail -> composer test (regressao: nao vira sail test)
+# ---------------------------------------------------------------------------
+if case_enabled laravel-no-sail; then
+  header "16. Laravel sem Sail -> composer test"
+  d=$(new_case laravel-no-sail)
+  touch "$d/repo/artisan"
+  printf '{ "scripts": { "test": "phpunit" } }\n' > "$d/repo/composer.json"
+  git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "chore: laravel"
+  # nao roda ate o fim: so precisamos do preflight resolvendo o comando
+  run_ralph "$d" empty-diff --engine claude --max-cycles 1 > /dev/null
+  assert_contains "$d/out.log" "comando de teste (detectado): composer test" "sem sail -> composer test"
+  assert_not_contains "$d/out.log" "Sail" "nao mencionou Sail"
+fi
+
+# ---------------------------------------------------------------------------
+# 22. Codex usa o preset bc-harness, Luna/high e autonomia sem prompt; a
+#     verificacao preserva o mesmo modelo/esforco, mas fica read-only.
+# ---------------------------------------------------------------------------
+if case_enabled codex-runtime; then
+  header "22. runtime Codex usa bc-harness + Luna/high"
+  d=$(new_case codex-runtime)
+  rc=$(run_ralph "$d" ok --engine codex --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "exit 0"
+  assert_contains "$d/state/impl_args" "--profile" "perfil foi passado explicitamente"
+  assert_contains "$d/state/impl_args" "bc-harness" "usa o perfil bc-harness"
+  assert_contains "$d/state/impl_args" "gpt-5.6-luna" "implementacao usa Luna"
+  assert_contains "$d/state/impl_args" 'model_reasoning_effort="high"' "implementacao usa esforco high"
+  assert_contains "$d/state/impl_args" "--dangerously-bypass-approvals-and-sandbox" "implementacao autonoma sem prompts"
+  assert_contains "$d/state/impl_args" "--dangerously-bypass-hook-trust" "hooks previamente auditados nao pedem confirmacao"
+  assert_contains "$d/state/impl_args" "--ephemeral" "sessao Codex nao persiste estado"
+  assert_contains "$d/state/verify_args" "read-only" "verificador Codex fica read-only"
+  assert_contains "$d/state/verify_args" "gpt-5.6-luna" "verificador Codex usa Luna"
+  assert_contains "$d/state/verify_args" "--dangerously-bypass-hook-trust" "verificador tambem opera sem prompt de trust"
+  assert_not_contains "$d/state/verify_args" "--dangerously-bypass-approvals-and-sandbox" "verificador nao recebe bypass"
+fi
+
+# ---------------------------------------------------------------------------
+# 23. Codex pode imprimir a resposta final 2x e adicionar Markdown. O parser
+#     normaliza e deduplica vereditos semanticamente identicos.
+# ---------------------------------------------------------------------------
+if case_enabled verify-duplicate-markdown; then
+  header "23. verificador Codex duplicado/Markdown nao gera falso negativo"
+  d=$(new_case verify-duplicate-markdown)
+  rc=$(run_ralph "$d" verify-duplicate-markdown --engine codex --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "exit 0 apesar da duplicacao textual"
+  assert_eq 3 "$(commits "$d")" "as duas fases foram validadas e commitadas"
+  assert_contains "$d/repo/.phases/logs/phase-01.verify-1.log" "**TASK 1: DONE**" "fixture reproduziu Markdown"
+  assert_contains "$d/out.log" "2/2 tasks confirmadas" "cobertura sem contagem duplicada"
+fi
+
+# ---------------------------------------------------------------------------
+# 24. Sem checkbox nao existe contrato task a task: aborta no preflight antes
+#     de gastar uma sessao, exceto quando --no-verify e escolha explicita.
+# ---------------------------------------------------------------------------
+if case_enabled phase-without-tasks; then
+  header "24. fase sem checkbox aborta antes do engine"
+  d=$(new_case phase-without-tasks)
+  (
+    cd "$d/repo" || exit 1
+    sed -i 's/^- \[ \] /- /' .spec/init/project-phases.md
+    git add -A
+    git commit -q -m "chore: fases sem checkboxes"
+  )
+  rc=$(run_ralph "$d" ok --engine codex --test-cmd "$d/test.sh")
+  assert_eq 1 "$rc" "exit 1"
+  assert_contains "$d/out.log" "Contrato de verificacao violado" "preflight explicou a falha"
+  if [ -f "$d/state/impl_calls" ]; then
+    bad "nenhuma sessao de engine iniciada"
+  else
+    ok "nenhuma sessao de engine iniciada"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 25. O executor nao pode reescrever o plano que autoriza sua propria fase.
+# ---------------------------------------------------------------------------
+if case_enabled planning-guard; then
+  header "25. alteracao de .spec pelo executor reprova o guardrail"
+  d=$(new_case planning-guard)
+  rc=$(run_ralph "$d" mutate-plan --engine codex --test-cmd "$d/test.sh" --max-cycles 1)
+  assert_eq 1 "$rc" "exit 1"
+  assert_contains "$d/out.log" "mudaram durante sessao de implementacao" "guardrail detectou plano mutado"
+  assert_eq 1 "$(commits "$d")" "ralph nao commitou codigo nem plano adulterado"
+  if [ -f "$d/repo/.phases/.progress" ]; then
+    assert_not_contains "$d/repo/.phases/.progress" "phase-01.md" "fase nao foi marcada como pronta"
+  else
+    ok "fase nao foi marcada como pronta"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 26. O engine nao pode tomar ownership dos commits da fase.
+# ---------------------------------------------------------------------------
+if case_enabled executor-commit; then
+  header "26. commit criado pelo executor reprova o guardrail"
+  d=$(new_case executor-commit)
+  rc=$(run_ralph "$d" agent-commit --engine codex --test-cmd "$d/test.sh" --max-cycles 1)
+  assert_eq 1 "$rc" "exit 1"
+  assert_contains "$d/out.log" "HEAD mudou durante sessao de implementacao" "guardrail detectou commit indevido"
+  assert_eq "feat: commit indevido do agente" "$(git -C "$d/repo" log -1 --pretty=%s)" "commit indevido fica visivel para recuperacao manual"
+  if [ -f "$d/repo/.phases/.progress" ]; then
+    assert_not_contains "$d/repo/.phases/.progress" "phase-01.md" "fase nao foi marcada como pronta"
+  else
+    ok "fase nao foi marcada como pronta"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 27. Hook auto-descoberto recebe o ciclo de vida completo do run.
+# ---------------------------------------------------------------------------
+if case_enabled hook-events; then
+  header "27. hook de eventos (auto-descoberta)"
+  d=$(new_case hook-events)
+  mkdir -p "$d/repo/scripts"
+cat > "$d/repo/scripts/ralph-hook.sh" <<'HOOK'
+#!/usr/bin/env bash
+printf '%s|%s|%s|%s|%s\n' "$1" "${RALPH_PHASE_NUM:-}" "${RALPH_PHASE_TOTAL:-}" "${RALPH_ENGINE:-}" "$2" >> "$RALPH_HOOK_SINK"
+HOOK
+  chmod +x "$d/repo/scripts/ralph-hook.sh"
+  git -C "$d/repo" add -A
+  git -C "$d/repo" commit -q -m "chore: hook"
+
+  export RALPH_HOOK_SINK="$d/events.txt"
+  rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  unset RALPH_HOOK_SINK
+
+  assert_eq 0 "$rc" "exit 0"
+  assert_contains "$d/out.log" "Hook de eventos:" "preflight anuncia o hook descoberto"
+  assert_contains "$d/events.txt" "run_start|" "emitiu run_start"
+  assert_contains "$d/events.txt" "run_start|||claude|" "run_start recebe RALPH_ENGINE"
+  assert_contains "$d/events.txt" "phase_start|1|2|claude|" "phase_start traz numero, total e engine"
+  assert_contains "$d/events.txt" "phase_done|" "emitiu phase_done"
+  assert_contains "$d/events.txt" "run_end|" "emitiu run_end"
+  assert_contains "$d/events.txt" "tudo verde" "run_end carrega o veredito"
+fi
+
+# ---------------------------------------------------------------------------
+# 28. Gate vermelho emite eventos; erro do hook continua best-effort.
+# ---------------------------------------------------------------------------
+if case_enabled hook-resilience; then
+  header "28. hook em gate vermelho e hook quebrado"
+  d=$(new_case hook-resilience)
+  mkdir -p "$d/repo/scripts"
+  cat > "$d/repo/scripts/ralph-hook.sh" <<'HOOK'
+#!/usr/bin/env bash
+printf '%s|%s\n' "$1" "$2" >> "$RALPH_HOOK_SINK"
+HOOK
+  chmod +x "$d/repo/scripts/ralph-hook.sh"
+  git -C "$d/repo" add -A
+  git -C "$d/repo" commit -q -m "chore: hook"
+
+  export RALPH_HOOK_SINK="$d/events.txt"
+  rc=$(run_ralph "$d" test-red-once --engine claude --test-cmd "$d/test.sh" --max-cycles 2)
+  unset RALPH_HOOK_SINK
+  assert_eq 0 "$rc" "exit 0 apos o ciclo de correcao"
+  assert_contains "$d/events.txt" "gate_fail|" "gate vermelho emitiu gate_fail"
+  assert_contains "$d/events.txt" "cycle_start|" "ciclo emitiu cycle_start"
+
+  d2=$(new_case hook-broken)
+  mkdir -p "$d2/repo/scripts"
+  printf '#!/usr/bin/env bash\necho boom >&2\nexit 1\n' > "$d2/repo/scripts/ralph-hook.sh"
+  chmod +x "$d2/repo/scripts/ralph-hook.sh"
+  git -C "$d2/repo" add -A
+  git -C "$d2/repo" commit -q -m "chore: hook quebrado"
+  rc2=$(run_ralph "$d2" ok --engine claude --test-cmd "$d2/test.sh")
+  assert_eq 0 "$rc2" "hook quebrado nao derruba o run"
+  assert_eq 4 "$(commits "$d2")" "fases seguiram commitando"
+  assert_contains "$d2/out.log" "hook: evento" "falha do hook foi avisada sem abortar"
+fi
+
+# ---------------------------------------------------------------------------
+# 29. Vereditos conflitantes para a mesma task continuam fail-closed.
+# ---------------------------------------------------------------------------
+if case_enabled verify-conflict; then
+  header "29. verificador com DONE/INCOMPLETE conflitantes reprova"
+  d=$(new_case verify-conflict)
+  rc=$(run_ralph "$d" verify-conflict --engine codex --test-cmd "$d/test.sh" --max-cycles 1)
+  assert_eq 1 "$rc" "exit 1"
+  assert_contains "$d/out.log" "vereditos conflitantes" "conflito foi explicitamente detectado"
+  assert_eq 1 "$(commits "$d")" "nenhuma fase foi commitada"
+fi
+
+# ---------------------------------------------------------------------------
+# 30. Linhas DONE parciais nao mascaram exit code vermelho do verificador.
+# ---------------------------------------------------------------------------
+if case_enabled verify-exit-after-done; then
+  header "30. verificador emite DONE e sai 9 -> gate 3 vermelho"
+  d=$(new_case verify-exit-after-done)
+  rc=$(run_ralph "$d" verify-exit-after-done --engine codex --test-cmd "$d/test.sh" --max-cycles 1)
+  assert_eq 1 "$rc" "exit 1"
+  assert_contains "$d/out.log" "processo verificador saiu com codigo 9" "exit code do verificador prevaleceu"
+  assert_eq 1 "$(commits "$d")" "nenhuma fase foi commitada"
+fi
+
+# ---------------------------------------------------------------------------
+# 31. O guardrail e rechecado depois do comando de teste.
+# ---------------------------------------------------------------------------
+if case_enabled test-mutates-plan; then
+  header "31. gate 2 que altera .spec reprova antes do commit"
+  d=$(new_case test-mutates-plan)
+  rc=$(run_ralph "$d" test-mutates-plan --engine codex --test-cmd "$d/test.sh" --max-cycles 1)
+  assert_eq 1 "$rc" "exit 1"
+  assert_contains "$d/out.log" "mudaram durante gate 2" "mutacao pos-teste foi detectada"
+  assert_eq 1 "$(commits "$d")" "plano adulterado nao foi commitado"
+fi
+
+# ---------------------------------------------------------------------------
+# 32. O guardrail e rechecado depois da sessao verificadora.
+# ---------------------------------------------------------------------------
+if case_enabled verify-mutates-plan; then
+  header "32. verificador que altera .spec reprova antes do commit"
+  d=$(new_case verify-mutates-plan)
+  rc=$(run_ralph "$d" verify-mutates-plan --engine codex --test-cmd "$d/test.sh" --max-cycles 1)
+  assert_eq 1 "$rc" "exit 1"
+  assert_contains "$d/out.log" "mudaram durante gate 3" "mutacao pos-verificacao foi detectada"
+  assert_eq 1 "$(commits "$d")" "plano adulterado nao foi commitado"
+fi
+
+# ---------------------------------------------------------------------------
+# 33. --keep-going nunca converte violacao de autoridade em commit WIP.
+# ---------------------------------------------------------------------------
+if case_enabled keep-going-guard; then
+  header "33. --keep-going para em guardrail e nao cria WIP"
+  d=$(new_case keep-going-guard)
+  rc=$(run_ralph "$d" mutate-plan --engine codex --test-cmd "$d/test.sh" --max-cycles 1 --keep-going)
+  assert_eq 1 "$rc" "exit 1"
+  assert_contains "$d/out.log" "--keep-going nao pode continuar nem criar WIP" "violacao de autoridade interrompeu o run"
+  assert_eq 1 "$(commits "$d")" "nenhum WIP engoliu plano adulterado"
+  assert_not_contains "$d/repo/.git/logs/HEAD" "wip(phase" "historico nao contem commit WIP"
+fi
+
+# ---------------------------------------------------------------------------
+# 34. run_start acontece depois do baseline e nao pode adulterar o plano.
+# ---------------------------------------------------------------------------
+if case_enabled hook-mutates-plan; then
+  header "34. hook run_start que altera .spec aborta antes do engine"
+  d=$(new_case hook-mutates-plan)
+  mkdir -p "$d/repo/scripts"
+  cat > "$d/repo/scripts/ralph-hook.sh" <<'HOOK'
+#!/usr/bin/env bash
+if [ "$1" = "run_start" ]; then
+  printf '\n<!-- alterado pelo hook -->\n' >> .spec/init/project-phases.md
+fi
+HOOK
+  chmod +x "$d/repo/scripts/ralph-hook.sh"
+  git -C "$d/repo" add -A
+  git -C "$d/repo" commit -q -m "chore: hook mutante"
+
+  rc=$(run_ralph "$d" ok --engine codex --test-cmd "$d/test.sh" --keep-going)
+  assert_eq 1 "$rc" "exit 1"
+  assert_contains "$d/out.log" "mudaram durante hook run_start" "baseline detectou mutacao do primeiro evento"
+  assert_eq 2 "$(commits "$d")" "nenhum commit de fase ou WIP"
+  if [ -f "$d/state/impl_calls" ]; then
+    bad "nenhuma sessao de engine iniciada"
+  else
+    ok "nenhuma sessao de engine iniciada"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 35. Hook resistente a TERM recebe KILL e continua best-effort.
+# ---------------------------------------------------------------------------
+if case_enabled hook-timeout; then
+  header "35. hook lento/resistente a TERM nao bloqueia o Ralph"
+  d=$(new_case hook-timeout)
+  mkdir -p "$d/repo/scripts"
+  cat > "$d/repo/scripts/ralph-hook.sh" <<'HOOK'
+#!/usr/bin/env bash
+if [ "$1" = "run_start" ]; then
+  trap '' TERM
+  sleep 5
+fi
+HOOK
+  chmod +x "$d/repo/scripts/ralph-hook.sh"
+  git -C "$d/repo" add -A
+  git -C "$d/repo" commit -q -m "chore: hook lento"
+
+  start=$(date +%s)
+  rc=$(CASE_HOOK_TIMEOUT=1 CASE_HOOK_KILL_AFTER=1 run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  elapsed=$(($(date +%s) - start))
+  assert_eq 0 "$rc" "hook expirado nao derruba o run"
+  assert_contains "$d/out.log" "falhou ou expirou" "timeout foi avisado"
+  if [ "$elapsed" -lt 5 ]; then
+    ok "SIGKILL encerrou o hook antes do sleep (${elapsed}s)"
+  else
+    bad "hook bloqueou alem do limite (${elapsed}s)"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+if [ "$FAIL" -eq 0 ]; then
+  echo -e "${GREEN}TODOS VERDES: $PASS asserts${NC}"
+else
+  echo -e "${RED}FALHAS: $FAIL${NC} / verdes: $PASS"
+fi
+exit $((FAIL > 0 ? 1 : 0))

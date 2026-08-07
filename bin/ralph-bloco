@@ -1,0 +1,220 @@
+#!/usr/bin/env bash
+#
+# Executa um bloco de fases pelo ralph.sh e para na fase alvo.
+#
+# Existe por três razões, todas descobertas quebrando alguma coisa. O relato
+# está em docs/HANDOFF.md.
+#
+#   1. O ralph.sh não tem `--to`: sem isto ele vai da fase inicial até a 39.
+#
+#   2. Matar o ralph.sh não mata a sessão do engine. O orquestrador lança
+#      `claude -p` (ou codex) como filho; um kill no pai deixa a sessão viva
+#      escrevendo no repositório FORA de qualquer gate. Aconteceu na Fase 11:
+#      o ralph morreu e a sessão seguiu por 37 minutos. Aqui o lançamento usa
+#      setsid (grupo próprio, para não alcançar um ralph de outro projeto) e a
+#      parada derruba o grupo inteiro.
+#
+#   3. O modelo do gate 3 é política DESTE projeto, não do harness. O ralph.sh
+#      é global e serve outros repositórios — não se altera para impor uma
+#      escolha daqui. A trava mora neste wrapper.
+#
+#   4. O ralph.sh recria `.phases` no início. O log que governa a parada não
+#      pode morar lá: um arquivo já aberto seria removido e o wrapper perderia
+#      o marcador da fase seguinte. O log fica no diretório Git, fora da árvore.
+#
+# Uso:  bin/ralph-bloco <fase-inicial> <fase-final> [engine]
+#       bin/ralph-bloco 14 15              # engine padrão: codex
+#       bin/ralph-bloco 14 15 claude
+set -uo pipefail
+
+DE="${1:-}"
+ATE="${2:-}"
+ENGINE_ARG="${3:-}"
+
+if [ -z "$DE" ] || [ -z "$ATE" ]; then
+  echo "uso: bin/ralph-bloco <fase-inicial> <fase-final> [codex|claude]" >&2
+  echo "     ex: bin/ralph-bloco 14 15      # detecta o harness ativo" >&2
+  exit 1
+fi
+case "$DE$ATE" in *[!0-9]*) echo "as fases precisam ser números." >&2; exit 1 ;; esac
+[ "$ATE" -ge "$DE" ] || { echo "a fase final ($ATE) é menor que a inicial ($DE)." >&2; exit 1; }
+
+# ── Qual harness está ativo ─────────────────────────────────────────────────
+# Marcadores verificados empiricamente, não deduzidos:
+#
+#   Claude Code : CLAUDECODE=1 e CLAUDE_CODE_SESSION_ID
+#   Codex CLI   : CODEX_THREAD_ID e CODEX_CI (dentro de `codex exec`)
+#
+# CODEX_MANAGED_BY_* fica de fora: vem do instalador npm e sobrevive fora de
+# uma sessão. OPENAI_MODEL também não serve — está definida nos dois ambientes.
+#
+# O ralph faz `env -u CLAUDECODE claude ...` ao lançar a sessão filha, então
+# dentro dela o marcador do claude não existe. Isso não afeta a detecção aqui:
+# este wrapper roda no harness do operador, antes de qualquer sessão.
+detectar_harness() {
+  if [ -n "${CLAUDECODE:-}" ] || [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then
+    echo "claude"
+  elif [ -n "${CODEX_THREAD_ID:-}" ] || [ -n "${CODEX_CI:-}" ]; then
+    echo "codex"
+  else
+    echo ""
+  fi
+}
+
+DETECTADO="$(detectar_harness)"
+
+if [ -n "$ENGINE_ARG" ]; then
+  ENGINE="$ENGINE_ARG"
+  if [ -n "$DETECTADO" ] && [ "$DETECTADO" != "$ENGINE" ]; then
+    echo "nota: harness ativo é '$DETECTADO', mas o engine pedido é '$ENGINE'."
+    echo "      usando '$ENGINE' — o argumento vence a detecção."
+  fi
+elif [ -n "$DETECTADO" ]; then
+  ENGINE="$DETECTADO"
+  echo "harness detectado: $ENGINE"
+else
+  echo "não consegui detectar o harness ativo (nem CLAUDECODE nem CODEX_THREAD_ID)." >&2
+  echo "informe o engine: bin/ralph-bloco $DE $ATE <codex|claude>" >&2
+  exit 1
+fi
+
+case "$ENGINE" in
+  claude|codex) ;;
+  *) echo "engine inválido: '$ENGINE'. Use codex ou claude." >&2; exit 1 ;;
+esac
+
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+
+# ── Perfil do engine ────────────────────────────────────────────────────────
+# A política de execução vive em .ralph/<engine>.env, versionada. Não no
+# ralph.sh: ele é global e serve outros repositórios — alterá-lo para impor uma
+# escolha deste projeto mudaria o comportamento de quem nada tem a ver com ele.
+#
+# O parsing é restrito de propósito: só `CHAVE=valor` com chave em maiúsculas.
+# Nada de `source`, que executaria o arquivo — este script roda sem supervisão.
+PERFIL="${REPO}/.ralph/${ENGINE}.env"
+[ -f "$PERFIL" ] || { echo "perfil não encontrado: $PERFIL" >&2; exit 1; }
+
+while IFS= read -r linha || [ -n "$linha" ]; do
+  case "$linha" in ''|'#'*) continue ;; esac
+  case "$linha" in
+    [A-Z_]*=*)
+      chave="${linha%%=*}"
+      valor="${linha#*=}"
+      case "$chave" in
+        RALPH_*)
+          if [ -n "$(eval "echo \${$chave:-}")" ] && [ "$(eval "echo \$$chave")" != "$valor" ]; then
+            echo "aviso: $chave='$(eval "echo \$$chave")' do ambiente foi ignorado."
+            echo "       o perfil $PERFIL define '$valor', e é ele que vale aqui."
+          fi
+          export "$chave=$valor"
+          ;;
+        *) echo "aviso: chave fora do prefixo RALPH_ ignorada em $PERFIL: $chave" ;;
+      esac
+      ;;
+    *) echo "aviso: linha ignorada em $PERFIL: $linha" ;;
+  esac
+done < "$PERFIL"
+
+VERIFICADOR="${RALPH_VERIFY_MODEL:-<AUSENTE NO PERFIL>}"
+# Qual ralph usar. Cada harness pode ter o seu — o do plugin bc-harness, ou um
+# mantido em catálogo próprio com ajustes que o uso ensinou. Definir
+# RALPH_BIN no perfil do engine é o caminho recomendado: fica versionado junto
+# da política, e some a chance de o bloco rodar com o orquestrador errado.
+RALPH="${RALPH_BIN:-$HOME/.claude-profiles/bc/plugins/marketplaces/beer-and-code/scripts/ralph.sh}"
+GIT_DIR="$(git -C "$REPO" rev-parse --absolute-git-dir)"
+LOG_DIR="${GIT_DIR}/ralph-logs"
+LOG="${LOG_DIR}/ralph-${DE}-${ATE}.log"
+
+# ── Conferência seca ────────────────────────────────────────────────────────
+# Vem ANTES das validações fatais de propósito: é ela que diagnostica um
+# RALPH_BIN errado ou um perfil incompleto. Abortar antes de mostrar o quadro
+# obrigaria a descobrir os problemas um por vez.
+if [ "${RALPH_DRY_RUN:-}" = "1" ]; then
+  echo "── conferência seca ──"
+  echo "  harness detectado : ${DETECTADO:-<nenhum>}"
+  echo "  engine em uso     : $ENGINE$([ -n "$ENGINE_ARG" ] && echo ' (por argumento)' || echo ' (por detecção)')"
+  echo "  perfil            : $PERFIL"
+  echo "  fases             : $DE..$ATE, parando antes da $((ATE + 1))"
+  echo "  comando de teste  : bin/check"
+  echo "  log de controle   : $LOG"
+  if [ -x "$RALPH" ]; then
+    echo "  ralph             : $RALPH ✓"
+  else
+    echo "  ralph             : $RALPH  ✗ NÃO EXECUTÁVEL"
+    [ -n "${RALPH_BIN:-}" ] || echo "                      defina RALPH_BIN em $PERFIL"
+  fi
+  [ -n "${RALPH_VERIFY_MODEL:-}" ] || echo "  ATENÇÃO           : perfil sem RALPH_VERIFY_MODEL"
+  env | grep '^RALPH_' | grep -v '^RALPH_DRY_RUN=' | sort | sed 's/^/  /'
+  echo "  árvore            : $(git -C "$REPO" status --porcelain | wc -l) pendente(s)"
+  exit 0
+fi
+
+if [ ! -x "$RALPH" ]; then
+  echo "ralph não encontrado ou sem permissão de execução: $RALPH" >&2
+  [ -n "${RALPH_BIN:-}" ] \
+    && echo "      (veio de RALPH_BIN)" >&2 \
+    || echo "      defina RALPH_BIN em $PERFIL para apontar o seu." >&2
+  exit 1
+fi
+
+# Sem RALPH_VERIFY_MODEL o gate 3 cai no default do engine — haiku no claude,
+# herança de ~/.codex/config.toml no codex. Nenhum dos dois é piso aceitável
+# aqui, e descobrir isso pelo log depois de uma fase inteira é tarde.
+if [ -z "${RALPH_VERIFY_MODEL:-}" ]; then
+  echo "erro: $PERFIL não define RALPH_VERIFY_MODEL." >&2
+  echo "      sem ele o gate 3 cairia no default do engine, que não é piso deste projeto." >&2
+  exit 1
+fi
+
+mkdir -p "$REPO/.phases" "$LOG_DIR"
+cd "$REPO" || exit 1
+
+# O preflight do ralph também aborta com árvore suja, mas só depois de subir a
+# sessão. Falhar aqui é mais barato.
+if [ -n "$(git status --porcelain)" ]; then
+  echo "árvore suja — o ralph commita por fase e engoliria estas mudanças:" >&2
+  git status --short >&2
+  exit 1
+fi
+
+# --test-cmd é obrigatório: sem ele a detecção por manifest encontra
+# scripts.test no composer.json e escolhe `composer test`, que roda só o Pest.
+# É o erro da Fase 1 — PHPStan quebrado reportado como verde.
+setsid "$RALPH" --engine "$ENGINE" --test-cmd "bin/check" --from "$DE" > "$LOG" 2>&1 &
+PID=$!
+sleep 2
+PGID="$(ps -o pgid= -p "$PID" 2>/dev/null | tr -d ' ')"
+
+if [ -z "$PGID" ]; then
+  echo "não consegui ler o PGID — abortando para não repetir o órfão da Fase 11." >&2
+  kill "$PID" 2>/dev/null
+  exit 1
+fi
+
+echo "ralph rodando: engine=$ENGINE verificador=$VERIFICADOR PID=$PID PGID=$PGID"
+echo "fases $DE..$ATE · log: $LOG"
+
+PROXIMA=$((ATE + 1))
+while true; do
+  # Gatilho: a fase SEGUINTE começou. Não usar "feat(phase-N)" no log — quando
+  # a própria sessão commita (com a convenção do projeto, não a do ralph), o
+  # orquestrador marca a fase como já implementada em HEAD e nunca emite essa
+  # linha. Foi assim que o ralph entrou na Fase 14 sem o guardião disparar.
+  # `[N/39] Phase` é emitida sempre, com ou sem commit.
+  if grep -qE "\[${PROXIMA}/[0-9]+\] Phase" "$LOG" 2>/dev/null; then
+    kill -- "-$PGID" 2>/dev/null
+    sleep 2
+    kill -9 -- "-$PGID" 2>/dev/null
+    echo "PARADO: fase $ATE concluída; grupo derrubado antes da fase $PROXIMA."
+    break
+  fi
+  if ! kill -0 "$PID" 2>/dev/null; then
+    kill -- "-$PGID" 2>/dev/null   # varre qualquer filho sobrevivente
+    echo "RALPH ENCERROU SOZINHO (fase falhou ou fim) — ver $LOG"
+    break
+  fi
+  sleep 15
+done
+
+echo "árvore: $(git status --porcelain | wc -l) arquivo(s) pendente(s)"
