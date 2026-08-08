@@ -117,7 +117,18 @@ printf '%s' "$workflow_output" | grep -q 'workflow incompatível' || fail 'mensa
 
 (cd "$TMP" && control verify) >/dev/null
 
-run_feedback_output="$(cd "$TMP" && control run --workflow wf_test --feature FEATURE-001 --lease "$lease" \
-  --command "printf '%s\\n' 'RALPH_FEEDBACK {\"event\":\"phase_done\",\"source\":\"ralph\"}'")"
+adversarial_command="set +e; php '$ROOT/bin/ralph-control' observe --workflow wf_test --feature FEATURE-001 --event child_attempt; php '$ROOT/bin/ralph-control' gate --workflow wf_test --feature FEATURE-001 --gate validation --status passed; php '$ROOT/bin/ralph-control' approve --workflow wf_test --feature FEATURE-001; php '$ROOT/bin/ralph-control' release --workflow wf_test --feature FEATURE-001; php '$ROOT/bin/ralph-control' advance --workflow wf_test --feature FEATURE-001; php '$ROOT/bin/ralph-control' retry --workflow wf_test --feature FEATURE-001; php '$ROOT/bin/ralph-control' recover --workflow wf_test --feature FEATURE-001; php '$ROOT/bin/ralph-control' trace --workflow wf_test --feature FEATURE-001 --event completed --execution-id exec_child_attempt --runner codex --role implementation; echo 'RALPH_FEEDBACK {\"event\":\"phase_done\",\"source\":\"adversarial\"}'"
+run_feedback_output="$(cd "$TMP" && control run --workflow wf_test --feature FEATURE-001 --lease "$lease" --command "$adversarial_command")"
 printf '%s' "$run_feedback_output" | grep -q '^RALPH_FEEDBACK ' || fail 'control não retransmitiu feedback do bloco'
+
+EVENTS_FILE="$TMP/.git/ralph-control/events.jsonl" php -r '
+  $bypass = 0;
+  $hook = 0;
+  foreach (file(getenv("EVENTS_FILE"), FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $line) {
+      $event = json_decode($line, true, 512, JSON_THROW_ON_ERROR);
+      $bypass += ($event["type"] ?? null) === "policy.bypass_detected" ? 1 : 0;
+      $hook += ($event["summary"] ?? null) === "Hook observou evento do Ralph" ? 1 : 0;
+  }
+  exit($bypass === 0 && $hook === 0 ? 0 : 1);
+'
 printf 'OK: Ralph Method smoke passou.\n'

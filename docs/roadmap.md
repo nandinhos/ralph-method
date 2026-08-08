@@ -1,21 +1,21 @@
 # Roadmap do Ralph Method
 
-## Próxima entrega — engine OpenCode (`v0.4.0` proposta)
+## Próxima entrega — engine OpenCode (`v0.4.0` em implementação)
 
 O trabalho será executado isoladamente na branch `feat/opencode-engine`. A
 engine somente será promovida depois da regressão completa, de uma execução
 real pelo próprio OpenCode e de um teste de campo em projeto real.
 
-- [ ] fechar a capability: executor sem lease e teste negativo de transição;
-- [ ] provar término do grupo no caminho `ralph-control`, inclusive PID raiz que sai;
-- [ ] congelar o contrato agnóstico de runner e a caracterização de Codex/Claude;
-- [ ] introduzir a seam mínima sem migrar Codex/Claude prematuramente;
-- [ ] implementar preflight, execução e parser JSONL do OpenCode;
-- [ ] registrar sessão, provider e modelo no `ralph-trace` sem inferência indevida;
-- [ ] adicionar perfil, doctor, install/uninstall e seleção condicional;
+- [x] fechar a capability: executor sem contexto/lease e teste negativo de transição;
+- [x] provar término do grupo no caminho `ralph-control`, inclusive PID raiz que sai;
+- [x] congelar o contrato agnóstico de runner e a caracterização de Codex/Claude;
+- [x] introduzir a seam mínima sem migrar Codex/Claude prematuramente;
+- [x] implementar preflight, execução e parser JSONL do OpenCode;
+- [x] registrar sessão, provider e modelo no `ralph-trace` sem inferência indevida;
+- [x] adicionar perfil, doctor, install/uninstall e seleção condicional;
 - [ ] validar permissões read-only do gate de verificação;
-- [ ] executar fixtures negativas e regressão completa;
-- [ ] provar uma sessão real em fixture descartável;
+- [x] executar fixtures negativas e regressão completa;
+- [x] provar uma sessão real em fixture descartável;
 - [ ] realizar teste de campo em worktree isolada de projeto real;
 - [ ] revisar adversarialmente e preparar promoção para `main`.
 
@@ -23,6 +23,7 @@ O desenho detalhado, os riscos e os critérios estão em
 [`architecture/opencode-engine-plan.md`](architecture/opencode-engine-plan.md).
 
 - [x] prova exploratória real em fixture isolado, com output esperado e check;
+- [x] prova complexa real com oráculo externo, hashes protegidos, trace e relatório `0002`;
 
 ## 0.3.1 — certificação de sessões CLI
 
@@ -32,7 +33,7 @@ O desenho detalhado, os riscos e os critérios estão em
 - [x] publicar providers funcionais e runners disponíveis no dry-run;
 - [x] selecionar runners em ordem determinística, sem fallback silencioso;
 - [x] fixtures offline de OpenCode e Hermes com bloqueio de geração;
-- [ ] adapters de execução OpenCode e Hermes.
+- [ ] adapter de execução Hermes; o adapter OpenCode foi entregue na v0.4.0.
 
 ## 0.1.0 — extração do núcleo
 
@@ -60,6 +61,6 @@ O desenho detalhado, os riscos e os critérios estão em
 - [x] fixture offline de provider funcional, não autenticado e unsupported;
 - [ ] contrato de adapter Codex;
 - [ ] fixture e adapter Claude;
-- [ ] adapter de execução OpenCode;
+- [x] adapter de execução OpenCode (entregue na v0.4.0);
 - [ ] Hermes/agy como delegações filhas;
 - [ ] regressão de execução multiprovider.

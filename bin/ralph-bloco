@@ -32,7 +32,7 @@ ATE="${2:-}"
 ENGINE_ARG="${3:-}"
 
 if [ -z "$DE" ] || [ -z "$ATE" ]; then
-  echo "uso: bin/ralph-bloco <fase-inicial> <fase-final> [codex|claude]" >&2
+  echo "uso: bin/ralph-bloco <fase-inicial> <fase-final> [codex|claude|opencode]" >&2
   echo "     ex: bin/ralph-bloco 14 15      # detecta o harness ativo" >&2
   exit 1
 fi
@@ -79,8 +79,8 @@ else
 fi
 
 case "$ENGINE" in
-  claude|codex) ;;
-  *) echo "engine inválido: '$ENGINE'. Use codex ou claude." >&2; exit 1 ;;
+  claude|codex|opencode) ;;
+  *) echo "engine inválido: '$ENGINE'. Use codex, claude ou opencode." >&2; exit 1 ;;
 esac
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"

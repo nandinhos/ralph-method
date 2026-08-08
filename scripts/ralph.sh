@@ -22,7 +22,7 @@
 #   ./ralph.sh [opcoes] [caminho-do-arquivo]
 #
 # Opcoes:
-#   --engine codex|claude    engine de implementacao (default: codex)
+#   --engine codex|claude|opencode    engine de implementacao (default: codex)
 #   --from N                 comeca na fase N (limpa do progresso as fases >= N)
 #   --keep-going             continua apos uma fase falhar (default: para)
 #   --max-cycles N           ciclos de correcao por fase (default: 3)
@@ -124,6 +124,8 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 ENGINE="codex"
 INPUT_FILE=""
 FROM_PHASE=0
@@ -136,6 +138,12 @@ CODEX_PROFILE="${RALPH_CODEX_PROFILE:-bc-harness}"
 CODEX_MODEL="${RALPH_CODEX_MODEL:-gpt-5.6-luna}"
 CODEX_REASONING_EFFORT="${RALPH_CODEX_REASONING_EFFORT:-high}"
 CLAUDE_VERIFY_EFFORT="${RALPH_CLAUDE_VERIFY_EFFORT:-high}"
+OPENCODE_MODEL="${RALPH_OPENCODE_MODEL:-}"
+OPENCODE_VARIANT="${RALPH_OPENCODE_VARIANT:-}"
+OPENCODE_AGENT="${RALPH_OPENCODE_AGENT:-}"
+OPENCODE_AUTO="${RALPH_OPENCODE_AUTO:-0}"
+OPENCODE_PURE="${RALPH_OPENCODE_PURE:-1}"
+ENGINE_RESULT_FILE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -576,8 +584,8 @@ resolve_test_cmd() {
 }
 
 preflight_checks() {
-  if [[ "$ENGINE" != "codex" && "$ENGINE" != "claude" ]]; then
-    fail "Engine invalida: $ENGINE. Use 'codex' ou 'claude'."
+  if [[ "$ENGINE" != "codex" && "$ENGINE" != "claude" && "$ENGINE" != "opencode" ]]; then
+    fail "Engine invalida: $ENGINE. Use 'codex', 'claude' ou 'opencode'."
     exit 1
   fi
 
@@ -613,7 +621,7 @@ preflight_checks() {
         exit 1
         ;;
     esac
-  else
+  elif [[ "$ENGINE" == "claude" ]]; then
     case "$CLAUDE_VERIFY_EFFORT" in
       low|medium|high|xhigh|max) ;;
       *)
@@ -629,11 +637,27 @@ preflight_checks() {
     VERIFY_MODEL="$RALPH_VERIFY_MODEL"
   elif [[ "$ENGINE" == "claude" ]]; then
     VERIFY_MODEL="sonnet"
+  elif [[ "$ENGINE" == "opencode" ]]; then
+    VERIFY_MODEL="$OPENCODE_MODEL"
   else
     VERIFY_MODEL="$CODEX_MODEL"
   fi
 
-  if ! command -v "$ENGINE" &> /dev/null; then
+  if [[ "$ENGINE" == "opencode" ]]; then
+    local opencode_runner="$SCRIPT_DIR/../adapters/opencode/runner.sh"
+    if [ ! -x "$opencode_runner" ]; then
+      fail "adapter OpenCode não encontrado ou sem permissão: $opencode_runner"
+      exit 1
+    fi
+    if ! "$opencode_runner" preflight --model "$OPENCODE_MODEL" >/dev/null; then
+      fail "preflight do adapter OpenCode falhou"
+      exit 1
+    fi
+    if [ "$VERIFY_MODE" != off ] && [ -z "${RALPH_OPENCODE_VERIFY_AGENT:-}" ]; then
+      fail "OpenCode exige RALPH_OPENCODE_VERIFY_AGENT read-only quando o gate 3 está ativo"
+      exit 1
+    fi
+  elif ! command -v "$ENGINE" &> /dev/null; then
     if [[ "$ENGINE" == "codex" ]]; then
       fail "codex CLI nao encontrado. Instale com: npm install -g @openai/codex"
     else
@@ -1010,7 +1034,23 @@ run_engine() {
   while true; do
     local rc=0
 
-    if [[ "$ENGINE" == "codex" ]]; then
+    if [[ "$ENGINE" == "opencode" ]]; then
+      local opencode_runner="$SCRIPT_DIR/../adapters/opencode/runner.sh"
+      local event_file="${log_file}.events.jsonl"
+      ENGINE_RESULT_FILE="${log_file}.result.json"
+      "$opencode_runner" run \
+        --repo-root "$(pwd)" \
+        --prompt-file "$prompt_file" \
+        --events-file "$event_file" \
+        --result-file "$ENGINE_RESULT_FILE" \
+        --mode "$mode" \
+        --execution-id "exec_${RUN_ID}_${mode}_${RALPH_PHASE_NUM:-0}_${RALPH_PHASE_ATTEMPT:-1}" \
+        --model "$OPENCODE_MODEL" \
+        --agent "$OPENCODE_AGENT" \
+        --variant "$OPENCODE_VARIANT" \
+        --auto "$OPENCODE_AUTO" \
+        --pure "$OPENCODE_PURE" | tee "$log_file" || rc=$?
+    elif [[ "$ENGINE" == "codex" ]]; then
       local session_model="$CODEX_MODEL"
       [[ "$mode" == "verify" ]] && session_model="$VERIFY_MODEL"
 
@@ -1067,7 +1107,21 @@ GATE_CAUSE=""
 gate0_engine_finished() {
   local log_file="$1" rc="$2"
 
-  if [[ "$ENGINE" == "claude" ]]; then
+  if [[ "$ENGINE" == "opencode" ]]; then
+    if [ ! -f "$ENGINE_RESULT_FILE" ]; then
+      GATE_CAUSE="O adapter OpenCode terminou sem publicar resultado normalizado."
+      return 1
+    fi
+    # A expressão PHP é literal de propósito; não há expansão shell dentro dela.
+    # shellcheck disable=SC2016
+    if ! php -r '
+      $result = json_decode(file_get_contents($argv[1]), true);
+      exit(is_array($result) && ($result["status"] ?? null) === "completed" && ($result["exit_code"] ?? 1) === 0 && ($result["session_id"] ?? null) !== null && ($result["terminal_event"] ?? null) !== null ? 0 : 1);
+    ' "$ENGINE_RESULT_FILE"; then
+      GATE_CAUSE="O resultado normalizado do OpenCode não comprovou conclusão, sessão e evento terminal."
+      return 1
+    fi
+  elif [[ "$ENGINE" == "claude" ]]; then
     if ! grep -qF '"type":"result"' "$log_file" && ! grep -qF '"type": "result"' "$log_file"; then
       GATE_CAUSE="O engine terminou sem emitir um resultado. Ultimas linhas do output:"$'\n'"$(tail -n 40 "$log_file")"
       return 1

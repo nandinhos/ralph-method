@@ -31,3 +31,12 @@ uma política futura, opt-in e separada.
 Nenhum adapter pode gravar ledger, alterar gates, trocar provider silenciosamente
 ou salvar credenciais. O contrato compartilhado está em
 `schemas/provider-readiness.schema.json`.
+
+## Adapter OpenCode
+
+O primeiro adapter executável está em `adapters/opencode/`. Ele usa
+`opencode run --format json` com modelo explícito, transporte de prompt por
+`--file`, parser fail-closed e resultado em
+`schemas/runner-result.schema.json`. A execução deve ocorrer pelo
+`ralph-control`; chamar o runner isoladamente é apenas um teste de contrato e
+não libera feature nem gate.

@@ -3,7 +3,7 @@
 
 declare(strict_types=1);
 
-const RALPH_METHOD_VERSION = '0.3.1';
+const RALPH_METHOD_VERSION = '0.4.0';
 const RALPH_INSTALL_SCHEMA_VERSION = '1.0.0';
 
 $sourceRoot = realpath(getenv('RALPH_METHOD_SOURCE') ?: dirname(__DIR__)) ?: dirname(__DIR__);
@@ -163,7 +163,7 @@ function providerDefinitions(): array
         'opencode' => [
             'auth' => ['args' => ['auth', 'list'], 'classifier' => 'opencode_credentials'],
             'health' => ['args' => ['models'], 'classifier' => 'opencode_models'],
-            'runner_supported' => false,
+            'runner_supported' => true,
             'capabilities' => ['execution', 'model_selection', 'diagnostics'],
         ],
         'hermes' => [
@@ -578,14 +578,16 @@ function managedSources(): array
         'scripts/ralph-run-independent-gate.sh', 'scripts/ralph-run-quality.sh',
         'scripts/ralph-run-runtime-evidence.sh',
         'schemas/feedback-event.schema.json', 'schemas/provider-readiness.schema.json',
-        'adapters/README.md',
+        'schemas/runner-result.schema.json',
+        'adapters/README.md', 'adapters/opencode/runner.sh',
+        'adapters/opencode/parser.php', 'adapters/opencode/contract.md',
     ];
 }
 
 /** @return list<string> */
 function generatedPaths(): array
 {
-    return ['.ralph/method.json', '.ralph/providers.json', '.ralph/codex.env', '.ralph/claude.env'];
+    return ['.ralph/method.json', '.ralph/providers.json', '.ralph/codex.env', '.ralph/claude.env', '.ralph/opencode.env'];
 }
 
 /** @return array<string, string> */
@@ -594,6 +596,7 @@ function generatedProfiles(): array
     return [
         '.ralph/codex.env' => "# Gerado pelo Ralph Method; altere somente se quiser uma política local.\nRALPH_BIN=scripts/ralph.sh\nRALPH_VERIFY_MODEL=gpt-5.6-luna\n",
         '.ralph/claude.env' => "# Gerado pelo Ralph Method; altere somente se quiser uma política local.\nRALPH_BIN=scripts/ralph.sh\nRALPH_VERIFY_MODEL=sonnet\n",
+        '.ralph/opencode.env' => "# Gerado pelo Ralph Method; defina um modelo explícito antes de executar.\nRALPH_BIN=scripts/ralph.sh\nRALPH_OPENCODE_MODEL=\nRALPH_OPENCODE_VARIANT=\nRALPH_OPENCODE_AGENT=\nRALPH_OPENCODE_AUTO=1\nRALPH_OPENCODE_PURE=1\nRALPH_VERIFY_MODEL=\n",
     ];
 }
 

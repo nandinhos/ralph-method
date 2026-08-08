@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposta em planejamento.
+Proposta em implementação controlada na branch `feat/opencode-engine`.
 
 ## Contexto
 
@@ -86,9 +86,10 @@ provar que o grupo terminou.
 Revisitar a seam quando um segundo provider novo, fora dos caminhos legacy,
 precisar ser adicionado ou quando a execução real comprovar que o contrato de
 processo não consegue transportar a sessão sem estado persistente. O dono é a
-Equipe do Ralph Method; o sinal é uma segunda implementação que exigiria
-exceção no núcleo ou um stream bidirecional não redutível a `run` + resultado.
-Nesse caso, acrescentar um segundo tipo de transporte ao contrato, sem mover
+Equipe do Ralph Method; o sinal observável é uma segunda implementação que
+exigiria exceção no núcleo ou um stream bidirecional não redutível a `run` +
+resultado. Até esse gatilho, não migrar Codex/Claude por antecipação. Nesse
+caso, acrescentar um segundo tipo de transporte ao contrato, sem mover
 autoridade para o adapter.
 
 ## Responsável

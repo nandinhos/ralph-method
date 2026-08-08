@@ -333,6 +333,99 @@ function relayFeedbackFlush(string &$buffer): void
     $buffer = '';
 }
 
+/**
+ * Grava a captura desde o primeiro chunk sem manter a saída inteira em RAM.
+ * Retorna false quando o limite foi ultrapassado; o controlador deve encerrar
+ * o processo e encaminhar o workflow para recovery.
+ */
+function captureChunk($handle, string $chunk, int &$bytes, int $limit, string &$preview): bool
+{
+    $remaining = max(0, $limit - $bytes);
+    if ($remaining > 0) {
+        $written = fwrite($handle, substr($chunk, 0, $remaining));
+        if ($written === false) {
+            return false;
+        }
+    }
+    $bytes += strlen($chunk);
+    if (strlen($preview) < 4000) {
+        $preview .= substr($chunk, 0, 4000 - strlen($preview));
+    }
+
+    return $bytes <= $limit;
+}
+
+function controlledProcessCommand(string $command): array
+{
+    $namespace = getenv('RALPH_PROCESS_NAMESPACE') !== '0' && is_executable('/usr/bin/unshare');
+    if ($namespace) {
+        return [
+            'command' => ['setsid', 'unshare', '--user', '--map-root-user', '--pid', '--fork', '--mount-proc', '--', '/bin/sh', '-c', $command],
+            'containment' => 'pid_namespace',
+        ];
+    }
+
+    return [
+        'command' => ['setsid', '/bin/sh', '-c', $command],
+        'containment' => 'process_group_observed',
+    ];
+}
+
+/** @return array<string, mixed>|null */
+function latestRunnerResult(): ?array
+{
+    global $root;
+    $paths = glob($root.'/.phases/logs/*.result.json') ?: [];
+    usort($paths, static fn (string $left, string $right): int => (filemtime($right) ?: 0) <=> (filemtime($left) ?: 0));
+    foreach ($paths as $path) {
+        $result = json_decode((string) file_get_contents($path), true);
+        if (is_array($result) && ($result['runner'] ?? null) === 'opencode') {
+            return $result;
+        }
+    }
+
+    return null;
+}
+
+function recordRunnerResult(array $arguments, array $feature, array $result): void
+{
+    $executionId = $result['execution_id'] ?? null;
+    if (! is_string($executionId) || preg_match('/^exec_[A-Za-z0-9_-]+$/', $executionId) !== 1) {
+        return;
+    }
+    $status = ($result['status'] ?? null) === 'completed' ? 'delegation.completed' : 'delegation.failed';
+    $facts = [
+        'execution_id' => $executionId,
+        'role' => 'implementation',
+        'purpose' => 'feature_execution',
+        'runner' => 'opencode',
+        'runner_version' => $result['runner_version'] ?? null,
+        'provider' => $result['provider'] ?? null,
+        'requested_model' => $result['requested_model'] ?? null,
+        'effective_model' => $result['effective_model'] ?? null,
+        'session_id' => $result['session_id'] ?? null,
+        'identity_status' => $result['identity_status'] ?? 'unavailable',
+        'identity_source' => $result['identity_source'] ?? 'not_exposed',
+        'fallback_used' => $result['fallback_used'] ?? null,
+        'fallback_status' => $result['fallback_status'] ?? 'unknown',
+        'status' => $result['status'] ?? 'failed',
+        'exit_code' => $result['exit_code'] ?? null,
+        'terminal_event' => $result['terminal_event'] ?? null,
+        'events_seen' => $result['events_seen'] ?? null,
+        'prompt_transport' => $result['prompt_transport'] ?? null,
+        'prompt_sha256' => $result['prompt_sha256'] ?? null,
+        'error_summary' => $result['error_summary'] ?? null,
+        'artifact_refs' => [
+            'artifact_'.$feature['feature_key'].'_opencode_events',
+            'artifact_'.$feature['feature_key'].'_opencode_result',
+        ],
+    ];
+    $traceArguments = array_merge($arguments, [
+        'idempotency-key' => 'trace:'.$status.':'.($feature['feature_key'] ?? '').':'.$executionId,
+    ]);
+    appendEvent(eventContext($traceArguments, $feature, $status, 'Resultado do adapter OpenCode importado pelo controlador', $facts));
+}
+
 /** @return array{exit_code: int, stdout: string, stderr: string, timed_out: bool, process_tree: array<string, mixed>} */
 function runReadOnlyCommand(string $command, int $timeoutSeconds, array $environment = []): array
 {
@@ -2971,16 +3064,19 @@ function runControlled(array $arguments): void
     ]));
 
     $environment = array_merge((array) getenv(), $_ENV, [
-        'RALPH_WORKFLOW_ID' => $workflowId,
-        'RALPH_FEATURE_KEY' => $featureKey,
-        'RALPH_LEASE_TOKEN' => $lease,
+        // O executor não recebe contexto de workflow nem lease. Isso impede
+        // que ele use o hook/CLI como capability de escrita no ledger.
+        'RALPH_CONTROLLED_EXECUTOR' => '1',
         'RALPH_HOOK' => $root.'/scripts/ralph-hook.sh',
         'RALPH_FEEDBACK_STDOUT' => getenv('RALPH_FEEDBACK_STDOUT') !== false
             ? (string) getenv('RALPH_FEEDBACK_STDOUT')
             : '1',
     ]);
+    unset($environment['RALPH_WORKFLOW_ID'], $environment['RALPH_FEATURE_KEY'], $environment['RALPH_LEASE_TOKEN']);
+    $processCommand = controlledProcessCommand($command);
+    $containment = $processCommand['containment'];
     $pipes = [];
-    $process = proc_open('setsid '.$command, [
+    $process = proc_open($processCommand['command'], [
         0 => ['pipe', 'r'],
         1 => ['pipe', 'w'],
         2 => ['pipe', 'w'],
@@ -2995,13 +3091,30 @@ function runControlled(array $arguments): void
     $processSnapshot = processTreeSnapshot($pid);
     appendEvent(eventContext($arguments, $feature, 'command.started', 'Grupo de processo do Ralph registrado', [
         'pid' => $pid,
+        'containment' => $containment,
         'process_tree' => $processSnapshot,
         'command_fingerprint' => hashValue($command),
     ]));
     stream_set_blocking($pipes[1], false);
     stream_set_blocking($pipes[2], false);
-    $stdout = '';
-    $stderr = '';
+    $artifactDirectory = $runtime.'/artifacts';
+    if (! is_dir($artifactDirectory) && ! mkdir($artifactDirectory, 0700, true) && ! is_dir($artifactDirectory)) {
+        fail('não foi possível criar diretório de artefatos do bloco');
+    }
+    $prefix = $artifactDirectory.'/'.$featureKey.'-attempt-'.$attempt;
+    $stdoutHandle = fopen($prefix.'.stdout.log', 'wb');
+    $stderrHandle = fopen($prefix.'.stderr.log', 'wb');
+    if ($stdoutHandle === false || $stderrHandle === false) {
+        fail('não foi possível abrir captura de artefatos do bloco');
+    }
+    @chmod($prefix.'.stdout.log', 0600);
+    @chmod($prefix.'.stderr.log', 0600);
+    $stdoutBytes = 0;
+    $stderrBytes = 0;
+    $stdoutPreview = '';
+    $stderrPreview = '';
+    $captureLimit = max(1024, (int) ($arguments['capture-max-bytes'] ?? getenv('RALPH_CAPTURE_MAX_BYTES') ?: 5242880));
+    $captureLimitExceeded = false;
     $feedbackBuffer = '';
     $heartbeatInterval = max(1, (int) ($arguments['heartbeat-interval'] ?? getenv('RALPH_HEARTBEAT_INTERVAL') ?: 15));
     $lastHeartbeatAt = microtime(true);
@@ -3011,12 +3124,16 @@ function runControlled(array $arguments): void
         $stdoutChunk = stream_get_contents($pipes[1]);
         $stderrChunk = stream_get_contents($pipes[2]);
         if (is_string($stdoutChunk) && $stdoutChunk !== '') {
-            $stdout .= $stdoutChunk;
+            if (! captureChunk($stdoutHandle, $stdoutChunk, $stdoutBytes, $captureLimit, $stdoutPreview)) {
+                $captureLimitExceeded = true;
+            }
             relayFeedbackChunk($feedbackBuffer, $stdoutChunk);
             $lastActivityAt = microtime(true);
         }
         if (is_string($stderrChunk) && $stderrChunk !== '') {
-            $stderr .= $stderrChunk;
+            if (! captureChunk($stderrHandle, $stderrChunk, $stderrBytes, $captureLimit, $stderrPreview)) {
+                $captureLimitExceeded = true;
+            }
             $lastActivityAt = microtime(true);
         }
 
@@ -3029,8 +3146,8 @@ function runControlled(array $arguments): void
                 'pid' => $pid,
                 'process_tree' => $processSnapshot,
                 'heartbeat_sequence' => $heartbeatSequence,
-                'stdout_bytes' => strlen($stdout),
-                'stderr_bytes' => strlen($stderr),
+                'stdout_bytes' => $stdoutBytes,
+                'stderr_bytes' => $stderrBytes,
                 'idle_seconds' => (int) floor($now - $lastActivityAt),
                 'child_running' => (bool) ($status['running'] ?? false),
             ];
@@ -3044,37 +3161,42 @@ function runControlled(array $arguments): void
             break;
         }
 
+        if ($captureLimitExceeded) {
+            $snapshot = processTreeSnapshot($pid);
+            if ($snapshot['alive']) {
+                terminateProcessTree($snapshot);
+            }
+            break;
+        }
+
         usleep(250000);
     } while (true);
     $stdoutChunk = stream_get_contents($pipes[1]);
     $stderrChunk = stream_get_contents($pipes[2]);
     if (is_string($stdoutChunk)) {
-        $stdout .= $stdoutChunk;
+        captureChunk($stdoutHandle, $stdoutChunk, $stdoutBytes, $captureLimit, $stdoutPreview);
         relayFeedbackChunk($feedbackBuffer, $stdoutChunk);
     }
     if (is_string($stderrChunk)) {
-        $stderr .= $stderrChunk;
+        captureChunk($stderrHandle, $stderrChunk, $stderrBytes, $captureLimit, $stderrPreview);
     }
     relayFeedbackFlush($feedbackBuffer);
     fclose($pipes[1]);
     fclose($pipes[2]);
+    fclose($stdoutHandle);
+    fclose($stderrHandle);
     $exitCode = proc_close($process);
     $processSnapshot = processTreeSnapshot($pid);
     $groupGone = ! $processSnapshot['alive'];
-    $artifactDirectory = $runtime.'/artifacts';
-    if (! is_dir($artifactDirectory)) {
-        mkdir($artifactDirectory, 0700, true);
-    }
-    $prefix = $artifactDirectory.'/'.$featureKey.'-attempt-'.$attempt;
-    file_put_contents($prefix.'.stdout.log', $stdout, LOCK_EX);
-    file_put_contents($prefix.'.stderr.log', $stderr, LOCK_EX);
-    @chmod($prefix.'.stdout.log', 0600);
-    @chmod($prefix.'.stderr.log', 0600);
 
     $workflow = loadWorkflow();
     $projection = project($workflow, readEvents());
     $feature = featureFrom($projection, $featureKey);
     checkLease($feature, $lease);
+    $runnerResult = latestRunnerResult();
+    if (is_array($runnerResult)) {
+        recordRunnerResult($arguments, $feature, $runnerResult);
+    }
     $repository = currentRepository();
     $facts = [
         'exit_code' => $exitCode,
@@ -3084,12 +3206,22 @@ function runControlled(array $arguments): void
         'base_tree_hash' => $feature['claim']['base_tree_hash'] ?? null,
         'implementation_commit' => $repository['commit'],
         'process_verified_terminated' => $groupGone,
+        'process_containment' => $containment,
         'process_tree_after_exit' => $processSnapshot,
+        'stdout_bytes' => $stdoutBytes,
+        'stderr_bytes' => $stderrBytes,
+        'capture_limit_bytes' => $captureLimit,
+        'capture_limit_exceeded' => $captureLimitExceeded,
+        'stdout_preview' => sanitize($stdoutPreview),
+        'stderr_preview' => sanitize($stderrPreview),
         'artifact_refs' => ['artifact_'.$featureKey.'_stdout', 'artifact_'.$featureKey.'_stderr'],
     ];
-    if (! $groupGone) {
+    if (! $groupGone || $captureLimitExceeded) {
+        $reason = $captureLimitExceeded
+            ? 'limite de captura excedido; processo encerrado para recovery explícito'
+            : 'grupo do processo do Ralph não foi encerrado; workflow exige recovery explícito';
         appendEvent(eventContext($arguments, $feature, 'recovery.required', 'Grupo do Ralph continua vivo após o retorno', $facts));
-        fail('grupo do processo do Ralph não foi encerrado; workflow exige recovery explícito');
+        fail($reason);
     }
     appendEvent(eventContext($arguments, $feature, 'block.finished', $exitCode === 0 ? 'Bloco controlado terminou' : 'Bloco controlado terminou com falha; systematic debugging requerido', $facts));
     if ($exitCode !== 0) {
@@ -3145,7 +3277,23 @@ function traceDelegation(array $arguments): void
     if ($identityStatus === 'exact' && $effectiveModel === null) {
         fail('identity-status exact exige effective-model ou model', 2);
     }
-    $fallbackUsed = filter_var((string) ($arguments['fallback-used'] ?? 'false'), FILTER_VALIDATE_BOOLEAN);
+    $fallbackStatus = $optional($arguments, 'fallback-status') ?? 'unknown';
+    if (! in_array($fallbackStatus, ['unknown', 'detected', 'not_detected'], true)) {
+        fail('fallback-status inválido; use unknown, detected ou not_detected', 2);
+    }
+    $fallbackArgument = $arguments['fallback-used'] ?? null;
+    $fallbackUsed = null;
+    if ($fallbackArgument !== null) {
+        $fallbackText = strtolower(trim((string) $fallbackArgument));
+        if (! in_array($fallbackText, ['true', 'false'], true)) {
+            fail('fallback-used deve ser true ou false; omita para desconhecido', 2);
+        }
+        $fallbackUsed = $fallbackText === 'true';
+    } elseif ($fallbackStatus === 'detected') {
+        $fallbackUsed = true;
+    } elseif ($fallbackStatus === 'not_detected') {
+        $fallbackUsed = false;
+    }
     $eventType = $eventTypesByAction[$action];
     $idempotencyKey = $arguments['idempotency-key'] ?? "trace:{$eventType}:{$workflowId}:{$featureKey}:{$executionId}";
     if (! is_string($idempotencyKey) || trim($idempotencyKey) === '') {
@@ -3167,6 +3315,7 @@ function traceDelegation(array $arguments): void
         'identity_status' => $identityStatus,
         'identity_source' => $optional($arguments, 'identity-source') ?? 'not_exposed',
         'fallback_used' => $fallbackUsed,
+        'fallback_status' => $fallbackStatus,
         'status' => $action,
         'reason' => $optional($arguments, 'reason'),
     ];
@@ -3263,24 +3412,11 @@ function traceReport(array $arguments): void
 
 function observe(array $arguments): void
 {
-    $workflowId = (string) ($arguments['workflow'] ?? getenv('RALPH_WORKFLOW_ID') ?: '');
-    $featureKey = (string) ($arguments['feature'] ?? getenv('RALPH_FEATURE_KEY') ?: '');
-    $event = (string) ($arguments['event'] ?? getenv('RALPH_EVENT') ?: ($arguments['_'][1] ?? ''));
-    $detail = (string) ($arguments['detail'] ?? getenv('RALPH_EVENT_DETAIL') ?: ($arguments['_'][2] ?? ''));
-    if ($workflowId === '' || $featureKey === '') {
-        fail('observe exige workflow e feature; o hook não deve inventar contexto', 2);
-    }
-    $workflow = loadWorkflow();
-    $projection = project($workflow, readEvents());
-    $feature = featureFrom($projection, $featureKey);
-    $type = ($feature['lease_token_hash'] ?? null) === null ? 'policy.bypass_detected' : 'command.started';
-    withLock(function () use ($arguments, $workflowId, $feature, $type, $event, $detail): void {
-        appendEvent(eventContext(array_merge($arguments, ['workflow' => $workflowId]), $feature, $type, 'Hook observou evento do Ralph', [
-            'upstream_event' => $event,
-            'detail' => $detail,
-        ]));
-    });
-    printJson(['observed' => true, 'event' => $event]);
+    printJson([
+        'observed' => false,
+        'recorded' => false,
+        'reason' => 'ledger_owned_by_controller',
+    ]);
 }
 
 /** @return list<array<string, mixed>> */

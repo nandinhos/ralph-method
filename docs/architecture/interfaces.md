@@ -20,7 +20,7 @@ deve ser atualizado junto com `VERSION`.
 `plan` é somente leitura. `apply` instala apenas os arquivos listados no
 manifesto, com cópia atômica. `uninstall` sem `--apply` apenas calcula o plano;
 com `--apply`, remove somente arquivos ainda iguais ao hash instalado e
-preserva arquivos modificados pelo usuário. Os perfis locais de Codex e Claude
+preserva arquivos modificados pelo usuário. Os perfis locais de Codex, Claude e OpenCode
 também são gerados com `RALPH_BIN=scripts/ralph.sh` e entram no ownership. O
 relatório fica em
 `.ralph/uninstall-report.json`. O histórico operacional (`.git/ralph-control`),
@@ -102,11 +102,15 @@ runner, runner_version, role, execution_id,
 requested_model, effective_model, provider,
 session_id ou conversation_id,
 identity_status, identity_source,
-status, reason e fallback_used
+status, reason, fallback_used e fallback_status
 ```
 
 Quando o provider não expõe modelo efetivo, a identidade deve ser marcada como
 `declared`, `observed`, `partial` ou `unavailable`.
+
+O adapter OpenCode também exige `runner-result.schema.json`, sessão e evento
+terminal `step_finish`; falta de evidência de fallback permanece como
+`fallback_used=null` e `fallback_status=unknown`.
 
 ## Política de fallback
 

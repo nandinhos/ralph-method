@@ -20,3 +20,8 @@
 2026-08-08T00:00:00-03:00 | assumption | OpenCode 1.18.15 expõe opencode run --format json em JSONL com sessionID; o contrato será confirmado por fixture e sessão real antes da promoção.
 2026-08-08T00:00:00-03:00 | review | revisão adversarial encontrou capability de lease herdada, prova incompleta de processo órfão, política --auto não verificável, fallback/identidade ambíguos, transporte de prompt arriscado e generalização excessiva; findings incorporados como pré-condições do plano.
 2026-08-08T00:00:00-03:00 | verification | prova real isolada do OpenCode criou feature.sh, passou FEATURE_CHECK_OK, observou 16 eventos JSONL, sessionID e step_finish, sem processo residual; engine Ralph ainda não foi certificada.
+2026-08-08T00:00:00-03:00 | decision | v0.4.0 adiciona adapter OpenCode fail-closed, resultado tri-state, isolamento de capability e contenção por namespace de PID quando disponível.
+2026-08-08T00:00:00-03:00 | error | primeira prova complexa rejeitou por Permission denied no checker externo não executável; a feature foi descartada sem promoção.
+2026-08-08T00:00:00-03:00 | fix | checker de campo recebeu permissão de execução e hashes externos para README e todos os inputs negativos.
+2026-08-08T00:00:00-03:00 | verification | prova complexa real passou em 82s: 42 eventos JSONL, 63.975 bytes, nonce, quatro negativos, repetição determinística, commit e trace TRC-2026-0001.
+2026-08-08T00:00:00-03:00 | verification | teste adversarial tentou observe, gates, recuperação, avanço e trace a partir do executor; nenhum evento de bypass foi criado.

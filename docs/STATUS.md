@@ -3,7 +3,7 @@
 ## Estado atual
 
 O repositório é uma extração independente do núcleo Ralph validado no
-`refactor-radar`. A versão `0.3.1` mantém a instalação local reversível,
+`refactor-radar`. A versão `0.4.0` mantém a instalação local reversível,
 doctor, ownership por hash e canal de feedback para o orquestrador externo, e
 adiciona o guia operacional versionado para agentes de IA e a prontidão
 condicional de providers e certifica sessões reais de OpenCode e Hermes sem
@@ -23,6 +23,8 @@ confundir prontidão da CLI com disponibilidade do runner do Ralph.
 | Doctor | `bin/ralph-doctor` | drift e integridade da instalação |
 | Feedback | `schemas/feedback-event.schema.json` | contrato JSONL/stdout/callback |
 | Prontidão de provider | `schemas/provider-readiness.schema.json` | autenticação, diagnóstico seguro e elegibilidade do adapter |
+| Adapter OpenCode | `adapters/opencode/` | preflight, execução JSONL, parser fail-closed e resultado normalizado |
+| Resultado de runner | `schemas/runner-result.schema.json` | contrato sanitizado de sessão, modelo, terminal e fallback |
 | Guia de agentes | `docs/AGENT_GUIDE.md` | operação, comunicação e ciclo de vida |
 
 ## Entrega concluída nesta fase
@@ -55,6 +57,7 @@ geração. Quando nenhum runner está disponível, `auto` mantém o plano em
 Os checks portáteis verdes são `scripts/check-shell.sh`,
 `scripts/test-installation.sh`, `scripts/test-feedback.sh`,
 `scripts/test-provider-readiness.sh`, `scripts/test-ralph-method.sh` e
-`scripts/test-ralph.sh`. Eles cobrem ownership, conflito, idempotência,
+`scripts/test-ralph.sh`, além de `scripts/test-opencode-adapter.sh` e da prova
+real `scripts/test-opencode-field.sh`. Eles cobrem ownership, conflito, idempotência,
 remoção segura, eventos, prontidão de providers, progresso e a regressão do
-loop.
+loop, capability adversarial, parsing JSONL e execução complexa por OpenCode.

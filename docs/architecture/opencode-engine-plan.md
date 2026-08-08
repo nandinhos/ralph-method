@@ -2,7 +2,9 @@
 
 ## Status
 
-Proposta em planejamento na branch `feat/opencode-engine`.
+Implementação em andamento na branch `feat/opencode-engine`. A prova real
+exploratória já foi concluída; o adapter somente será considerado apto depois
+da fixture complexa, da regressão e da revisão final.
 
 Este documento descreve o contrato e o plano de implementação. Ele não afirma
 que a engine OpenCode já está disponível para execução pelo Ralph.
@@ -50,6 +52,43 @@ sem fallback silencioso e sem credenciais no ledger. Como não há PRD
 versionado neste repositório, este documento é a especificação técnica desta
 entrega e deverá ser substituído ou ligado a um PRD quando o framework ganhar
 um fluxo de produto próprio.
+
+### Entrada específica da segunda etapa
+
+Esta etapa adiciona uma feature de capacidade moderada, executada em uma
+fixture descartável e verificada por um oráculo que fica fora do diretório
+mutável pelo agente. O objetivo é exercitar parsing, validação, ordenação
+determinística, dependências, ciclos, casos inválidos e saída canônica em uma
+única execução real do OpenCode. O resultado esperado será conhecido antes da
+execução e comparado por um script independente.
+
+| Item | Contrato da prova |
+|---|---|
+| Feature | gerador de relatório de tarefas com validação de schema, prioridades, status, tags, dependências e ciclos |
+| Entrada | JSON determinístico com casos válidos e fixtures negativas separadas |
+| Saída esperada | JSON canônico com contagens, soma de estimativas, ordem estável e diagnóstico de erro |
+| Evidência | hashes da entrada e dos arquivos protegidos calculados pelo controlador, não pelo agente |
+| Oráculo | checker fora do checkout passado ao processo OpenCode; a sessão não pode alterá-lo |
+| Desafio de transporte | nonce aleatório presente somente no prompt anexado e exigido na saída |
+| Limite | bytes de stdout/stderr, linhas JSONL, tamanho do prompt e tempo de execução |
+| Critério | feature, checker externo, processo, trace e relatório devem terminar verdes; qualquer dúvida bloqueia |
+
+O checker não será instalado na fixture nem aceito como evidência se a sessão
+puder alterá-lo. A fixture poderá conter apenas os dados e o código que a
+feature deve produzir; a referência canônica, o nonce e a verificação final
+pertencem ao harness da prova.
+
+### Correções incorporadas após revisão adversarial
+
+| Risco | Decisão de implementação |
+|---|---|
+| capability indireta por `observe` | o processo controlado não recebe `workflow_id`, `feature_key`, lease ou fencing; o hook fica sem contexto e o controlador registra o ciclo sob seu próprio lease |
+| processo destacado | executar o bloco em namespace de PID quando o host permitir; caso contrário registrar a limitação e nunca afirmar contenção absoluta; qualquer processo observável restante exige recovery |
+| oráculo mutável | referência e checker externos à raiz do projeto, com hashes calculados antes e depois |
+| fallback tri-state | resultado, trace e schema passam a distinguir `false`, `true` e `null`, além de `unknown`, `detected` e `not_detected` |
+| saída sem limite | captura em arquivo desde o primeiro chunk, com teto de bytes/eventos e encerramento fail-closed ao exceder |
+| `--file` ambíguo | prompt contém nonce não previsível; a saída precisa devolvê-lo, vinculando transporte, hash do prompt e execução |
+| instalação incompleta | adapter, parser, schema, contrato e perfil OpenCode entram no manifesto; instalação e uninstall serão testados juntos |
 
 ## Fora do escopo desta entrega
 
@@ -114,17 +153,17 @@ aprovar gate ou iniciar outra feature. Ele recebe uma execução autorizada,
 executa uma sessão e devolve um resultado.
 
 Essa regra exige uma barreira de capability, não apenas uma convenção. O
-processo do executor não receberá `RALPH_LEASE_TOKEN`, `RALPH_CONTROL` ou
-qualquer outro segredo de transição. `workflow_id` e `feature_key` podem ser
-propagados somente como contexto de observabilidade. O controlador fará a
-importação do resultado e o trace sob seu próprio lease depois que o processo
-terminar.
+processo do executor não receberá `RALPH_LEASE_TOKEN`, `RALPH_CONTROL`,
+`RALPH_WORKFLOW_ID`, `RALPH_FEATURE_KEY` ou qualquer outro contexto que possa
+ser usado para alcançar uma operação de ledger. O hook fica inerte no caminho
+controlado; o controlador fará a importação do resultado e o trace sob seu
+próprio lease depois que o processo terminar.
 
 Antes do OpenCode, a branch deverá corrigir o caminho controlado que atualmente
 herda o ambiente completo do processo em `bin/ralph-control:2973-2981`.
 Enquanto essa barreira não existir e não houver teste negativo provando que um
-executor não consegue chamar `gate`, `approve`, `release` ou `advance`, a
-engine não está apta para smoke nem campo.
+executor não consegue chamar `observe`, `gate`, `approve`, `release`, `advance`,
+`retry`, `recover` ou `trace`, a engine não está apta para smoke nem campo.
 
 ### Identidade não comprovada permanece não comprovada
 
@@ -342,15 +381,14 @@ fallback.
 O `ralph-control` continuará sendo a única autoridade, mas o plano precisa
 fechar a capability herdada antes da engine:
 
-1. separar contexto de feedback (`workflow_id`, `feature_key`) de credenciais
-   de transição (`lease_token`, fencing e comandos privilegiados);
-2. remover credenciais de transição do ambiente entregue a `ralph.sh` e aos
-   filhos do provider;
-3. fazer o controlador importar o resultado normalizado e chamar o trace sob
+1. não entregar ao executor nem contexto nem credenciais que permitam chamar
+   comandos do controlador que escrevem ledger;
+2. fazer o controlador importar o resultado normalizado e chamar o trace sob
    lock e lease, depois do retorno do bloco;
-4. adicionar fixture adversarial em que o executor tenta `gate`, `approve`,
-   `release` e `advance` sem receber capability;
-5. falhar fechado se o bloco não conseguir provar que executou sem capability
+3. adicionar fixture adversarial em que o executor tenta `observe`, `gate`,
+   `approve`, `release`, `advance`, `retry`, `recover` e `trace` sem receber
+   capability; nenhuma tentativa pode criar evento ou mudar estado;
+4. falhar fechado se o bloco não conseguir provar que executou sem capability
    privilegiada.
 
 ### Permissões do OpenCode
@@ -376,7 +414,10 @@ garantia não pode depender apenas do wrapper manual `ralph-bloco`. Antes do
 smoke, o controlador deverá:
 
 - registrar PID raiz, PGID, árvore inicial e fingerprint da invocação;
-- observar o PGID e todos os PIDs conhecidos mesmo depois que o PID raiz sair;
+- preferir namespace de PID criado com `unshare --user --map-root-user --pid
+  --fork --mount-proc`, mantendo a unidade externa observável pelo controlador;
+- quando namespace não estiver disponível, observar o PGID e todos os PIDs
+  conhecidos mesmo depois que o PID raiz sair;
 - encerrar primeiro o grupo e depois os descendentes registrados;
 - tratar qualquer processo ainda vivo ou qualquer impossibilidade de prova
   como `recovery_required`, nunca como término verificado;
@@ -386,9 +427,11 @@ smoke, o controlador deverá:
   observação do sistema operacional exige recuperação manual e bloqueia a
   liberação.
 
-O plano não promete “sem órfãos” antes dessa prova; ele promete somente
-`process_verified_terminated=true` quando a evidência de grupo e árvore for
-conclusiva.
+O plano não promete “sem órfãos” fora de uma contenção disponível no host. Ele
+promete somente `process_verified_terminated=true` quando a evidência da
+contenção escolhida for conclusiva; em host sem namespace/cgroup compatível,
+uma saída limpa do PGID é evidência de grupo observado, não de ausência
+absoluta de processos destacados.
 
 ## Gates e recuperação
 
@@ -481,12 +524,8 @@ adapters/
 ├── contract.md
 └── opencode/
     ├── runner.sh
-    ├── parser.sh
-    └── fixtures/
-        ├── completed.jsonl
-        ├── error.jsonl
-        ├── missing-session.jsonl
-        └── malformed.jsonl
+    ├── parser.php
+    └── contract.md
 
 .ralph/
 └── opencode.env
@@ -495,6 +534,11 @@ adapters/
 O desenho pode ser implementado inicialmente com um adapter OpenCode isolado.
 Codex e Claude permanecem nos caminhos estáveis até que um segundo adapter
 real prove que a migração para wrappers comuns paga seu custo de regressão.
+
+Os arquivos de fixture de capacidade e seus oráculos não serão distribuídos
+como parte do projeto instalado. Eles vivem no harness de teste e são
+descartáveis, justamente para que o agente não possa validar ou desativar o
+próprio verificador.
 
 ## Fases de implementação
 
@@ -519,6 +563,8 @@ antes da implementação do adapter.
 - fortalecer a prova de término no caminho `ralph-control`;
 - adicionar testes negativos de transição e de processo desacoplado;
 - adicionar fixture JSONL do OpenCode sem chamar rede ou modelo.
+- limitar captura por bytes, linhas/eventos e tamanho de prompt;
+- registrar fallback tri-state sem converter ausência em `false`.
 
 Saída: contrato revisável, capability isolada e nenhuma alteração de
 comportamento existente.
@@ -548,6 +594,21 @@ os providers.
 - produzir resultado normalizado e fatos para o trace.
 
 Saída: uma execução isolada OpenCode funciona sem tocar no controlador.
+
+### Fase I — feature complexa e teste de capacidade real
+
+- gerar fixture descartável com input, README da feature e arquivos protegidos;
+- gerar referência, checker externo e nonce fora da fixture;
+- executar a feature por `ralph-control → ralph.sh → adapter OpenCode`;
+- validar a saída canônica, os casos negativos, o nonce e os hashes externos;
+- verificar que o agente não acessou uma capability de ledger;
+- provar o término contido e registrar qualquer limitação como bloqueio;
+- gerar relatório numerado com tabela de comandos, tempos, limites, saída e
+  evidências.
+
+Saída: uma prova de campo local, repetível e independente do próprio agente,
+com complexidade suficiente para revelar falhas de transporte, parsing,
+permissão, capacidade ou supervisão.
 
 ### Fase D — instalação e seleção condicional
 

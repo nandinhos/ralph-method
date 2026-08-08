@@ -76,7 +76,7 @@ printf '%s\n' "$opencode_verified" | grep -qv 'supersecret' || fail 'saída do p
 assert_json "$opencode_verified" '
     $plan = json_decode(getenv("JSON"), true, 512, JSON_THROW_ON_ERROR);
     $provider = $plan["detection"]["providers"]["opencode"] ?? [];
-    exit(($provider["auth_status"] ?? null) === "authenticated" && ($provider["health_status"] ?? null) === "healthy" && ($provider["status"] ?? null) === "functional" && ($provider["runner_supported"] ?? true) === false && ($provider["adapter_enabled"] ?? true) === false && ($plan["orchestration"]["mode"] ?? null) === "needs_review" ? 0 : 1);
+    exit(($provider["auth_status"] ?? null) === "authenticated" && ($provider["health_status"] ?? null) === "healthy" && ($provider["status"] ?? null) === "functional" && ($provider["runner_supported"] ?? false) === true && ($provider["adapter_enabled"] ?? false) === true && ($plan["orchestration"]["mode"] ?? null) === "single_provider" ? 0 : 1);
 '
 
 hermes_verified="$(env "${common_env[@]}" "$ROOT/bin/ralph-init" plan --project "$project" --provider hermes --verify-providers)"
@@ -116,7 +116,7 @@ apply_exit=0
 env "${common_env[@]}" FAKE_AUTH=0 "$ROOT/bin/ralph-init" apply --project "$project" --provider claude --verify-providers >/dev/null 2>&1 || apply_exit=$?
 [ "$apply_exit" -eq 3 ] || fail "provider não autenticado não bloqueou apply explícito"
 
-auto_blocked="$(env "${common_env[@]}" FAKE_CODEX_AUTH=0 FAKE_AUTH=0 "$ROOT/bin/ralph-init" plan --project "$project" --provider auto --verify-providers)"
+auto_blocked="$(env "${common_env[@]}" FAKE_CODEX_AUTH=0 FAKE_AUTH=0 FAKE_OPENCODE_AUTH=0 "$ROOT/bin/ralph-init" plan --project "$project" --provider auto --verify-providers)"
 assert_json "$auto_blocked" '
     $plan = json_decode(getenv("JSON"), true, 512, JSON_THROW_ON_ERROR);
     exit(($plan["orchestration"]["mode"] ?? null) === "needs_review" && ($plan["orchestration"]["primary_runner"] ?? null) === null && ($plan["selection"]["selected_provider"] ?? null) === null && ($plan["selection"]["adapter_enabled"] ?? true) === false ? 0 : 1);

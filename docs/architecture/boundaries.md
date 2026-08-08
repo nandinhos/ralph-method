@@ -43,6 +43,6 @@ tem timeout e não publica a saída bruta. `functional` certifica a CLI;
 | Future | Seam atual | Trigger |
 |---|---|---|
 | Claude | adapter de saída + runner selecionável após prontidão | fixture, probe seguro e smoke CLI verdes |
-| OpenCode | adapter de saída + runner selecionável após prontidão | saída normalizada com sessão/modelo ou identidade parcial e probe seguro |
+| OpenCode | adapter de saída + runner selecionável após prontidão | fixture real com saída normalizada, prova de capability/processo e probe seguro; dono: Equipe Ralph Method |
 | Hermes/agy | delegação filha registrada no trace após diagnóstico suportado | provider instalado, backend identificado e contrato de execução definido |
 | instalação remota | manifesto local com hashes | necessidade de vários hosts compartilhando estado |

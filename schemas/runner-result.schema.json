@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ralph-method.local/schemas/runner-result.schema.json",
+  "title": "Resultado normalizado de runner do Ralph Method",
+  "type": "object",
+  "required": [
+    "schema_version", "runner", "runner_version", "requested_model",
+    "identity_status", "identity_source", "execution_id", "status",
+    "exit_code", "fallback_used", "fallback_status", "events_seen",
+    "terminal_event", "error_summary", "artifact_refs"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "runner": {"type": "string", "minLength": 1},
+    "runner_version": {"type": "string", "minLength": 1},
+    "provider": {"type": ["string", "null"]},
+    "requested_model": {"type": ["string", "null"]},
+    "effective_model": {"type": ["string", "null"]},
+    "identity_status": {"enum": ["exact", "declared", "observed", "partial", "unavailable"]},
+    "identity_source": {"type": "string", "minLength": 1},
+    "execution_id": {"type": "string", "pattern": "^exec_[A-Za-z0-9_-]+$"},
+    "session_id": {"type": ["string", "null"]},
+    "status": {"enum": ["completed", "failed", "interrupted", "usage_limited"]},
+    "exit_code": {"type": "integer"},
+    "fallback_used": {"type": ["boolean", "null"]},
+    "fallback_status": {"enum": ["unknown", "detected", "not_detected"]},
+    "events_seen": {"type": "integer", "minimum": 0},
+    "event_bytes": {"type": "integer", "minimum": 0},
+    "terminal_event": {"type": ["string", "null"]},
+    "prompt_sha256": {"type": ["string", "null"]},
+    "prompt_transport": {"type": ["string", "null"]},
+    "error_summary": {"type": ["string", "null"]},
+    "artifact_refs": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": false
+}
