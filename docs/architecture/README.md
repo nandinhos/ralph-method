@@ -8,6 +8,8 @@ O Ralph Method é um framework local instalado dentro de um projeto-alvo. O
 - [boundaries.md](boundaries.md) — componentes e seams;
 - [data-model.md](data-model.md) — manifestos, ledger e ownership;
 - [interfaces.md](interfaces.md) — CLI, events e providers.
+- [opencode-engine-plan.md](opencode-engine-plan.md) — proposta de contrato
+  agnóstico e plano da engine OpenCode.
 
 ## Princípio central
 
