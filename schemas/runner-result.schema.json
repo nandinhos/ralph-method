@@ -29,6 +29,9 @@
     "terminal_event": {"type": ["string", "null"]},
     "prompt_sha256": {"type": ["string", "null"]},
     "prompt_transport": {"type": ["string", "null"]},
+    "permission_policy_hash": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$|^$"},
+    "permission_policy_status": {"enum": ["verified", "not_required", "failed"]},
+    "verification_agent": {"type": ["string", "null"]},
     "error_summary": {"type": ["string", "null"]},
     "artifact_refs": {"type": "array", "items": {"type": "string"}}
   },

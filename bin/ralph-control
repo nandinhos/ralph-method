@@ -371,33 +371,56 @@ function controlledProcessCommand(string $command): array
     ];
 }
 
-/** @return array<string, mixed>|null */
-function latestRunnerResult(): ?array
+/** @return array<string, string> */
+function runnerResultSnapshot(): array
 {
     global $root;
     $paths = glob($root.'/.phases/logs/*.result.json') ?: [];
-    usort($paths, static fn (string $left, string $right): int => (filemtime($right) ?: 0) <=> (filemtime($left) ?: 0));
+    $snapshot = [];
     foreach ($paths as $path) {
-        $result = json_decode((string) file_get_contents($path), true);
-        if (is_array($result) && ($result['runner'] ?? null) === 'opencode') {
-            return $result;
+        $hash = hash_file('sha256', $path);
+        if (is_string($hash)) {
+            $snapshot[$path] = $hash;
         }
     }
 
-    return null;
+    return $snapshot;
 }
 
-function recordRunnerResult(array $arguments, array $feature, array $result): void
+/** @param array<string, string> $before @return list<array{path: string, result: array<string, mixed>}> */
+function runnerResults(array $before = []): array
+{
+    global $root;
+    $paths = glob($root.'/.phases/logs/*.result.json') ?: [];
+    $results = [];
+    usort($paths, static fn (string $left, string $right): int => (filemtime($right) ?: 0) <=> (filemtime($left) ?: 0));
+    foreach ($paths as $path) {
+        $hash = hash_file('sha256', $path);
+        if (! is_string($hash) || (($before[$path] ?? null) === $hash)) {
+            continue;
+        }
+        $result = json_decode((string) file_get_contents($path), true);
+        if (is_array($result) && ($result['runner'] ?? null) === 'opencode') {
+            $results[] = ['path' => $path, 'result' => $result];
+        }
+    }
+
+    return $results;
+}
+
+function recordRunnerResult(array $arguments, array $feature, array $result, string $resultPath): void
 {
     $executionId = $result['execution_id'] ?? null;
     if (! is_string($executionId) || preg_match('/^exec_[A-Za-z0-9_-]+$/', $executionId) !== 1) {
         return;
     }
     $status = ($result['status'] ?? null) === 'completed' ? 'delegation.completed' : 'delegation.failed';
+    $isVerification = str_contains(basename($resultPath), '.verify-');
     $facts = [
         'execution_id' => $executionId,
-        'role' => 'implementation',
-        'purpose' => 'feature_execution',
+        'role' => $isVerification ? 'technical_review' : 'implementation',
+        'purpose' => $isVerification ? 'technical_review' : 'feature_execution',
+        'execution_mode' => $isVerification ? 'verify' : 'impl',
         'runner' => 'opencode',
         'runner_version' => $result['runner_version'] ?? null,
         'provider' => $result['provider'] ?? null,
@@ -414,6 +437,9 @@ function recordRunnerResult(array $arguments, array $feature, array $result): vo
         'events_seen' => $result['events_seen'] ?? null,
         'prompt_transport' => $result['prompt_transport'] ?? null,
         'prompt_sha256' => $result['prompt_sha256'] ?? null,
+        'permission_policy_hash' => $result['permission_policy_hash'] ?? null,
+        'permission_policy_status' => $result['permission_policy_status'] ?? 'not_required',
+        'verification_agent' => $result['verification_agent'] ?? null,
         'error_summary' => $result['error_summary'] ?? null,
         'artifact_refs' => [
             'artifact_'.$feature['feature_key'].'_opencode_events',
@@ -3075,6 +3101,7 @@ function runControlled(array $arguments): void
     unset($environment['RALPH_WORKFLOW_ID'], $environment['RALPH_FEATURE_KEY'], $environment['RALPH_LEASE_TOKEN']);
     $processCommand = controlledProcessCommand($command);
     $containment = $processCommand['containment'];
+    $runnerResultBefore = runnerResultSnapshot();
     $pipes = [];
     $process = proc_open($processCommand['command'], [
         0 => ['pipe', 'r'],
@@ -3193,9 +3220,8 @@ function runControlled(array $arguments): void
     $projection = project($workflow, readEvents());
     $feature = featureFrom($projection, $featureKey);
     checkLease($feature, $lease);
-    $runnerResult = latestRunnerResult();
-    if (is_array($runnerResult)) {
-        recordRunnerResult($arguments, $feature, $runnerResult);
+    foreach (runnerResults($runnerResultBefore) as $runnerResult) {
+        recordRunnerResult($arguments, $feature, $runnerResult['result'], $runnerResult['path']);
     }
     $repository = currentRepository();
     $facts = [

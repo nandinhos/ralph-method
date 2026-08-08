@@ -99,7 +99,7 @@ assert_json "$opencode_auth_failed" '
     exit(($provider["auth_status"] ?? null) === "unknown" && ($provider["status"] ?? null) === "authentication_unknown" && ($provider["adapter_enabled"] ?? true) === false ? 0 : 1);
 '
 
-auto_with_claude="$(env "${common_env[@]}" FAKE_CODEX_AUTH=0 "$ROOT/bin/ralph-init" plan --project "$project" --provider auto --verify-providers)"
+auto_with_claude="$(env "${common_env[@]}" FAKE_CODEX_AUTH=0 FAKE_OPENCODE_AUTH=0 "$ROOT/bin/ralph-init" plan --project "$project" --provider auto --verify-providers)"
 assert_json "$auto_with_claude" '
     $plan = json_decode(getenv("JSON"), true, 512, JSON_THROW_ON_ERROR);
     exit(($plan["selection"]["selected_provider"] ?? null) === "claude" && ($plan["orchestration"]["mode"] ?? null) === "single_provider" && in_array("claude", $plan["selection"]["functional_providers"] ?? [], true) ? 0 : 1);

@@ -25,6 +25,7 @@ confundir prontidão da CLI com disponibilidade do runner do Ralph.
 | Prontidão de provider | `schemas/provider-readiness.schema.json` | autenticação, diagnóstico seguro e elegibilidade do adapter |
 | Adapter OpenCode | `adapters/opencode/` | preflight, execução JSONL, parser fail-closed e resultado normalizado |
 | Resultado de runner | `schemas/runner-result.schema.json` | contrato sanitizado de sessão, modelo, terminal e fallback |
+| Política read-only OpenCode | `adapters/opencode/policy.php`, `scripts/opencode-readonly-proof.sh` | fingerprint, prova externa e bloqueio fail-closed da revisão |
 | Guia de agentes | `docs/AGENT_GUIDE.md` | operação, comunicação e ciclo de vida |
 
 ## Entrega concluída nesta fase
@@ -57,7 +58,9 @@ geração. Quando nenhum runner está disponível, `auto` mantém o plano em
 Os checks portáteis verdes são `scripts/check-shell.sh`,
 `scripts/test-installation.sh`, `scripts/test-feedback.sh`,
 `scripts/test-provider-readiness.sh`, `scripts/test-ralph-method.sh` e
-`scripts/test-ralph.sh`, além de `scripts/test-opencode-adapter.sh` e da prova
-real `scripts/test-opencode-field.sh`. Eles cobrem ownership, conflito, idempotência,
+`scripts/test-ralph.sh`, além de `scripts/test-opencode-policy.sh`,
+`scripts/test-opencode-adapter.sh` e da prova real
+`scripts/test-opencode-field.sh`. Eles cobrem ownership, conflito, idempotência,
 remoção segura, eventos, prontidão de providers, progresso e a regressão do
-loop, capability adversarial, parsing JSONL e execução complexa por OpenCode.
+loop, capability adversarial, parsing JSONL, política read-only e execução
+complexa por OpenCode com implementação e revisão preservadas no trace.

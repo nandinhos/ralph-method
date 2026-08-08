@@ -143,6 +143,7 @@ OPENCODE_VARIANT="${RALPH_OPENCODE_VARIANT:-}"
 OPENCODE_AGENT="${RALPH_OPENCODE_AGENT:-}"
 OPENCODE_AUTO="${RALPH_OPENCODE_AUTO:-0}"
 OPENCODE_PURE="${RALPH_OPENCODE_PURE:-1}"
+OPENCODE_VERIFY_POLICY_PROOF="${RALPH_OPENCODE_VERIFY_POLICY_PROOF:-}"
 ENGINE_RESULT_FILE=""
 
 while [[ $# -gt 0 ]]; do
@@ -649,12 +650,25 @@ preflight_checks() {
       fail "adapter OpenCode não encontrado ou sem permissão: $opencode_runner"
       exit 1
     fi
-    if ! "$opencode_runner" preflight --model "$OPENCODE_MODEL" >/dev/null; then
+    local preflight_args=(preflight --model "$OPENCODE_MODEL")
+    if [ "$VERIFY_MODE" != off ]; then
+      preflight_args+=(
+        --mode verify
+        --repo-root "$(pwd)"
+        --agent "${RALPH_OPENCODE_VERIFY_AGENT:-}"
+        --policy-proof "$OPENCODE_VERIFY_POLICY_PROOF"
+      )
+    fi
+    if ! "$opencode_runner" "${preflight_args[@]}" >/dev/null; then
       fail "preflight do adapter OpenCode falhou"
       exit 1
     fi
     if [ "$VERIFY_MODE" != off ] && [ -z "${RALPH_OPENCODE_VERIFY_AGENT:-}" ]; then
       fail "OpenCode exige RALPH_OPENCODE_VERIFY_AGENT read-only quando o gate 3 está ativo"
+      exit 1
+    fi
+    if [ "$VERIFY_MODE" != off ] && [ -z "$OPENCODE_VERIFY_POLICY_PROOF" ]; then
+      fail "OpenCode exige RALPH_OPENCODE_VERIFY_POLICY_PROOF externo quando o gate 3 está ativo"
       exit 1
     fi
   elif ! command -v "$ENGINE" &> /dev/null; then
@@ -1049,7 +1063,8 @@ run_engine() {
         --agent "$OPENCODE_AGENT" \
         --variant "$OPENCODE_VARIANT" \
         --auto "$OPENCODE_AUTO" \
-        --pure "$OPENCODE_PURE" | tee "$log_file" || rc=$?
+        --pure "$OPENCODE_PURE" \
+        --policy-proof "$OPENCODE_VERIFY_POLICY_PROOF" | tee "$log_file" || rc=$?
     elif [[ "$ENGINE" == "codex" ]]; then
       local session_model="$CODEX_MODEL"
       [[ "$mode" == "verify" ]] && session_model="$VERIFY_MODEL"

@@ -28,6 +28,8 @@ fail() {
 }
 
 mkdir -p "$FIXTURE/.spec" "$REFERENCE"
+mkdir -p "$FIXTURE/.opencode/agents"
+cp "$ROOT/.opencode/agents/ralph-review.md" "$FIXTURE/.opencode/agents/ralph-review.md"
 git -C "$FIXTURE" init -q
 git -C "$FIXTURE" config user.email ralph-method@example.invalid
 git -C "$FIXTURE" config user.name 'Ralph Method OpenCode Field'
@@ -66,18 +68,27 @@ printf '%s\n' \
 git -C "$FIXTURE" add .
 git -C "$FIXTURE" commit -qm 'base da fixture complexa OpenCode'
 
+POLICY_PROOF="$TMP/readonly-policy-proof.json"
+RALPH_OPENCODE_MODEL="$MODEL" "$ROOT/scripts/opencode-readonly-proof.sh" \
+  --repo-root "$FIXTURE" \
+  --agent ralph-review \
+  --model "$MODEL" \
+  --proof-file "$POLICY_PROOF" > "$TMP/readonly-proof.log"
+
 (cd "$FIXTURE" && php "$ROOT/bin/ralph-control" init --workflow wf_opencode_complex --manifest workflow.json >/dev/null)
 claim="$(cd "$FIXTURE" && php "$ROOT/bin/ralph-control" claim --workflow wf_opencode_complex --feature FEATURE-OPENCODE-COMPLEX --actor field-test)"
 lease="$(CLAIM="$claim" php -r '$v=json_decode(getenv("CLAIM"), true, 512, JSON_THROW_ON_ERROR); echo $v["lease_token"];')"
 [ -n "$lease" ] || fail 'lease não foi adquirido'
 
 test_command="$ROOT/scripts/opencode-field-check.sh $FIXTURE $NONCE $REFERENCE"
-printf -v controlled_command '%q ' "$ROOT/scripts/ralph.sh" --engine opencode --test-cmd "$test_command" --no-verify "$FIXTURE/.spec/project-phases.md"
+printf -v controlled_command '%q ' "$ROOT/scripts/ralph.sh" --engine opencode --test-cmd "$test_command" "$FIXTURE/.spec/project-phases.md"
 
 started_at="$(date +%s)"
 set +e
 (cd "$FIXTURE" && \
   RALPH_OPENCODE_MODEL="$MODEL" \
+  RALPH_OPENCODE_VERIFY_AGENT=ralph-review \
+  RALPH_OPENCODE_VERIFY_POLICY_PROOF="$POLICY_PROOF" \
   RALPH_OPENCODE_AUTO=1 \
   RALPH_OPENCODE_PURE=1 \
   RALPH_OPENCODE_TIMEOUT=1200 \
@@ -91,6 +102,7 @@ set -e
 finished_at="$(date +%s)"
 [ "$run_rc" -eq 0 ] || fail "execução controlada terminou com exit $run_rc"
 grep -R -q 'FEATURE_CHECK_OK' "$FIXTURE/.phases/logs" || fail 'oráculo externo não ficou verde'
+grep -R -q 'TASK 1: DONE' "$FIXTURE/.phases/logs" || fail 'revisão independente não produziu veredictos task a task'
 
 (cd "$FIXTURE" && php "$ROOT/bin/ralph-control" status > "$TMP/status.json")
 (cd "$FIXTURE" && php "$ROOT/bin/ralph-control" trace-report --workflow wf_opencode_complex --format json --output "$TMP/trace.json" > /dev/null)
@@ -100,13 +112,20 @@ STATUS_FILE="$TMP/status.json" TRACE_FILE="$TMP/trace.json" php -r '
   $trace = json_decode(file_get_contents(getenv("TRACE_FILE")), true, 512, JSON_THROW_ON_ERROR);
   $feature = $status["projection"]["features"][0] ?? [];
   $delegations = $feature["delegations"] ?? [];
-  $found = false;
+  $foundImplementation = false;
+  $foundReview = false;
   foreach ($delegations as $delegation) {
-      if (($delegation["runner"] ?? null) === "opencode" && ($delegation["status"] ?? null) === "completed" && ($delegation["session_id"] ?? null)) {
-          $found = true;
+      if (($delegation["runner"] ?? null) !== "opencode" || ($delegation["status"] ?? null) !== "completed" || !($delegation["session_id"] ?? null)) {
+          continue;
+      }
+      if (($delegation["role"] ?? null) === "implementation") {
+          $foundImplementation = true;
+      }
+      if (($delegation["role"] ?? null) === "technical_review" && ($delegation["permission_policy_status"] ?? null) === "verified") {
+          $foundReview = true;
       }
   }
-  if (!$found || ($trace["delegation_count"] ?? 0) < 1 || ($feature["state"] ?? null) !== "awaiting_gates") {
+  if (!$foundImplementation || !$foundReview || ($trace["delegation_count"] ?? 0) < 2 || ($feature["state"] ?? null) !== "awaiting_gates") {
       exit(1);
   }
 '

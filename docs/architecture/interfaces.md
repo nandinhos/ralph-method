@@ -112,6 +112,11 @@ O adapter OpenCode também exige `runner-result.schema.json`, sessão e evento
 terminal `step_finish`; falta de evidência de fallback permanece como
 `fallback_used=null` e `fallback_status=unknown`.
 
+No modo de revisão, o resultado também deve conter `permission_policy_hash`,
+`permission_policy_status=verified` e `verification_agent`. O `ralph-control`
+classifica resultados `.verify-` como `technical_review` e os demais como
+`implementation`; ambos permanecem delegações distintas no `ralph-trace`.
+
 ## Política de fallback
 
 O padrão é `none`. Fallback precisa estar declarado no manifesto e sempre ser

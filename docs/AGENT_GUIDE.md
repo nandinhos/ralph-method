@@ -176,6 +176,21 @@ O consumidor deve usar `run_id`, `workflow_id`, `feature_key`, `attempt` e
 mas deve sempre consultar `ralph-control status` para decisões. Feedback
 ausente ou atrasado significa falta de observabilidade, não aprovação.
 
+Para uma revisão OpenCode, o controlador exige `RALPH_OPENCODE_VERIFY_AGENT`
+e uma prova externa em `RALPH_OPENCODE_VERIFY_POLICY_PROOF`. Gere a prova
+somente fora da raiz mutável:
+
+```bash
+scripts/opencode-readonly-proof.sh \
+  --repo-root "$PROJECT_ROOT" \
+  --agent ralph-review \
+  --model "$RALPH_OPENCODE_MODEL" \
+  --proof-file /tmp/ralph-readonly-policy-proof.json
+```
+
+O resultado do runner registra `permission_policy_hash` e o status da prova;
+não copie o JSONL nem a resposta completa para documentação versionada.
+
 ### 3.4 Prontidão de providers
 
 A existência de uma CLI não habilita seu adapter. O estado precisa avançar

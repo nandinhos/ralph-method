@@ -578,9 +578,10 @@ function managedSources(): array
         'scripts/ralph-run-independent-gate.sh', 'scripts/ralph-run-quality.sh',
         'scripts/ralph-run-runtime-evidence.sh',
         'schemas/feedback-event.schema.json', 'schemas/provider-readiness.schema.json',
-        'schemas/runner-result.schema.json',
+        'schemas/runner-result.schema.json', 'schemas/readonly-policy-proof.schema.json',
         'adapters/README.md', 'adapters/opencode/runner.sh',
-        'adapters/opencode/parser.php', 'adapters/opencode/contract.md',
+        'adapters/opencode/parser.php', 'adapters/opencode/policy.php', 'adapters/opencode/contract.md',
+        'scripts/opencode-readonly-proof.sh', '.opencode/agents/ralph-review.md',
     ];
 }
 
@@ -596,7 +597,7 @@ function generatedProfiles(): array
     return [
         '.ralph/codex.env' => "# Gerado pelo Ralph Method; altere somente se quiser uma política local.\nRALPH_BIN=scripts/ralph.sh\nRALPH_VERIFY_MODEL=gpt-5.6-luna\n",
         '.ralph/claude.env' => "# Gerado pelo Ralph Method; altere somente se quiser uma política local.\nRALPH_BIN=scripts/ralph.sh\nRALPH_VERIFY_MODEL=sonnet\n",
-        '.ralph/opencode.env' => "# Gerado pelo Ralph Method; defina um modelo explícito antes de executar.\nRALPH_BIN=scripts/ralph.sh\nRALPH_OPENCODE_MODEL=\nRALPH_OPENCODE_VARIANT=\nRALPH_OPENCODE_AGENT=\nRALPH_OPENCODE_AUTO=1\nRALPH_OPENCODE_PURE=1\nRALPH_VERIFY_MODEL=\n",
+        '.ralph/opencode.env' => "# Gerado pelo Ralph Method; defina um modelo e uma prova read-only externa antes de executar.\nRALPH_BIN=scripts/ralph.sh\nRALPH_OPENCODE_MODEL=\nRALPH_OPENCODE_VARIANT=\nRALPH_OPENCODE_AGENT=\nRALPH_OPENCODE_AUTO=1\nRALPH_OPENCODE_PURE=1\nRALPH_OPENCODE_VERIFY_AGENT=ralph-review\nRALPH_OPENCODE_VERIFY_POLICY_PROOF=\nRALPH_VERIFY_MODEL=\n",
     ];
 }
 

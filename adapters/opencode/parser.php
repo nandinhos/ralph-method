@@ -42,12 +42,21 @@ $requestedModel = option($arguments, 'requested-model');
 $executionId = option($arguments, 'execution-id');
 $promptSha256 = option($arguments, 'prompt-sha256');
 $promptTransport = option($arguments, 'prompt-transport');
+$permissionPolicyHash = option($arguments, 'permission-policy-hash', false);
+$permissionPolicyHash = $permissionPolicyHash === '' ? null : $permissionPolicyHash;
+$permissionPolicyStatus = option($arguments, 'permission-policy-status', false) ?? 'not_required';
+$verificationAgent = option($arguments, 'verification-agent', false);
+$textOutput = option($arguments, 'text-output', false);
 $fallbackStatus = option($arguments, 'fallback-status', false) ?? 'unknown';
 $maxEventBytes = (int) (option($arguments, 'max-event-bytes', false) ?? '5242880');
 $maxEvents = (int) (option($arguments, 'max-events', false) ?? '10000');
 
 if (! in_array($fallbackStatus, ['unknown', 'detected', 'not_detected'], true)) {
     fwrite(STDERR, "opencode parser: fallback-status inválido\n");
+    exit(2);
+}
+if (! in_array($permissionPolicyStatus, ['verified', 'not_required', 'failed'], true)) {
+    fwrite(STDERR, "opencode parser: permission-policy-status inválido\n");
     exit(2);
 }
 
@@ -58,6 +67,7 @@ $fatalError = null;
 $observedProvider = null;
 $observedModel = null;
 $malformed = null;
+$textParts = [];
 $eventBytes = is_file($eventsPath) ? (int) filesize($eventsPath) : 0;
 
 if ($eventBytes > $maxEventBytes || ! is_file($eventsPath)) {
@@ -87,6 +97,12 @@ if ($eventBytes > $maxEventBytes || ! is_file($eventsPath)) {
             if ($type === 'error') {
                 $fatalError = clean(is_string($decoded['message'] ?? null) ? $decoded['message'] : (is_string($decoded['error'] ?? null) ? $decoded['error'] : 'evento de erro do OpenCode'));
             }
+            if ($type === 'text') {
+                $text = $decoded['text'] ?? ($decoded['part']['text'] ?? null);
+                if (is_string($text) && $text !== '') {
+                    $textParts[] = $text;
+                }
+            }
             foreach (['providerID', 'provider_id', 'provider'] as $field) {
                 if ($observedProvider === null && is_string($decoded[$field] ?? null) && trim($decoded[$field]) !== '') {
                     $observedProvider = trim($decoded[$field]);
@@ -104,6 +120,9 @@ if ($eventBytes > $maxEventBytes || ! is_file($eventsPath)) {
 
 $status = 'completed';
 $errorSummary = $malformed ?? $fatalError;
+if ($permissionPolicyStatus === 'failed') {
+    $errorSummary ??= 'política read-only não permaneceu válida ao final da execução';
+}
 if ($exitCode !== 0 || $errorSummary !== null || $sessionId === null || $terminalEvent === null) {
     $status = $exitCode === 124 || $exitCode === 137 ? 'usage_limited' : 'failed';
     $errorSummary ??= $exitCode !== 0 ? "OpenCode terminou com exit code {$exitCode}" : 'saída sem sessão ou evento terminal';
@@ -141,9 +160,23 @@ $result = [
     'terminal_event' => $terminalEvent,
     'prompt_sha256' => $promptSha256,
     'prompt_transport' => $promptTransport,
+    'permission_policy_hash' => $permissionPolicyHash,
+    'permission_policy_status' => $permissionPolicyStatus,
+    'verification_agent' => $verificationAgent,
     'error_summary' => $errorSummary,
     'artifact_refs' => [basename($eventsPath)],
 ];
+
+if ($textOutput !== null) {
+    $textTemporary = $textOutput.'.tmp.'.bin2hex(random_bytes(4));
+    $text = $textParts === [] ? '' : implode("\n", $textParts)."\n";
+    if (file_put_contents($textTemporary, $text, LOCK_EX) === false || ! rename($textTemporary, $textOutput)) {
+        @unlink($textTemporary);
+        fwrite(STDERR, "opencode parser: não foi possível publicar texto de verificação\n");
+        exit(2);
+    }
+    @chmod($textOutput, 0600);
+}
 
 $json = json_encode($result, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR)."\n";
 $temporary = $resultPath.'.tmp.'.bin2hex(random_bytes(4));

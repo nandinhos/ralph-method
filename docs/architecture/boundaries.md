@@ -8,7 +8,7 @@
 | `ralph.sh` | criar sessões e executar fases | concluir por parsing de log |
 | canal de feedback | publicar fatos sanitizados ao consumidor externo | alterar estado, gate, lease ou fila |
 | relay do `ralph-control` | retransmitir feedback durante o bloco | interpretar feedback como aprovação |
-| adaptador provider | converter saída externa para contrato trace | escrever ledger ou alterar código |
+| adaptador provider | converter saída externa para contrato trace e reportar política comprovada | escrever ledger ou alterar código |
 | `ralph-init` | detectar contexto, instalar e remover bundle com ownership | copiar credenciais, remover histórico ou sobrescrever arquivos sem ownership |
 | verificador de provider | executar probes seguros explícitos e materializar prontidão | iniciar geração, salvar saída sensível ou habilitar adapter sem diagnóstico |
 | projeto-alvo | fornecer contexto, fases e comando de teste | depender do banco ou domínio do Ralph |
@@ -43,6 +43,6 @@ tem timeout e não publica a saída bruta. `functional` certifica a CLI;
 | Future | Seam atual | Trigger |
 |---|---|---|
 | Claude | adapter de saída + runner selecionável após prontidão | fixture, probe seguro e smoke CLI verdes |
-| OpenCode | adapter de saída + runner selecionável após prontidão | fixture real com saída normalizada, prova de capability/processo e probe seguro; dono: Equipe Ralph Method |
+| OpenCode | adapter de saída + runner selecionável após prontidão | fixture real, política read-only, saída normalizada, prova de capability/processo e probe seguro; dono: Equipe Ralph Method |
 | Hermes/agy | delegação filha registrada no trace após diagnóstico suportado | provider instalado, backend identificado e contrato de execução definido |
 | instalação remota | manifesto local com hashes | necessidade de vários hosts compartilhando estado |

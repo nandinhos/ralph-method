@@ -2,12 +2,14 @@
 
 ## Status
 
-Implementação em andamento na branch `feat/opencode-engine`. A prova real
-exploratória já foi concluída; o adapter somente será considerado apto depois
-da fixture complexa, da regressão e da revisão final.
+Implementação concluída na branch `feat/opencode-engine`, com validação de
+campo local pelo próprio OpenCode. A promoção para `main` continua bloqueada
+até a regressão final, a revisão adversarial, a sincronização documental e a
+revisão explícita da branch.
 
-Este documento descreve o contrato e o plano de implementação. Ele não afirma
-que a engine OpenCode já está disponível para execução pelo Ralph.
+Este documento descreve o contrato e o plano de implementação. A engine está
+disponível nesta branch; a promoção para `main` continua condicionada aos
+gates e revisões descritos ao final.
 
 ## Objetivo
 
@@ -34,7 +36,7 @@ ralph.sh
         → JSONL local
       ← resultado normalizado
   → gates existentes
-  → ralph-trace
+  → ralph-trace (implementation + technical_review)
   → feedback ao orquestrador
 ```
 
@@ -89,6 +91,7 @@ pertencem ao harness da prova.
 | saída sem limite | captura em arquivo desde o primeiro chunk, com teto de bytes/eventos e encerramento fail-closed ao exceder |
 | `--file` ambíguo | prompt contém nonce não previsível; a saída precisa devolvê-lo, vinculando transporte, hash do prompt e execução |
 | instalação incompleta | adapter, parser, schema, contrato e perfil OpenCode entram no manifesto; instalação e uninstall serão testados juntos |
+| revisão sem fronteira real | agente `ralph-review`, fingerprint de política e prova externa com canário; mudança de política invalida o preflight |
 
 ## Fora do escopo desta entrega
 
@@ -407,6 +410,19 @@ O preflight deverá produzir um `permission_policy_hash` e validar:
 
 O hash e o resumo da política entram no artefato, nunca o conteúdo de segredo.
 
+Implementação validada nesta branch:
+
+- `.opencode/agents/ralph-review.md` declara `deny` global e nega mutações,
+  shell e acesso a diretório externo;
+- `adapters/opencode/policy.php` calcula o fingerprint da política e rejeita
+  prova ausente, stale ou localizada dentro da raiz mutável;
+- `scripts/opencode-readonly-proof.sh` executa uma prova real em diretório
+  descartável e grava a prova fora do checkout;
+- `runner.sh` valida a prova antes e depois da sessão e o parser grava o texto
+  da revisão somente em artefato local, fora do ledger;
+- arquivos bootstrap gerados pelo OpenCode são excluídos apenas do hash da
+  fixture descartável de prova; arquivos do projeto continuam protegidos.
+
 ### Término e processo órfão
 
 O caminho `ralph-control → ralph.sh` é o caminho normativo de execução; a
@@ -525,7 +541,18 @@ adapters/
 └── opencode/
     ├── runner.sh
     ├── parser.php
+    ├── policy.php
     └── contract.md
+
+.opencode/
+└── agents/
+    └── ralph-review.md
+
+schemas/
+└── readonly-policy-proof.schema.json
+
+scripts/
+└── opencode-readonly-proof.sh
 
 .ralph/
 └── opencode.env
@@ -583,6 +610,8 @@ os providers.
 
 ### Fase C — adapter OpenCode
 
+**Status: concluída.**
+
 - implementar preflight do modelo e das opções de segurança;
 - montar a invocação por arrays shell, sem `eval` nem concatenação insegura;
 - validar transporte por arquivo e, se necessário, modo de argumento com limite
@@ -596,6 +625,8 @@ os providers.
 Saída: uma execução isolada OpenCode funciona sem tocar no controlador.
 
 ### Fase I — feature complexa e teste de capacidade real
+
+**Status: concluída em 08/08/2026.**
 
 - gerar fixture descartável com input, README da feature e arquivos protegidos;
 - gerar referência, checker externo e nonce fora da fixture;
@@ -624,6 +655,8 @@ realmente configurado.
 
 ### Fase E — trace, feedback e observabilidade de execução
 
+**Status: concluída para OpenCode.**
+
 - registrar `session_id` e identidade do modelo conforme evidência;
 - publicar feedback com `engine=opencode` sem incluir resposta completa;
 - importar trace no controlador depois do retorno, sem entregar lease ao
@@ -634,7 +667,14 @@ realmente configurado.
 
 Saída: o orquestrador externo acompanha a execução real do OpenCode.
 
+O controlador importa todos os resultados JSON normalizados produzidos pelo
+bloco. Arquivos `.verify-` entram como `technical_review`; os demais entram
+como `implementation`, com `execution_mode` explícito e chave idempotente por
+`execution_id`.
+
 ### Fase F — regressão automatizada
+
+**Status: checks portáteis verdes; regressão final da branch pendente.**
 
 - fixtures de sucesso, erro, timeout, processo interrompido e saída inválida;
 - teste de capability ausente para gates e transições;

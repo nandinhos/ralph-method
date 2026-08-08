@@ -1,6 +1,6 @@
 # Roadmap do Ralph Method
 
-## Próxima entrega — engine OpenCode (`v0.4.0` em implementação)
+## Próxima entrega — engine OpenCode (`v0.4.0` em validação controlada)
 
 O trabalho será executado isoladamente na branch `feat/opencode-engine`. A
 engine somente será promovida depois da regressão completa, de uma execução
@@ -13,7 +13,7 @@ real pelo próprio OpenCode e de um teste de campo em projeto real.
 - [x] implementar preflight, execução e parser JSONL do OpenCode;
 - [x] registrar sessão, provider e modelo no `ralph-trace` sem inferência indevida;
 - [x] adicionar perfil, doctor, install/uninstall e seleção condicional;
-- [ ] validar permissões read-only do gate de verificação;
+- [x] validar permissões read-only do gate de verificação;
 - [x] executar fixtures negativas e regressão completa;
 - [x] provar uma sessão real em fixture descartável;
 - [ ] realizar teste de campo em worktree isolada de projeto real;
@@ -24,6 +24,7 @@ O desenho detalhado, os riscos e os critérios estão em
 
 - [x] prova exploratória real em fixture isolado, com output esperado e check;
 - [x] prova complexa real com oráculo externo, hashes protegidos, trace e relatório `0002`;
+- [x] prova complexa com revisão read-only real, fingerprint de política e duas delegações no trace; relatório `0003`;
 
 ## 0.3.1 — certificação de sessões CLI
 

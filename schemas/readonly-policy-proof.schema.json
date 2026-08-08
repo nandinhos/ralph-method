@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ralph-method.local/schemas/readonly-policy-proof.schema.json",
+  "title": "Prova de política read-only do OpenCode",
+  "type": "object",
+  "required": [
+    "schema_version", "status", "agent", "target_root", "policy_hash",
+    "tree_hash_before", "tree_hash_after", "canary_absent",
+    "tool_events_seen", "forbidden_tools_seen", "final_marker"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "status": {"const": "verified"},
+    "agent": {"type": "string", "minLength": 1},
+    "target_root": {"type": "string", "minLength": 1},
+    "policy_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "tree_hash_before": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "tree_hash_after": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "canary_absent": {"const": true},
+    "tool_events_seen": {"type": "integer", "minimum": 1},
+    "forbidden_tools_seen": {"type": "array", "maxItems": 0},
+    "denied_tools_seen": {"type": "array", "items": {"type": "string"}},
+    "session_id": {"type": "string", "minLength": 1},
+    "terminal_event": {"const": "step_finish"},
+    "final_marker": {"const": "READONLY_DENIED"},
+    "event_log_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  },
+  "additionalProperties": false
+}
