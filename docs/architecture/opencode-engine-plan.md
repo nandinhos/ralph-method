@@ -674,7 +674,7 @@ como `implementation`, com `execution_mode` explícito e chave idempotente por
 
 ### Fase F — regressão automatizada
 
-**Status: checks portáteis verdes; regressão final da branch pendente.**
+**Status: concluída na branch; promoção ainda bloqueada pelo teste em projeto real.**
 
 - fixtures de sucesso, erro, timeout, processo interrompido e saída inválida;
 - teste de capability ausente para gates e transições;
@@ -687,11 +687,14 @@ como `implementation`, com `execution_mode` explícito e chave idempotente por
 - teste de instalação, doctor e uninstall;
 - suite completa existente sem regressão em Codex e Claude.
 
-Saída: todos os checks portáteis e a regressão do loop verdes.
+Saída: todos os checks portáteis e a regressão do loop verdes; o teste de
+campo em projeto real permanece separado.
 
 ### Fase G — prova pelo próprio OpenCode
 
-Executar uma feature mínima em um repositório fixture descartável:
+**Status: concluída na branch em fixture descartável; não substitui o teste de campo real.**
+
+Executar uma feature complexa em um repositório fixture descartável:
 
 - o processo é iniciado com `opencode run` real;
 - o OpenCode altera somente o fixture;
@@ -702,7 +705,13 @@ Executar uma feature mínima em um repositório fixture descartável:
 - o processo termina sem órfãos;
 - o relatório reúne o resultado e os artefatos.
 
-Saída: prova de que o adapter não é apenas um parser de fixture.
+Saída: prova de que o adapter não é apenas um parser de fixture. A revisão
+read-only usa `policy_denied_tools` para a política estática e mantém
+`denied_tools_seen` como telemetria observada; isso evita transformar a
+indisponibilidade esperada de ferramentas sob `*: deny` em falso negativo.
+O hash `tree_hash_before/after` cobre a superfície estável dos arquivos de
+política, que o checker recalcula na raiz atual; o checkout do implementador
+pode mudar legitimamente entre a prova e a revisão.
 
 ### Fase H — teste de campo em projeto real
 

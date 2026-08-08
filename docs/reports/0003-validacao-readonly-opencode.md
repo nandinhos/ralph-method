@@ -10,7 +10,7 @@ uma de implementação e outra de revisão técnica read-only.
 | Verificação | Resultado |
 |---|---|
 | Execução controlada | verde |
-| Duração do Ralph | 139 s |
+| Duração do Ralph | 116 s |
 | Cadeia | `ralph-control → namespace PID → ralph.sh → adapter → opencode run` |
 | Feature | relatório determinístico de tarefas |
 | CLI | OpenCode `1.18.15` |
@@ -18,7 +18,7 @@ uma de implementação e outra de revisão técnica read-only.
 | Oráculo externo | `FEATURE_CHECK_OK` |
 | Processo residual | nenhum; `process_verified_terminated=true` |
 | Contenção | `pid_namespace` |
-| Trace | `TRC-2026-0001`, 2 delegações |
+| Trace | 2 delegações, correlacionadas por workflow, feature e tentativa |
 | Estado final | `awaiting_gates` |
 | Promoção para `main` | não realizada |
 
@@ -30,15 +30,17 @@ feature.
 
 ## Delegações registradas
 
-O defeito encontrado durante a análise do primeiro relatório foi corrigido no
-controlador: todos os resultados JSON produzidos pelo bloco são importados e
-classificados pelo nome do artefato. A sessão `.verify-` é uma delegação
-`technical_review`; a sessão `.cycle-` é `implementation`.
+O controlador importou somente os resultados do bloco atual, após validar o
+contrato normalizado e a correspondência entre `workflow_id`, `feature_key` e
+`attempt`. A sessão `.verify-` é uma delegação `technical_review`; a sessão
+`.cycle-` é `implementation`. A execução usou o caminho normativo
+`ralph-control run --engine opencode`, com o perfil `.ralph/opencode.env` da
+fixture.
 
 | Papel | `execution_id` | `session_id` | Status | Eventos | Política |
 |---|---|---|---|---:|---|
-| `implementation` | `exec_run_20260808T183200Z_2_impl_1_1` | `ses_01d5a7f9bffec3JUFado6l5Siw` | `completed`, exit `0` | 48 | `not_required` |
-| `technical_review` | `exec_run_20260808T183200Z_2_verify_1_1` | `ses_01d591ebcffeUQcFOD7mSs9m6R` | `completed`, exit `0` | 31 | `verified` |
+| `implementation` | `exec_run_20260808T203301Z_2_impl_1_1` | `ses_01cebb52cffeMtoceAyybh1dCE` | `completed`, exit `0` | 35 | `not_required` |
+| `technical_review` | `exec_run_20260808T203416Z_3226349_verify_1_1` | `ses_01cea8e02ffe2ygvID1V0rEpzu` | `completed`, exit `0` | 23 | `verified` |
 
 Em ambas as sessões, a identidade do modelo permanece `declared`: a saída
 JSONL não apresentou um campo estruturado suficiente para afirmar o modelo
@@ -50,20 +52,27 @@ efetivo. O trace registra o modelo solicitado sem promovê-lo a `exact`.
 |---|---|
 | Agente | `ralph-review` |
 | Hash da política | `sha256:94189167c56a50dc0f794470716796c54a8abca988055b2174cca9ae80de4c54` |
-| Sessão do canário | `ses_01d5adb24ffehsqsECctedKqEH` |
+| Sessão do canário | `ses_01cebf294ffed1zeOnTPbWg14f` |
 | Evento terminal | `step_finish` |
 | Marcador final | `READONLY_DENIED` |
-| Eventos de ferramenta observados | 4 |
+| Eventos de ferramenta observados | 0 |
+| `policy_denied_tools` | `edit`, `bash` |
+| `denied_tools_seen` | vazio nesta amostra; a política global tornou as ferramentas indisponíveis |
+| `denial_evidence` | `edit: policy`; `bash: policy` |
 | Canário de mutação | ausente |
-| Hash da árvore antes/depois | `52330786eee654936fbabfa412d2a83b1e591fe7d329acb4bfb844ca296ef5bc` em ambos |
+| Hash da superfície de política antes/depois | `d93bd711ad2343f316ba484f10f0e6d5755c1f7e470f706a6a30c4b1c53d285e` em ambos |
 | `forbidden_tools_seen` | lista vazia |
-| Hash do JSONL da prova | `sha256:af352a95835e45ff2ba8d992868e2766b9aa73e0a4c223b6591ccc10c771ffb8` |
+| Tentativas do proof | `1` |
+| Hash do JSONL da prova | `sha256:487683e775ecee9d964541d84749dec5f59c2cb93506ba941656e86766646b73` |
 
 A prova foi armazenada fora da raiz mutável em
-`/tmp/ralph-method-opencode-field.LXQofj/readonly-policy-proof.json`.
-Artefatos de bootstrap que o OpenCode gera em `.opencode/` são ignorados
-somente no hash da fixture descartável; os arquivos da feature continuam
-submetidos ao checker externo.
+`/tmp/ralph-method-opencode-field.DljQ2L/readonly-policy-proof.json`.
+O controlador captura o caminho em memória, remove-o do ambiente antes de
+iniciar a implementação e só o injeta em um processo separado de revisão após
+o grupo da implementação terminar. Os artefatos de bootstrap que o OpenCode gera em `.opencode/`
+são excluídos somente por entradas locais e limitadas em `.git/info/exclude`;
+o teste confirmou que nenhum deles entrou no commit. O único arquivo
+versionado nessa árvore foi `.opencode/agents/ralph-review.md`.
 
 ## Feature e evidências
 
@@ -75,18 +84,18 @@ submetidos ao checker externo.
 | dependência desconhecida | `unknown_dependency`, verde |
 | ciclo | `cycle_detected`, verde |
 | status inválido | `invalid_status`, verde |
-| nonce aleatório | `nonce-eb78754a289992b5`, validado pelo checker externo |
+| nonce aleatório | `nonce-7ee2358ae5a32e65`, validado pelo checker externo |
 | entrada e README protegidos | hashes preservados |
-| captura do bloco | 6.181 bytes de stdout, 0 stderr |
+| captura do bloco | 5.096 bytes de stdout, 0 stderr |
 | limite de captura | 5.242.880 bytes, não excedido |
-| árvore após execução | compatível com o commit `0616851e964830c8845533a132eb856be32ce143` |
+| árvore após execução | compatível com o commit `f75e29988ef12f00e70a02b6c73c0d0d5a82851d` |
 
 Hashes dos JSONL da execução final:
 
 | Artefato | Eventos | Bytes | SHA-256 |
 |---|---:|---:|---|
-| implementação | 48 | 76.260 | `e81d580db322b53ed37ad00ebd6d3a3a665f2bf1d32e6b29f4f144bfa5317fe5` |
-| revisão | 31 | 42.503 | `7c80c79301cd74a2fbf444a1b0f574d6b70fc56af94a818a46251aa77ccb09c2` |
+| implementação | 35 | 63.298 | `fd5962523c223ade0b5bfbac5b01c68ec68fc8e8729637e0966eb9a8c392a656` |
+| revisão | 23 | 33.827 | `ffe31067cefe59443661eba23ae0ebf6a4de8a5757d9cdc32f250d3a13af0c64` |
 
 Eventos brutos e a fixture permanecem descartáveis em `/tmp`; o repositório
 versiona apenas este relatório sanitizado e os contratos necessários para
@@ -96,13 +105,20 @@ reproduzir a prova.
 
 | Incidente | Causa raiz | Correção | Comprovação |
 |---|---|---|---|
-| primeira execução de campo falhou antes da feature | prova read-only intermitente não atingiu o contrato terminal | execução fail-closed, preservação da fixture e repetição controlada; a tentativa manual confirmou a hipótese sem alterar o projeto | prova posterior verde, árvore preservada |
-| primeiro relatório do campo mostrava uma única delegação | `ralph-control` importava somente o resultado mais recente e sempre usava o papel `implementation` | importar todos os `*.result.json` e classificar `.verify-` como `technical_review` | trace final com 2 delegações e teste de campo exigindo os dois papéis |
-| bootstrap do OpenCode alterava a árvore da probe | arquivos de dependência locais não pertencem à feature, mas eram incluídos no hash | exclusão limitada e explícita desses arquivos somente na probe descartável | hash antes/depois idêntico e canário ausente |
+| prova read-only dependia de o modelo emitir uma chamada para ferramenta indisponível | a política `*: deny` pode remover `edit` e `bash` do conjunto de ferramentas, em vez de gerar evento de recusa | prova separa `policy_denied_tools` da telemetria efetivamente observada; hash da política, sessão terminal, ausência de canário, marcador JSONL e superfície de política preservada continuam obrigatórios | `policy_denied_tools=[edit,bash]`, `denied_tools_seen=[]` nesta amostra, `denial_evidence=policy`, superfície preservada |
+| caminho da prova podia ser descoberto pela implementação | a variável externa era herdada por um processo ancestral do agente | controlador limpa a variável antes da implementação e executa `--verify-only` em processo separado, com a prova injetada somente depois do término do primeiro grupo | implementação sem política; revisão importada com `permission_policy_status=verified` |
+| resultado histórico podia ser associado à feature atual | importador não tinha vínculo explícito com o bloco | resultado carrega `workflow_id`, `feature_key`, `attempt`; controlador filtra contexto, valida contrato e mantém idempotência por `execution_id` | trace final com duas delegações da tentativa 1 |
+| a revisão separada apagava os resultados da implementação | `split_phases` recriava `.phases` ao iniciar `--verify-only` | o modo de verificação preserva logs/resultados existentes e apenas regenera a definição das fases | dois arquivos `*.result.json` importados no trace |
+| referências internas de stdout da revisão violavam o contrato do ledger | o controlador retornava nomes de arquivos sem o prefixo `artifact_` | revisão publica referências sanitizadas e compatíveis com o schema do evento | `artifact_FEATURE-OPENCODE-COMPLEX_verification_*` |
+| caminho normativo não iniciava OpenCode | `configuredRalph` e o supervisor não aceitavam/propagavam `opencode` | perfil OpenCode elegível e `--engine` propagado ao subprocesso | campo executado por `ralph-control run --engine opencode` |
+| bootstrap do OpenCode alterava o commit | `.opencode/.gitignore` era criado fora do ownership do Ralph | exclusão local apenas para artefatos ausentes antes da sessão; arquivos já existentes não são apropriados | `git ls-files .opencode` contém somente o agente versionado |
 
 ## Limite desta validação
 
 Esta é a validação da engine e do caminho multiagente em ambiente isolado.
-Ainda falta executar a regressão final da branch e a revisão adversarial antes
-de preparar promoção para `main`. O teste em projeto real permanece uma etapa
-separada e não foi inferido a partir desta fixture.
+O campo terminou em `awaiting_gates`: a engine, o oráculo, o processo, o trace
+e a importação das duas sessões ficaram verdes, mas esta fixture não executa
+os cinco gates de entrega nem gera handoff de projeto real. A regressão final
+da branch, a revisão adversarial do snapshot final e o teste em projeto real
+continuam necessários; nenhuma promoção para `main` foi inferida a partir
+desta prova.

@@ -29,6 +29,8 @@ fail() {
 
 mkdir -p "$FIXTURE/.spec" "$REFERENCE"
 mkdir -p "$FIXTURE/.opencode/agents"
+mkdir -p "$FIXTURE/.ralph"
+printf '%s\n' "RALPH_BIN=$ROOT/scripts/ralph.sh" > "$FIXTURE/.ralph/opencode.env"
 cp "$ROOT/.opencode/agents/ralph-review.md" "$FIXTURE/.opencode/agents/ralph-review.md"
 git -C "$FIXTURE" init -q
 git -C "$FIXTURE" config user.email ralph-method@example.invalid
@@ -81,7 +83,6 @@ lease="$(CLAIM="$claim" php -r '$v=json_decode(getenv("CLAIM"), true, 512, JSON_
 [ -n "$lease" ] || fail 'lease não foi adquirido'
 
 test_command="$ROOT/scripts/opencode-field-check.sh $FIXTURE $NONCE $REFERENCE"
-printf -v controlled_command '%q ' "$ROOT/scripts/ralph.sh" --engine opencode --test-cmd "$test_command" "$FIXTURE/.spec/project-phases.md"
 
 started_at="$(date +%s)"
 set +e
@@ -96,13 +97,18 @@ set +e
   RALPH_PROCESS_NAMESPACE=1 \
   RALPH_HOOK="$ROOT/scripts/ralph-hook.sh" \
   RALPH_FEEDBACK_STDOUT=1 \
-  php "$ROOT/bin/ralph-control" run --workflow wf_opencode_complex --feature FEATURE-OPENCODE-COMPLEX --lease "$lease" --command "$controlled_command") > "$OUTPUT" 2>&1
+  php "$ROOT/bin/ralph-control" run --engine opencode --test-cmd "$test_command" \
+    --workflow wf_opencode_complex --feature FEATURE-OPENCODE-COMPLEX --lease "$lease") > "$OUTPUT" 2>&1
 run_rc=$?
 set -e
 finished_at="$(date +%s)"
 [ "$run_rc" -eq 0 ] || fail "execução controlada terminou com exit $run_rc"
 grep -R -q 'FEATURE_CHECK_OK' "$FIXTURE/.phases/logs" || fail 'oráculo externo não ficou verde'
 grep -R -q 'TASK 1: DONE' "$FIXTURE/.phases/logs" || fail 'revisão independente não produziu veredictos task a task'
+if git -C "$FIXTURE" ls-files --error-unmatch \
+    .opencode/.gitignore .opencode/package.json .opencode/package-lock.json >/dev/null 2>&1; then
+  fail 'bootstrap do OpenCode entrou no commit da feature'
+fi
 
 (cd "$FIXTURE" && php "$ROOT/bin/ralph-control" status > "$TMP/status.json")
 (cd "$FIXTURE" && php "$ROOT/bin/ralph-control" trace-report --workflow wf_opencode_complex --format json --output "$TMP/trace.json" > /dev/null)
@@ -114,6 +120,7 @@ STATUS_FILE="$TMP/status.json" TRACE_FILE="$TMP/trace.json" php -r '
   $delegations = $feature["delegations"] ?? [];
   $foundImplementation = false;
   $foundReview = false;
+  $modes = [];
   foreach ($delegations as $delegation) {
       if (($delegation["runner"] ?? null) !== "opencode" || ($delegation["status"] ?? null) !== "completed" || !($delegation["session_id"] ?? null)) {
           continue;
@@ -124,8 +131,17 @@ STATUS_FILE="$TMP/status.json" TRACE_FILE="$TMP/trace.json" php -r '
       if (($delegation["role"] ?? null) === "technical_review" && ($delegation["permission_policy_status"] ?? null) === "verified") {
           $foundReview = true;
       }
+      $modes[] = $delegation["execution_mode"] ?? null;
+      $refs = $delegation["artifact_refs"] ?? [];
+      if (($delegation["execution_mode"] ?? null) === "impl" && !in_array("artifact_FEATURE-OPENCODE-COMPLEX_opencode_implementation_events", $refs, true)) {
+          exit(1);
+      }
+      if (($delegation["execution_mode"] ?? null) === "verify" && !in_array("artifact_FEATURE-OPENCODE-COMPLEX_opencode_verification_events", $refs, true)) {
+          exit(1);
+      }
   }
-  if (!$foundImplementation || !$foundReview || ($trace["delegation_count"] ?? 0) < 2 || ($feature["state"] ?? null) !== "awaiting_gates") {
+  sort($modes);
+  if (!$foundImplementation || !$foundReview || ($trace["delegation_count"] ?? 0) !== 2 || $modes !== ["impl", "verify"] || ($feature["state"] ?? null) !== "awaiting_gates") {
       exit(1);
   }
 '

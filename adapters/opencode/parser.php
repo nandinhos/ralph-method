@@ -40,6 +40,10 @@ $runnerVersion = option($arguments, 'runner-version');
 $provider = option($arguments, 'provider');
 $requestedModel = option($arguments, 'requested-model');
 $executionId = option($arguments, 'execution-id');
+$executionMode = option($arguments, 'execution-mode');
+$workflowId = option($arguments, 'workflow-id');
+$featureKey = option($arguments, 'feature-key');
+$attempt = option($arguments, 'attempt');
 $promptSha256 = option($arguments, 'prompt-sha256');
 $promptTransport = option($arguments, 'prompt-transport');
 $permissionPolicyHash = option($arguments, 'permission-policy-hash', false);
@@ -50,6 +54,23 @@ $textOutput = option($arguments, 'text-output', false);
 $fallbackStatus = option($arguments, 'fallback-status', false) ?? 'unknown';
 $maxEventBytes = (int) (option($arguments, 'max-event-bytes', false) ?? '5242880');
 $maxEvents = (int) (option($arguments, 'max-events', false) ?? '10000');
+
+if (! in_array($executionMode, ['impl', 'verify'], true)) {
+    fwrite(STDERR, "opencode parser: execution-mode inválido\n");
+    exit(2);
+}
+if (! preg_match('/^wf_[A-Za-z0-9_-]+$/', $workflowId)) {
+    fwrite(STDERR, "opencode parser: workflow-id inválido\n");
+    exit(2);
+}
+if (! preg_match('/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/', $featureKey)) {
+    fwrite(STDERR, "opencode parser: feature-key inválida\n");
+    exit(2);
+}
+if (! preg_match('/^[0-9]+$/', $attempt)) {
+    fwrite(STDERR, "opencode parser: attempt inválida\n");
+    exit(2);
+}
 
 if (! in_array($fallbackStatus, ['unknown', 'detected', 'not_detected'], true)) {
     fwrite(STDERR, "opencode parser: fallback-status inválido\n");
@@ -150,6 +171,10 @@ $result = [
     'identity_status' => $identityStatus,
     'identity_source' => $identitySource,
     'execution_id' => $executionId,
+    'execution_mode' => $executionMode,
+    'workflow_id' => $workflowId,
+    'feature_key' => $featureKey,
+    'attempt' => (int) $attempt,
     'session_id' => $sessionId,
     'status' => $status,
     'exit_code' => $exitCode,

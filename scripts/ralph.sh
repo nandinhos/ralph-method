@@ -27,6 +27,7 @@
 #   --keep-going             continua apos uma fase falhar (default: para)
 #   --max-cycles N           ciclos de correcao por fase (default: 3)
 #   --no-verify              desliga o gate 3 (equivale a RALPH_VERIFY=off)
+#   --verify-only            executa somente a revisão read-only das fases existentes
 #   --test-cmd "<cmd>"       comando de teste do projeto (gate 2)
 #
 # Input (primeiro arquivo posicional). Sem argumento, resolve nesta ordem:
@@ -133,6 +134,7 @@ KEEP_GOING=false
 TEST_CMD_FLAG=""
 MAX_CYCLES="${RALPH_MAX_CYCLES:-3}"
 VERIFY_MODE="${RALPH_VERIFY:-always}"
+VERIFY_ONLY=false
 VERIFY_MODEL=""
 CODEX_PROFILE="${RALPH_CODEX_PROFILE:-bc-harness}"
 CODEX_MODEL="${RALPH_CODEX_MODEL:-gpt-5.6-luna}"
@@ -158,6 +160,7 @@ while [[ $# -gt 0 ]]; do
     --test-cmd=*)  TEST_CMD_FLAG="${1#*=}"; shift ;;
     --keep-going)  KEEP_GOING=true; shift ;;
     --no-verify)   VERIFY_MODE="off"; shift ;;
+    --verify-only) VERIFY_ONLY=true; VERIFY_MODE="always"; shift ;;
     -h|--help)     sed -n '2,70p' "$0"; exit 0 ;;
     *)             INPUT_FILE="$1"; shift ;;
   esac
@@ -608,6 +611,11 @@ preflight_checks() {
       ;;
   esac
 
+  if $VERIFY_ONLY && [[ "$ENGINE" != "opencode" ]]; then
+    fail "--verify-only exige engine opencode."
+    exit 1
+  fi
+
   if ! [[ "$HOOK_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || ! [[ "$HOOK_KILL_AFTER" =~ ^[1-9][0-9]*$ ]]; then
     fail "RALPH_HOOK_TIMEOUT e RALPH_HOOK_KILL_AFTER devem ser inteiros >= 1."
     exit 1
@@ -728,7 +736,9 @@ split_phases() {
     progress_backup=$(cat "$PROGRESS_FILE")
   fi
 
-  rm -rf "$PHASES_DIR"
+  if ! $VERIFY_ONLY; then
+    rm -rf "$PHASES_DIR"
+  fi
   mkdir -p "$PHASES_DIR" "$LOG_DIR" "$PROMPT_DIR"
 
   # Progresso sobrevive entre execucoes, mas so vale para o MESMO input.
@@ -1052,6 +1062,10 @@ run_engine() {
       local opencode_runner="$SCRIPT_DIR/../adapters/opencode/runner.sh"
       local event_file="${log_file}.events.jsonl"
       ENGINE_RESULT_FILE="${log_file}.result.json"
+      local policy_args=()
+      if [[ "$mode" == "verify" ]]; then
+        policy_args=(--policy-proof "$OPENCODE_VERIFY_POLICY_PROOF")
+      fi
       "$opencode_runner" run \
         --repo-root "$(pwd)" \
         --prompt-file "$prompt_file" \
@@ -1064,7 +1078,7 @@ run_engine() {
         --variant "$OPENCODE_VARIANT" \
         --auto "$OPENCODE_AUTO" \
         --pure "$OPENCODE_PURE" \
-        --policy-proof "$OPENCODE_VERIFY_POLICY_PROOF" | tee "$log_file" || rc=$?
+        "${policy_args[@]}" | tee "$log_file" || rc=$?
     elif [[ "$ENGINE" == "codex" ]]; then
       local session_model="$CODEX_MODEL"
       [[ "$mode" == "verify" ]] && session_model="$VERIFY_MODEL"
@@ -1406,6 +1420,24 @@ run_phase() {
     return 2
   fi
 
+  if $VERIFY_ONLY; then
+    export RALPH_PHASE_ATTEMPT=1
+    if ! gate3_independent_verify "$phase_file" 1 0; then
+      LAST_GATE="gate 3 — verificação independente"
+      fail "Gate 3 vermelho — revisão read-only reprovada"
+      emit phase_failed "$phase_title — revisão read-only reprovada"
+      return 1
+    fi
+    if ! guard_execution_authority "gate 3 verify-only"; then
+      fail "Guardrail vermelho — $GATE_CAUSE"
+      emit phase_failed "$phase_title — autoridade violada na revisão read-only"
+      return 2
+    fi
+    success "Phase $phase_num: $phase_title — revisão read-only verde"
+    emit phase_done "$phase_title — revisão read-only concluída"
+    return 0
+  fi
+
   local cycle=1
   while [ "$cycle" -le "$MAX_CYCLES" ]; do
     export RALPH_PHASE_ATTEMPT="$cycle"
@@ -1558,7 +1590,7 @@ main() {
   while IFS='|' read -r file num title; do
     if [ "$num" -lt "$FROM_PHASE" ]; then
       echo -e "  ${BLUE}[$num] $title (pulada por --from)${NC}"
-    elif is_phase_done "$file"; then
+    elif is_phase_done "$file" && ! $VERIFY_ONLY; then
       echo -e "  ${GREEN}[$num] $title (ja completada)${NC}"
     else
       echo -e "  ${YELLOW}[$num] $title${NC}"
@@ -1592,7 +1624,7 @@ main() {
       continue
     fi
 
-    if is_phase_done "$file"; then
+    if is_phase_done "$file" && ! $VERIFY_ONLY; then
       log "Pulando Phase $num: $title (ja completada)"
       skipped_phases+=("$title")
       continue

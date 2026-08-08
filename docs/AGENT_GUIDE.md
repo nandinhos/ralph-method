@@ -190,6 +190,12 @@ scripts/opencode-readonly-proof.sh \
 
 O resultado do runner registra `permission_policy_hash` e o status da prova;
 não copie o JSONL nem a resposta completa para documentação versionada.
+Na prova, `policy_denied_tools` registra as negações verificadas no fingerprint
+da política; `denied_tools_seen` registra apenas recusas que a CLI expôs como
+eventos. Com `*: deny`, uma ferramenta pode ficar indisponível em vez de gerar
+um evento, e o resultado continua válido somente com sessão terminal, canário
+ausente, superfície de política preservada, marcador presente no JSONL e
+política revalidada.
 
 ### 3.4 Prontidão de providers
 

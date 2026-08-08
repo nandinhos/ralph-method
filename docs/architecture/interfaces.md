@@ -113,9 +113,13 @@ terminal `step_finish`; falta de evidência de fallback permanece como
 `fallback_used=null` e `fallback_status=unknown`.
 
 No modo de revisão, o resultado também deve conter `permission_policy_hash`,
-`permission_policy_status=verified` e `verification_agent`. O `ralph-control`
-classifica resultados `.verify-` como `technical_review` e os demais como
-`implementation`; ambos permanecem delegações distintas no `ralph-trace`.
+`permission_policy_status=verified` e `verification_agent`. O resultado
+normalizado carrega ainda `workflow_id`, `feature_key` e `attempt`; o
+`ralph-control` só importa um resultado quando esses três identificadores
+correspondem ao bloco atual. A classificação usa `execution_mode` e confirma
+que o nome do artefato é compatível: `verify` vira `technical_review` e `impl`
+vira `implementation`; ambos permanecem delegações distintas no
+`ralph-trace`.
 
 ## Política de fallback
 

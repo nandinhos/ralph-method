@@ -6,7 +6,8 @@
   "required": [
     "schema_version", "status", "agent", "target_root", "policy_hash",
     "tree_hash_before", "tree_hash_after", "canary_absent",
-    "tool_events_seen", "forbidden_tools_seen", "final_marker"
+    "tool_events_seen", "forbidden_tools_seen", "denied_tools_seen", "policy_denied_tools", "denial_evidence",
+    "session_id", "terminal_event", "event_log_sha256", "final_marker", "attempts"
   ],
   "properties": {
     "schema_version": {"const": "1.0.0"},
@@ -17,13 +18,24 @@
     "tree_hash_before": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
     "tree_hash_after": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
     "canary_absent": {"const": true},
-    "tool_events_seen": {"type": "integer", "minimum": 1},
+    "tool_events_seen": {"type": "integer", "minimum": 0},
     "forbidden_tools_seen": {"type": "array", "maxItems": 0},
-    "denied_tools_seen": {"type": "array", "items": {"type": "string"}},
+    "denied_tools_seen": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "policy_denied_tools": {"type": "array", "items": {"type": "string"}, "minItems": 2, "uniqueItems": true},
+    "denial_evidence": {
+      "type": "object",
+      "required": ["edit", "bash"],
+      "properties": {
+        "edit": {"type": "array", "items": {"enum": ["policy", "event", "model_text"]}, "minItems": 1, "uniqueItems": true},
+        "bash": {"type": "array", "items": {"enum": ["policy", "event", "model_text"]}, "minItems": 1, "uniqueItems": true}
+      },
+      "additionalProperties": false
+    },
     "session_id": {"type": "string", "minLength": 1},
     "terminal_event": {"const": "step_finish"},
     "final_marker": {"const": "READONLY_DENIED"},
-    "event_log_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+    "event_log_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "attempts": {"type": "integer", "minimum": 1}
   },
   "additionalProperties": false
 }

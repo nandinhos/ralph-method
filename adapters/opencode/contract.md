@@ -49,8 +49,14 @@ scripts/opencode-readonly-proof.sh \
 
 O arquivo de prova deve ficar fora da raiz mutável. O controlador valida a
 política novamente antes e depois da sessão. Uma mudança no agente ou na
-configuração invalida o fingerprint; árvore divergente, canário criado,
-evento terminal ausente ou saída incompleta bloqueiam a revisão.
+configuração invalida o fingerprint; superfície de política divergente,
+canário criado, marcador ou evento terminal ausente, ou saída incompleta
+bloqueiam a revisão. A prova separa
+`policy_denied_tools` (o que a política efetivamente nega) de
+`denied_tools_seen` (recusas que a CLI chegou a emitir como evento); com `*:
+deny`, a CLI pode simplesmente não expor a ferramenta, e isso continua válido
+quando o fingerprint, o canário, o marcador JSONL e a superfície de política
+preservada comprovam o isolamento.
 
 O OpenCode pode criar arquivos bootstrap sob `.opencode/` na primeira chamada.
 Eles são ignorados somente no hash da fixture descartável de prova; nenhum

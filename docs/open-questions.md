@@ -3,7 +3,7 @@
 | Questão | Decisão provisória | Dono | Quando revisar |
 |---|---|---|---|
 | Qual modelo OpenCode será usado por um projeto? | exigir `RALPH_OPENCODE_MODEL` explícito; não escolher o primeiro modelo do catálogo | Ralph Method | antes do primeiro `apply` com runner OpenCode |
-| Como o gate de revisão será read-only no OpenCode? | resolvido nesta branch: `ralph-review` + fingerprint + prova externa com canário, árvore preservada e revalidação antes/depois | Ralph Method | ao certificar nova versão do OpenCode |
+| Como o gate de revisão será read-only no OpenCode? | resolvido nesta branch: `ralph-review` + fingerprint + prova externa com canário, marcador JSONL, superfície de política preservada e revalidação antes/depois | Ralph Method | ao certificar nova versão do OpenCode |
 | O evento terminal será sempre `step_finish`? | duas provas reais em OpenCode 1.18.15 observaram `step_finish`; o parser falha fechado se não houver esse evento | Ralph Method | quando uma versão nova do OpenCode for certificada |
 | O transporte do prompt será por argumento? | `--file` foi comprovado; argumento permanece fora do contrato inicial | Ralph Method | se uma versão futura retirar `--file` |
 | O teste de campo usará `refactor-radar`? | candidato inicial, sempre em branch ou worktree isolada | Ralph Method | antes da execução de campo |

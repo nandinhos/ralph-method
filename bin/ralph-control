@@ -25,6 +25,7 @@ $lockFile = $runtime.DIRECTORY_SEPARATOR.'workflow.lock';
 $supervisorLockFile = $runtime.DIRECTORY_SEPARATOR.'supervisor.lock';
 $documentIndexFile = $runtime.DIRECTORY_SEPARATOR.'document-index.json';
 $gateSessionsDirectory = $runtime.DIRECTORY_SEPARATOR.'gate-sessions';
+$activeVerificationProof = null;
 
 const RALPH_DOCUMENT_SCHEMA_VERSION = '1.0.0';
 
@@ -387,8 +388,45 @@ function runnerResultSnapshot(): array
     return $snapshot;
 }
 
-/** @param array<string, string> $before @return list<array{path: string, result: array<string, mixed>}> */
-function runnerResults(array $before = []): array
+/** @return array<string, true> */
+function recordedRunnerExecutionIds(): array
+{
+    $ids = [];
+    foreach (readEvents() as $event) {
+        $executionId = $event['facts']['execution_id'] ?? null;
+        if (is_string($executionId) && preg_match('/^exec_[A-Za-z0-9_-]+$/', $executionId) === 1) {
+            $ids[$executionId] = true;
+        }
+    }
+
+    return $ids;
+}
+
+/** @return array<string, string> */
+function recordedRunnerContextModes(string $workflowId, string $featureKey, int $attempt): array
+{
+    $modes = [];
+    foreach (readEvents() as $event) {
+        if (! is_array($event)
+            || ! in_array($event['type'] ?? null, ['delegation.completed', 'delegation.failed', 'delegation.reconciled'], true)
+            || ($event['workflow_id'] ?? null) !== $workflowId
+            || ($event['feature_key'] ?? null) !== $featureKey
+            || (int) ($event['attempt'] ?? -1) !== $attempt) {
+            continue;
+        }
+        $facts = is_array($event['facts'] ?? null) ? $event['facts'] : [];
+        $executionId = $facts['execution_id'] ?? null;
+        $mode = $facts['execution_mode'] ?? null;
+        if (is_string($executionId) && is_string($mode) && in_array($mode, ['impl', 'verify'], true)) {
+            $modes[$executionId] = $mode;
+        }
+    }
+
+    return $modes;
+}
+
+/** @param array<string, string> $before @param array<string, true> $recorded @return list<array{path: string, result: array<string, mixed>}> */
+function runnerResults(array $before, array $recorded, string $workflowId, string $featureKey, int $attempt): array
 {
     global $root;
     $paths = glob($root.'/.phases/logs/*.result.json') ?: [];
@@ -396,11 +434,26 @@ function runnerResults(array $before = []): array
     usort($paths, static fn (string $left, string $right): int => (filemtime($right) ?: 0) <=> (filemtime($left) ?: 0));
     foreach ($paths as $path) {
         $hash = hash_file('sha256', $path);
-        if (! is_string($hash) || (($before[$path] ?? null) === $hash)) {
+        if (! is_string($hash)) {
             continue;
         }
         $result = json_decode((string) file_get_contents($path), true);
-        if (is_array($result) && ($result['runner'] ?? null) === 'opencode') {
+        $executionId = is_array($result) ? ($result['execution_id'] ?? null) : null;
+        if (is_string($executionId) && isset($recorded[$executionId])) {
+            continue;
+        }
+        if (($before[$path] ?? null) === $hash) {
+            continue;
+        }
+        if (! is_array($result) || ($result['runner'] ?? null) !== 'opencode') {
+            continue;
+        }
+        if (($result['workflow_id'] ?? null) !== $workflowId
+            || ($result['feature_key'] ?? null) !== $featureKey
+            || (int) ($result['attempt'] ?? -1) !== $attempt) {
+            continue;
+        }
+        if (is_array($result)) {
             $results[] = ['path' => $path, 'result' => $result];
         }
     }
@@ -408,19 +461,185 @@ function runnerResults(array $before = []): array
     return $results;
 }
 
+function validateRunnerPolicyEvidence(array $result): void
+{
+    global $root, $activeVerificationProof;
+    $agent = $result['verification_agent'] ?? null;
+    $proof = is_string($activeVerificationProof) && $activeVerificationProof !== ''
+        ? $activeVerificationProof
+        : getenv('RALPH_OPENCODE_VERIFY_POLICY_PROOF');
+    $checkerCandidates = [
+        $root.'/adapters/opencode/policy.php',
+        dirname(__DIR__).'/adapters/opencode/policy.php',
+    ];
+    $checker = null;
+    foreach ($checkerCandidates as $candidate) {
+        if (is_file($candidate)) {
+            $checker = $candidate;
+            break;
+        }
+    }
+    if (! is_string($agent) || $agent === '' || ! is_string($proof) || $proof === '' || ! is_file($checker)) {
+        fail('resultado verify sem agente, prova externa ou checker de política');
+    }
+    $command = escapeshellarg(PHP_BINARY).' '.escapeshellarg($checker)
+        .' check --repo-root '.escapeshellarg($root)
+        .' --agent '.escapeshellarg($agent)
+        .' --proof-file '.escapeshellarg($proof);
+    $exitCode = 0;
+    $output = commandOutput($command, $exitCode);
+    if ($exitCode !== 0) {
+        fail('prova externa read-only rejeitada durante a importação do trace');
+    }
+    $verified = json_decode($output, true);
+    if (! is_array($verified)
+        || ($verified['status'] ?? null) !== 'verified'
+        || ($verified['policy_hash'] ?? null) !== ($result['permission_policy_hash'] ?? null)) {
+        fail('hash da política read-only não corresponde ao resultado importado');
+    }
+}
+
+function validateRunnerResult(array $result): void
+{
+    $required = [
+        'schema_version', 'runner', 'runner_version', 'requested_model',
+        'identity_status', 'identity_source', 'execution_id',
+        'execution_mode', 'workflow_id', 'feature_key', 'attempt', 'status',
+        'exit_code', 'fallback_used', 'fallback_status', 'events_seen', 'session_id',
+        'terminal_event', 'error_summary', 'artifact_refs',
+        'permission_policy_hash', 'permission_policy_status',
+    ];
+    $allowed = [
+        'schema_version', 'runner', 'runner_version', 'provider', 'requested_model',
+        'effective_model', 'identity_status', 'identity_source', 'execution_id',
+        'execution_mode', 'workflow_id', 'feature_key', 'attempt', 'session_id',
+        'status', 'exit_code', 'fallback_used', 'fallback_status', 'events_seen',
+        'event_bytes', 'terminal_event', 'prompt_sha256', 'prompt_transport',
+        'permission_policy_hash', 'permission_policy_status', 'verification_agent',
+        'error_summary', 'artifact_refs',
+    ];
+    foreach ($required as $field) {
+        if (! array_key_exists($field, $result)) {
+            fail("resultado OpenCode sem campo obrigatório: {$field}");
+        }
+    }
+    $unknown = array_values(array_diff(array_keys($result), $allowed));
+    if ($unknown !== []) {
+        fail('resultado OpenCode contém campos não previstos: '.implode(', ', $unknown));
+    }
+    if (($result['schema_version'] ?? null) !== '1.0.0'
+        || ($result['runner'] ?? null) !== 'opencode'
+        || ! is_string($result['runner_version'])
+        || $result['runner_version'] === ''
+        || (! is_string($result['requested_model']) && $result['requested_model'] !== null)
+        || ! in_array($result['identity_status'], ['exact', 'declared', 'observed', 'partial', 'unavailable'], true)
+        || ! is_string($result['identity_source'])
+        || $result['identity_source'] === '') {
+        fail('resultado OpenCode com contrato ou runner inválido');
+    }
+    if (! in_array($result['execution_mode'], ['impl', 'verify'], true)
+        || ! is_string($result['execution_id'])
+        || preg_match('/^exec_[A-Za-z0-9_-]+$/', $result['execution_id']) !== 1
+        || ! is_string($result['workflow_id'])
+        || preg_match('/^wf_[A-Za-z0-9_-]+$/', $result['workflow_id']) !== 1
+        || ! is_string($result['feature_key'])
+        || preg_match('/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/', $result['feature_key']) !== 1
+        || ! is_int($result['attempt'])
+        || $result['attempt'] < 0) {
+        fail('resultado OpenCode com contexto de execução inválido');
+    }
+    foreach (['provider', 'effective_model', 'session_id', 'terminal_event', 'prompt_sha256', 'prompt_transport', 'verification_agent', 'error_summary'] as $field) {
+        if (array_key_exists($field, $result) && ! is_string($result[$field]) && $result[$field] !== null) {
+            fail("resultado OpenCode com {$field} inválido");
+        }
+    }
+    if (! in_array($result['status'], ['completed', 'failed', 'interrupted', 'usage_limited'], true)
+        || ! is_int($result['exit_code'])
+        || ! is_int($result['events_seen'])
+        || $result['events_seen'] < 0
+        || ! is_array($result['artifact_refs'])) {
+        fail('resultado OpenCode com status ou evidência inválida');
+    }
+    foreach ($result['artifact_refs'] as $artifactRef) {
+        if (! is_string($artifactRef)) {
+            fail('resultado OpenCode contém referência de artefato inválida');
+        }
+    }
+    if (array_key_exists('event_bytes', $result)
+        && (! is_int($result['event_bytes']) || $result['event_bytes'] < 0)) {
+        fail('resultado OpenCode com event_bytes inválido');
+    }
+    if (! in_array($result['fallback_status'], ['unknown', 'detected', 'not_detected'], true)
+        || (! is_bool($result['fallback_used']) && $result['fallback_used'] !== null)) {
+        fail('resultado OpenCode com fallback inválido');
+    }
+    if (array_key_exists('permission_policy_status', $result)
+        && ! in_array($result['permission_policy_status'], ['verified', 'not_required', 'failed'], true)) {
+        fail('resultado OpenCode com permission_policy_status inválido');
+    }
+    if (array_key_exists('permission_policy_hash', $result)
+        && $result['permission_policy_hash'] !== null
+        && (! is_string($result['permission_policy_hash']) || preg_match('/^[a-f0-9]{64}$/', $result['permission_policy_hash']) !== 1)) {
+        fail('resultado OpenCode com permission_policy_hash inválido');
+    }
+    if ($result['execution_mode'] === 'verify'
+        && (($result['permission_policy_status'] ?? null) !== 'verified'
+            || ! is_string($result['permission_policy_hash'] ?? null)
+            || preg_match('/^[a-f0-9]{64}$/', (string) $result['permission_policy_hash']) !== 1
+            || ! is_string($result['verification_agent'] ?? null)
+            || $result['verification_agent'] === '')) {
+        fail('resultado OpenCode verify sem contrato de política completo');
+    }
+    if ($result['execution_mode'] === 'impl'
+        && (($result['permission_policy_status'] ?? null) !== 'not_required'
+            || ($result['permission_policy_hash'] ?? null) !== null)) {
+        fail('resultado OpenCode impl carrega política read-only indevida');
+    }
+    if ($result['status'] === 'completed'
+        && (! is_string($result['session_id'] ?? null)
+            || $result['session_id'] === ''
+            || ($result['terminal_event'] ?? null) !== 'step_finish'
+            || $result['events_seen'] < 1)) {
+        fail('resultado OpenCode concluído sem sessão, evento terminal ou eventos observados');
+    }
+}
+
 function recordRunnerResult(array $arguments, array $feature, array $result, string $resultPath): void
 {
+    validateRunnerResult($result);
     $executionId = $result['execution_id'] ?? null;
     if (! is_string($executionId) || preg_match('/^exec_[A-Za-z0-9_-]+$/', $executionId) !== 1) {
-        return;
+        fail('resultado OpenCode com execution_id inválido');
+    }
+    if (($result['workflow_id'] ?? null) !== ($arguments['workflow'] ?? null)
+        || ($result['feature_key'] ?? null) !== ($feature['feature_key'] ?? null)
+        || (int) ($result['attempt'] ?? -1) !== (int) ($feature['attempt'] ?? -2)) {
+        fail("resultado {$executionId} não pertence ao bloco atual");
+    }
+    $executionMode = $result['execution_mode'] ?? null;
+    if (! in_array($executionMode, ['impl', 'verify'], true)) {
+        fail("resultado {$executionId} sem execution_mode válido");
+    }
+    $pathSuggestsVerification = str_contains(basename($resultPath), '.verify-');
+    if ($pathSuggestsVerification !== ($executionMode === 'verify')) {
+        fail("resultado {$executionId} tem modo incompatível com o artefato");
+    }
+    if ($executionMode === 'verify') {
+        if (($result['permission_policy_status'] ?? null) !== 'verified') {
+            fail("resultado verify {$executionId} sem política read-only verificada");
+        }
+        validateRunnerPolicyEvidence($result);
     }
     $status = ($result['status'] ?? null) === 'completed' ? 'delegation.completed' : 'delegation.failed';
-    $isVerification = str_contains(basename($resultPath), '.verify-');
+    $artifactRole = $executionMode === 'verify' ? 'verification' : 'implementation';
     $facts = [
         'execution_id' => $executionId,
-        'role' => $isVerification ? 'technical_review' : 'implementation',
-        'purpose' => $isVerification ? 'technical_review' : 'feature_execution',
-        'execution_mode' => $isVerification ? 'verify' : 'impl',
+        'role' => $executionMode === 'verify' ? 'technical_review' : 'implementation',
+        'purpose' => $executionMode === 'verify' ? 'technical_review' : 'feature_execution',
+        'execution_mode' => $executionMode,
+        'workflow_id' => $result['workflow_id'],
+        'feature_key' => $result['feature_key'],
+        'attempt' => (int) $result['attempt'],
         'runner' => 'opencode',
         'runner_version' => $result['runner_version'] ?? null,
         'provider' => $result['provider'] ?? null,
@@ -440,14 +659,15 @@ function recordRunnerResult(array $arguments, array $feature, array $result, str
         'permission_policy_hash' => $result['permission_policy_hash'] ?? null,
         'permission_policy_status' => $result['permission_policy_status'] ?? 'not_required',
         'verification_agent' => $result['verification_agent'] ?? null,
+        'result_sha256' => hash_file('sha256', $resultPath) ?: null,
         'error_summary' => $result['error_summary'] ?? null,
         'artifact_refs' => [
-            'artifact_'.$feature['feature_key'].'_opencode_events',
-            'artifact_'.$feature['feature_key'].'_opencode_result',
+            'artifact_'.$feature['feature_key'].'_opencode_'.$artifactRole.'_events',
+            'artifact_'.$feature['feature_key'].'_opencode_'.$artifactRole.'_result',
         ],
     ];
     $traceArguments = array_merge($arguments, [
-        'idempotency-key' => 'trace:'.$status.':'.($feature['feature_key'] ?? '').':'.$executionId,
+        'idempotency-key' => 'trace:delegation:'.($feature['feature_key'] ?? '').':'.$executionId,
     ]);
     appendEvent(eventContext($traceArguments, $feature, $status, 'Resultado do adapter OpenCode importado pelo controlador', $facts));
 }
@@ -519,6 +739,35 @@ function runReadOnlyCommand(string $command, int $timeoutSeconds, array $environ
         'timed_out' => $timedOut,
         'process_tree' => $tree,
     ];
+}
+
+/** @return array{exit_code:int,stdout:string,stderr:string,timed_out:bool,process_tree:array<string,mixed>,artifact_refs:list<string>} */
+function runSeparatedVerification(string $command, array $environment, string $featureKey): array
+{
+    global $runtime;
+    $timeout = max(1, (int) (getenv('RALPH_OPENCODE_TIMEOUT') ?: 1800)) + 30;
+    $result = runReadOnlyCommand($command, $timeout, $environment);
+    $prefix = $runtime.'/artifacts/'.$featureKey.'-verification';
+    if (! is_dir(dirname($prefix)) && ! mkdir(dirname($prefix), 0700, true) && ! is_dir(dirname($prefix))) {
+        fail('não foi possível criar artefatos da revisão read-only');
+    }
+    $stdoutPath = $prefix.'.stdout.log';
+    $stderrPath = $prefix.'.stderr.log';
+    file_put_contents($stdoutPath, substr($result['stdout'], 0, 5242880), LOCK_EX);
+    file_put_contents($stderrPath, substr($result['stderr'], 0, 5242880), LOCK_EX);
+    @chmod($stdoutPath, 0600);
+    @chmod($stderrPath, 0600);
+    if ($result['stdout'] !== '') {
+        fwrite(STDOUT, $result['stdout']);
+    }
+    if ($result['stderr'] !== '') {
+        fwrite(STDERR, $result['stderr']);
+    }
+
+    return array_merge($result, ['artifact_refs' => [
+        'artifact_'.$featureKey.'_verification_stdout',
+        'artifact_'.$featureKey.'_verification_stderr',
+    ]]);
 }
 
 /** @return array{root_pid: int, alive: bool, pids: list<int>, process_count: int, cpu_milli: int, pgids: list<int>, states: list<string>} */
@@ -1391,6 +1640,9 @@ function supervisorStartRun(array $arguments, string $workflowId, string $featur
         .' --feature '.escapeshellarg($featureKey)
         .' --lease '.escapeshellarg($lease)
         .' --heartbeat-interval '.escapeshellarg((string) $heartbeatInterval);
+    if (is_string($arguments['engine'] ?? null) && trim((string) $arguments['engine']) !== '') {
+        $runCommand .= ' --engine '.escapeshellarg((string) $arguments['engine']);
+    }
     if (is_string($arguments['command'] ?? null) && trim((string) $arguments['command']) !== '') {
         $runCommand .= ' --command '.escapeshellarg((string) $arguments['command']);
     }
@@ -3021,8 +3273,8 @@ function configuredRalph(array $arguments): string
 {
     global $root;
     $engine = (string) ($arguments['engine'] ?? 'codex');
-    if (! in_array($engine, ['codex', 'claude'], true)) {
-        fail('engine inválido; use codex ou claude');
+    if (! in_array($engine, ['codex', 'claude', 'opencode'], true)) {
+        fail('engine inválido; use codex, claude ou opencode');
     }
     $profile = $root.'/.ralph/'.$engine.'.env';
     $ralph = null;
@@ -3053,14 +3305,31 @@ function runControlled(array $arguments): void
     $workflowId = required($arguments, 'workflow');
     $featureKey = required($arguments, 'feature');
     $command = $arguments['command'] ?? null;
+    $engine = (string) ($arguments['engine'] ?? 'codex');
+    $generatedRalph = false;
+    $verificationCommand = null;
+    $verificationProof = getenv('RALPH_OPENCODE_VERIFY_POLICY_PROOF');
+    $verificationAgent = getenv('RALPH_OPENCODE_VERIFY_AGENT');
     if (! is_string($command) || trim($command) === '') {
         $ralph = configuredRalph($arguments);
-        $engine = (string) ($arguments['engine'] ?? 'codex');
+        $testCommand = is_string($arguments['test-cmd'] ?? null) && trim((string) $arguments['test-cmd']) !== ''
+            ? (string) $arguments['test-cmd']
+            : 'bin/check';
         $workflow = loadWorkflow();
         $projection = project($workflow, readEvents());
         $feature = featureFrom($projection, $featureKey);
         $input = singleFeatureInput($workflow, $feature, (int) $feature['attempt'] + 1);
-        $command = escapeshellarg($ralph).' --engine '.escapeshellarg($engine).' --test-cmd '.escapeshellarg('bin/check').' '.escapeshellarg($input);
+        $command = escapeshellarg($ralph).' --engine '.escapeshellarg($engine).' --test-cmd '.escapeshellarg($testCommand);
+        if ($engine === 'opencode') {
+            if (! is_string($verificationProof) || trim($verificationProof) === ''
+                || ! is_string($verificationAgent) || trim($verificationAgent) === '') {
+                fail('execução OpenCode normativa exige proof externo e agente read-only');
+            }
+            $command .= ' --no-verify';
+            $verificationCommand = escapeshellarg($ralph).' --engine opencode --verify-only '.escapeshellarg($input);
+        }
+        $command .= ' '.escapeshellarg($input);
+        $generatedRalph = true;
     }
 
     $lease = $arguments['lease'] ?? null;
@@ -3089,6 +3358,14 @@ function runControlled(array $arguments): void
         'execution_nonce' => bin2hex(random_bytes(12)),
     ]));
 
+    $GLOBALS['activeVerificationProof'] = is_string($verificationProof) ? $verificationProof : null;
+    $GLOBALS['activeVerificationAgent'] = is_string($verificationAgent) ? $verificationAgent : null;
+    // O controlador guarda o caminho somente em memória para a segunda fase.
+    // O processo de implementação não pode recebê-lo nem herdá-lo via /proc.
+    putenv('RALPH_OPENCODE_VERIFY_POLICY_PROOF');
+    putenv('RALPH_OPENCODE_VERIFY_AGENT');
+    unset($_ENV['RALPH_OPENCODE_VERIFY_POLICY_PROOF'], $_ENV['RALPH_OPENCODE_VERIFY_AGENT']);
+
     $environment = array_merge((array) getenv(), $_ENV, [
         // O executor não recebe contexto de workflow nem lease. Isso impede
         // que ele use o hook/CLI como capability de escrita no ledger.
@@ -3097,11 +3374,24 @@ function runControlled(array $arguments): void
         'RALPH_FEEDBACK_STDOUT' => getenv('RALPH_FEEDBACK_STDOUT') !== false
             ? (string) getenv('RALPH_FEEDBACK_STDOUT')
             : '1',
+        'RALPH_EXECUTION_WORKFLOW_ID' => $workflowId,
+        'RALPH_EXECUTION_FEATURE_KEY' => $featureKey,
+        'RALPH_EXECUTION_ATTEMPT' => (string) $attempt,
     ]);
-    unset($environment['RALPH_WORKFLOW_ID'], $environment['RALPH_FEATURE_KEY'], $environment['RALPH_LEASE_TOKEN']);
+    unset(
+        $environment['RALPH_WORKFLOW_ID'],
+        $environment['RALPH_FEATURE_KEY'],
+        $environment['RALPH_LEASE_TOKEN'],
+        $environment['RALPH_OPENCODE_VERIFY_POLICY_PROOF'],
+        $environment['RALPH_OPENCODE_VERIFY_AGENT'],
+    );
+    if ($generatedRalph && $engine === 'opencode') {
+        unset($environment['RALPH_VERIFY']);
+    }
     $processCommand = controlledProcessCommand($command);
     $containment = $processCommand['containment'];
     $runnerResultBefore = runnerResultSnapshot();
+    $recordedRunnerIds = recordedRunnerExecutionIds();
     $pipes = [];
     $process = proc_open($processCommand['command'], [
         0 => ['pipe', 'r'],
@@ -3216,11 +3506,45 @@ function runControlled(array $arguments): void
     $processSnapshot = processTreeSnapshot($pid);
     $groupGone = ! $processSnapshot['alive'];
 
+    $verificationResult = null;
+    if ($generatedRalph && $engine === 'opencode' && $exitCode === 0 && $groupGone) {
+        $verificationEnvironment = $environment;
+        $verificationEnvironment['RALPH_OPENCODE_VERIFY_POLICY_PROOF'] = (string) $verificationProof;
+        $verificationEnvironment['RALPH_OPENCODE_VERIFY_AGENT'] = (string) $verificationAgent;
+        $verificationEnvironment['RALPH_OPENCODE_MODEL'] = (string) (getenv('RALPH_OPENCODE_MODEL') ?: '');
+        $verificationResult = runSeparatedVerification((string) $verificationCommand, $verificationEnvironment, $featureKey);
+        if ($verificationResult['timed_out'] || ($verificationResult['process_tree']['alive'] ?? false)) {
+            $exitCode = 124;
+        } else {
+            $exitCode = (int) $verificationResult['exit_code'];
+        }
+    }
+
     $workflow = loadWorkflow();
     $projection = project($workflow, readEvents());
     $feature = featureFrom($projection, $featureKey);
     checkLease($feature, $lease);
-    foreach (runnerResults($runnerResultBefore) as $runnerResult) {
+    $runnerResultEntries = runnerResults($runnerResultBefore, $recordedRunnerIds, $workflowId, $featureKey, $attempt);
+    if ($generatedRalph && $engine === 'opencode' && $exitCode === 0) {
+        $contextModes = recordedRunnerContextModes($workflowId, $featureKey, $attempt);
+        foreach ($runnerResultEntries as $runnerResultEntry) {
+            $resultExecutionId = $runnerResultEntry['result']['execution_id'] ?? null;
+            $resultMode = $runnerResultEntry['result']['execution_mode'] ?? null;
+            if (! is_string($resultExecutionId) || ! is_string($resultMode) || isset($contextModes[$resultExecutionId])) {
+                fail('resultado OpenCode normativo duplicado ou sem modo único');
+            }
+            $contextModes[$resultExecutionId] = $resultMode;
+        }
+        $modeCounts = array_count_values(array_values($contextModes));
+        if (count($contextModes) !== 2 || ($modeCounts['impl'] ?? 0) !== 1 || ($modeCounts['verify'] ?? 0) !== 1) {
+            appendEvent(eventContext($arguments, $feature, 'recovery.required', 'Execução OpenCode normativa sem exatamente uma implementação e uma revisão', [
+                'execution_modes' => $contextModes,
+                'runner_result_paths' => array_values(array_map(static fn (array $entry): string => $entry['path'], $runnerResultEntries)),
+            ]));
+            fail('execução OpenCode normativa exige exatamente uma delegação impl e uma verify');
+        }
+    }
+    foreach ($runnerResultEntries as $runnerResult) {
         recordRunnerResult($arguments, $feature, $runnerResult['result'], $runnerResult['path']);
     }
     $repository = currentRepository();
@@ -3240,7 +3564,10 @@ function runControlled(array $arguments): void
         'capture_limit_exceeded' => $captureLimitExceeded,
         'stdout_preview' => sanitize($stdoutPreview),
         'stderr_preview' => sanitize($stderrPreview),
-        'artifact_refs' => ['artifact_'.$featureKey.'_stdout', 'artifact_'.$featureKey.'_stderr'],
+        'artifact_refs' => array_values(array_merge(
+            ['artifact_'.$featureKey.'_stdout', 'artifact_'.$featureKey.'_stderr'],
+            $verificationResult['artifact_refs'] ?? [],
+        )),
     ];
     if (! $groupGone || $captureLimitExceeded) {
         $reason = $captureLimitExceeded

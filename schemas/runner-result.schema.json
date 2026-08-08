@@ -5,13 +5,13 @@
   "type": "object",
   "required": [
     "schema_version", "runner", "runner_version", "requested_model",
-    "identity_status", "identity_source", "execution_id", "status",
-    "exit_code", "fallback_used", "fallback_status", "events_seen",
+    "identity_status", "identity_source", "execution_id", "execution_mode", "workflow_id", "feature_key", "attempt", "status",
+    "exit_code", "fallback_used", "fallback_status", "events_seen", "session_id",
     "terminal_event", "error_summary", "artifact_refs"
   ],
   "properties": {
     "schema_version": {"const": "1.0.0"},
-    "runner": {"type": "string", "minLength": 1},
+    "runner": {"const": "opencode"},
     "runner_version": {"type": "string", "minLength": 1},
     "provider": {"type": ["string", "null"]},
     "requested_model": {"type": ["string", "null"]},
@@ -19,6 +19,10 @@
     "identity_status": {"enum": ["exact", "declared", "observed", "partial", "unavailable"]},
     "identity_source": {"type": "string", "minLength": 1},
     "execution_id": {"type": "string", "pattern": "^exec_[A-Za-z0-9_-]+$"},
+    "execution_mode": {"enum": ["impl", "verify"]},
+    "workflow_id": {"type": "string", "pattern": "^wf_[A-Za-z0-9_-]+$"},
+    "feature_key": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "attempt": {"type": "integer", "minimum": 0},
     "session_id": {"type": ["string", "null"]},
     "status": {"enum": ["completed", "failed", "interrupted", "usage_limited"]},
     "exit_code": {"type": "integer"},
@@ -29,11 +33,50 @@
     "terminal_event": {"type": ["string", "null"]},
     "prompt_sha256": {"type": ["string", "null"]},
     "prompt_transport": {"type": ["string", "null"]},
-    "permission_policy_hash": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$|^$"},
+    "permission_policy_hash": {
+      "anyOf": [
+        {"type": "null"},
+        {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+      ]
+    },
     "permission_policy_status": {"enum": ["verified", "not_required", "failed"]},
     "verification_agent": {"type": ["string", "null"]},
     "error_summary": {"type": ["string", "null"]},
     "artifact_refs": {"type": "array", "items": {"type": "string"}}
   },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "completed"}}},
+      "then": {
+        "required": ["session_id", "terminal_event"],
+        "properties": {
+          "session_id": {"type": "string", "minLength": 1},
+          "terminal_event": {"const": "step_finish"},
+          "events_seen": {"type": "integer", "minimum": 1}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"execution_mode": {"const": "verify"}}},
+      "then": {
+        "required": ["permission_policy_hash", "permission_policy_status", "verification_agent"],
+        "properties": {
+          "permission_policy_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+          "permission_policy_status": {"const": "verified"},
+          "verification_agent": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"execution_mode": {"const": "impl"}}},
+      "then": {
+        "required": ["permission_policy_hash", "permission_policy_status"],
+        "properties": {
+          "permission_policy_hash": {"type": "null"},
+          "permission_policy_status": {"const": "not_required"}
+        }
+      }
+    }
+  ],
   "additionalProperties": false
 }

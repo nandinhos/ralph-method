@@ -39,8 +39,8 @@ preflight
 | Contenção e encerramento | verde | prova feita em namespace de PID |
 | `ralph-trace` | verde | identidade efetiva ainda pode ser `declared` |
 | Regressão portátil | verde | 163 asserts |
-| Cinco gates da entrega | pendente | a prova anterior usou `--no-verify` |
-| Verificador read-only OpenCode | pendente | precisa de política efetiva comprovada |
+| Cinco gates da entrega | pendente | fixture terminou em `awaiting_gates`; ainda falta executar os cinco gates como entrega |
+| Verificador read-only OpenCode | verde em fixture | política fingerprinted, prova externa, sessão separada e importação no trace; campo real ainda pendente |
 | Projeto real | pendente | deve ocorrer em worktree isolada |
 
 O estado anterior `awaiting_gates` é preservado como evidência honesta. Ele

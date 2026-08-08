@@ -66,9 +66,11 @@ preflight() {
     [ -n "$policy_hash" ] || die 'prova read-only sem hash de política'
   fi
 
+  local policy_hash_json='null'
+  [ -n "$policy_hash" ] && policy_hash_json="\"$policy_hash\""
   printf '{"status":"ready","runner":"opencode","runner_version":"%s","requested_model":"%s","prompt_transport":"file","permission_policy_status":"%s","permission_policy_hash":%s}\n' \
     "$(version)" "$model" "$([ "$mode" = verify ] && echo verified || echo not_required)" \
-    "${policy_hash:+\"$policy_hash\"}"
+    "$policy_hash_json"
 }
 
 run_engine() {
@@ -78,6 +80,9 @@ run_engine() {
   local result_file=''
   local mode='impl'
   local execution_id=''
+  local workflow_id="${RALPH_EXECUTION_WORKFLOW_ID:-}"
+  local feature_key="${RALPH_EXECUTION_FEATURE_KEY:-}"
+  local attempt="${RALPH_EXECUTION_ATTEMPT:-}"
   local model="${RALPH_OPENCODE_MODEL:-}"
   local agent="${RALPH_OPENCODE_AGENT:-}"
   local variant="${RALPH_OPENCODE_VARIANT:-}"
@@ -95,6 +100,9 @@ run_engine() {
       --result-file) result_file="${2:-}"; shift 2 ;;
       --mode) mode="${2:-}"; shift 2 ;;
       --execution-id) execution_id="${2:-}"; shift 2 ;;
+      --workflow-id) workflow_id="${2:-}"; shift 2 ;;
+      --feature-key) feature_key="${2:-}"; shift 2 ;;
+      --attempt) attempt="${2:-}"; shift 2 ;;
       --model) model="${2:-}"; shift 2 ;;
       --agent) agent="${2:-}"; shift 2 ;;
       --variant) variant="${2:-}"; shift 2 ;;
@@ -111,6 +119,9 @@ run_engine() {
   [ -n "$events_file" ] || die 'events-file obrigatório'
   [ -n "$result_file" ] || die 'result-file obrigatório'
   [[ "$mode" == 'impl' || "$mode" == 'verify' ]] || die "modo inválido: $mode"
+  [[ "$workflow_id" =~ ^wf_[A-Za-z0-9_-]+$ ]] || die "workflow-id inválido: $workflow_id"
+  [[ "$feature_key" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || die "feature-key inválida: $feature_key"
+  [[ "$attempt" =~ ^[0-9]+$ ]] || die "attempt inválida: $attempt"
   local policy_hash=''
   if [ "$mode" = verify ]; then
     local verify_agent="${RALPH_OPENCODE_VERIFY_AGENT:-$agent}"
@@ -120,6 +131,11 @@ run_engine() {
     policy_json="$(php "$POLICY_CHECKER" check --repo-root "$repo_root" --agent "$verify_agent" --proof-file "$policy_proof")" \
       || die 'prova read-only não corresponde à política atual antes da execução'
     policy_hash="$(POLICY_JSON="$policy_json" php -r '$v=json_decode(getenv("POLICY_JSON"), true, 512, JSON_THROW_ON_ERROR); echo $v["policy_hash"] ?? "";')"
+  else
+    # O implementador não deve descobrir nem alterar a prova externa do
+    # verificador por meio do ambiente ou dos argumentos do processo.
+    policy_proof=''
+    unset RALPH_OPENCODE_VERIFY_POLICY_PROOF RALPH_OPENCODE_VERIFY_AGENT
   fi
   [[ "$execution_id" =~ ^exec_[A-Za-z0-9_-]+$ ]] || die "execution-id inválido: $execution_id"
   [ -n "$model" ] || die 'RALPH_OPENCODE_MODEL deve ser explícito'
@@ -144,6 +160,18 @@ run_engine() {
   prompt_sha256="$(sha256sum "$prompt_file" | awk '{print $1}')"
   local provider="${model%%/*}"
   local command=(opencode run --format json --dir "$repo_root" --model "$model" --file "$prompt_file")
+
+  protectBootstrapFiles() {
+    local exclude_file="$repo_root/.git/info/exclude"
+    [ -d "$repo_root/.git/info" ] || return 0
+    touch "$exclude_file"
+    for entry in '/.opencode/.gitignore' '/.opencode/package.json' '/.opencode/package-lock.json' '/.opencode/bun.lock' '/.opencode/node_modules/'; do
+      [ -e "$repo_root$entry" ] && continue
+      grep -Fqx "$entry" "$exclude_file" 2>/dev/null || printf '%s\n' "$entry" >> "$exclude_file"
+    done
+  }
+
+  protectBootstrapFiles
 
   [ -n "$agent" ] && command+=(--agent "$agent")
   [ -n "$variant" ] && command+=(--variant "$variant")
@@ -174,6 +202,10 @@ run_engine() {
     --provider "$provider" \
     --requested-model "$model" \
     --execution-id "$execution_id" \
+    --execution-mode "$mode" \
+    --workflow-id "$workflow_id" \
+    --feature-key "$feature_key" \
+    --attempt "$attempt" \
     --prompt-sha256 "$prompt_sha256" \
     --prompt-transport file \
     --permission-policy-hash "$policy_hash" \
