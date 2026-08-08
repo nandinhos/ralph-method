@@ -10,6 +10,8 @@ O Ralph Method é um framework local instalado dentro de um projeto-alvo. O
 - [interfaces.md](interfaces.md) — CLI, events e providers.
 - [opencode-engine-plan.md](opencode-engine-plan.md) — proposta de contrato
   agnóstico e plano da engine OpenCode.
+- [../reports/0001-prova-real-opencode.md](../reports/0001-prova-real-opencode.md)
+  — evidência da primeira prova real isolada.
 
 ## Princípio central
 

@@ -75,6 +75,29 @@ um fluxo de produto próprio.
 | feedback | JSONL/stdout/callback já existente | A engine deve reutilizar o canal, sem criar outro |
 | processo | `ralph-bloco` usa `setsid` e controla PGID | O runner OpenCode deve permanecer dentro do grupo do bloco |
 
+## Prova exploratória real antecipada
+
+Antes da implementação do adapter, foi executada uma sessão real do OpenCode
+em fixture descartável. O relatório versionado é
+[`reports/0001-prova-real-opencode.md`](../reports/0001-prova-real-opencode.md).
+
+Resultado observado:
+
+```text
+CLI 1.18.15
+exit code 0
+16 eventos JSONL
+sessionID presente
+terminal step_finish
+test-feature.sh: FEATURE_CHECK_OK
+processo opencode run residual: nenhum encontrado
+```
+
+Essa prova confirma a capacidade da CLI, mas não certifica o Ralph: ainda não
+houve `ralph-control`, lease isolado, trace importado, gates ou commit
+controlado. O probe real passa a ser a primeira fase da execução da branch,
+antes da integração do adapter.
+
 ## Princípios de desenho
 
 ### O núcleo não conhece flags de provider
@@ -474,6 +497,17 @@ Codex e Claude permanecem nos caminhos estáveis até que um segundo adapter
 real prove que a migração para wrappers comuns paga seu custo de regressão.
 
 ## Fases de implementação
+
+### Fase 0 — prova real exploratória isolada — concluída
+
+- criar fixture Git descartável;
+- definir output esperado antes da execução;
+- executar uma feature real via `opencode run`;
+- executar verificador determinístico;
+- guardar somente evidência sanitizada e o resultado observado.
+
+Saída: a CLI real foi comprovada; os limites do protocolo foram registrados
+antes da implementação do adapter.
 
 ### Fase A — contrato, capability e proteção da regressão
 

@@ -4,7 +4,7 @@
 |---|---|---|---|
 | Qual modelo OpenCode será usado por um projeto? | exigir `RALPH_OPENCODE_MODEL` explícito; não escolher o primeiro modelo do catálogo | Ralph Method | antes do primeiro `apply` com runner OpenCode |
 | Como o gate de revisão será read-only no OpenCode? | exigir agente ou política local com permissões de escrita negadas, comprovada no preflight | Ralph Method | antes de qualquer smoke real |
-| O evento terminal será sempre `step_finish`? | começar com `step_finish` e fixtures; falhar fechado se a versão real divergir | Ralph Method | durante a prova pelo OpenCode |
+| O evento terminal será sempre `step_finish`? | a prova real em OpenCode 1.18.15 observou `step_finish`; o adapter deve confirmar por versão e falhar fechado se divergir | Ralph Method | durante a implementação do parser |
 | O transporte do prompt será por argumento? | preferir `--file`; argumento só com limite de bytes e teste de conteúdo sensível | Ralph Method | antes do primeiro smoke |
 | O teste de campo usará `refactor-radar`? | candidato inicial, sempre em branch ou worktree isolada | Ralph Method | antes da execução de campo |
 | Bundle local será versionado inteiro ou por release? | versionar o bundle inicial; medir tamanho antes de separar distribuição | Ralph Method | antes de 0.4.0 |

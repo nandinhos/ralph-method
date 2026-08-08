@@ -22,6 +22,8 @@ real pelo próprio OpenCode e de um teste de campo em projeto real.
 O desenho detalhado, os riscos e os critérios estão em
 [`architecture/opencode-engine-plan.md`](architecture/opencode-engine-plan.md).
 
+- [x] prova exploratória real em fixture isolado, com output esperado e check;
+
 ## 0.3.1 — certificação de sessões CLI
 
 - [x] reconhecer inventário de credenciais e catálogo de modelos do OpenCode;
