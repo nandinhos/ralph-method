@@ -3,9 +3,9 @@
 | Questão | Decisão provisória | Dono | Quando revisar |
 |---|---|---|---|
 | Qual modelo OpenCode será usado por um projeto? | exigir `RALPH_OPENCODE_MODEL` explícito; não escolher o primeiro modelo do catálogo | Ralph Method | antes do primeiro `apply` com runner OpenCode |
-| Como o gate de revisão será read-only no OpenCode? | exigir agente ou política local com permissões de escrita negadas | Ralph Method | antes do smoke real |
+| Como o gate de revisão será read-only no OpenCode? | exigir agente ou política local com permissões de escrita negadas, comprovada no preflight | Ralph Method | antes de qualquer smoke real |
 | O evento terminal será sempre `step_finish`? | começar com `step_finish` e fixtures; falhar fechado se a versão real divergir | Ralph Method | durante a prova pelo OpenCode |
-| O transporte do prompt por argumento suportará todas as fases? | medir no smoke; só criar transporte alternativo se o limite for atingido | Ralph Method | após a primeira fase real longa |
+| O transporte do prompt será por argumento? | preferir `--file`; argumento só com limite de bytes e teste de conteúdo sensível | Ralph Method | antes do primeiro smoke |
 | O teste de campo usará `refactor-radar`? | candidato inicial, sempre em branch ou worktree isolada | Ralph Method | antes da execução de campo |
 | Bundle local será versionado inteiro ou por release? | versionar o bundle inicial; medir tamanho antes de separar distribuição | Ralph Method | antes de 0.4.0 |
 | OpenCode será engine principal ou apenas executor filho? | CLI certificada por probe seguro; engine só após adapter e smoke real | Ralph Method | após adapter OpenCode |

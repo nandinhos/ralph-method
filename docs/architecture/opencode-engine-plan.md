@@ -36,6 +36,21 @@ ralph.sh
   → feedback ao orquestrador
 ```
 
+## Fonte dos requisitos e contexto de risco
+
+O requisito desta entrega foi definido para esta branch: disponibilizar uma
+ferramenta agnóstica de alto nível, testar a execução real pelo próprio
+OpenCode e realizar depois uma prova de campo em projeto real, sem promover
+`main` antes da validação. O objetivo é rastrear a delegação e provar a
+execução; não é medir custo, tokens ou consumo de sessões.
+
+As restrições operacionais são: uma feature por bloco, árvore limpa, gates
+determinísticos, feedback ao orquestrador, recuperação explícita após pane,
+sem fallback silencioso e sem credenciais no ledger. Como não há PRD
+versionado neste repositório, este documento é a especificação técnica desta
+entrega e deverá ser substituído ou ligado a um PRD quando o framework ganhar
+um fluxo de produto próprio.
+
 ## Fora do escopo desta entrega
 
 - alterar a máquina de estados, leases, fencing ou gates do Ralph;
@@ -74,6 +89,19 @@ política de gates.
 O adapter não pode escrever `workflow.json`, alterar o ledger, liberar lease,
 aprovar gate ou iniciar outra feature. Ele recebe uma execução autorizada,
 executa uma sessão e devolve um resultado.
+
+Essa regra exige uma barreira de capability, não apenas uma convenção. O
+processo do executor não receberá `RALPH_LEASE_TOKEN`, `RALPH_CONTROL` ou
+qualquer outro segredo de transição. `workflow_id` e `feature_key` podem ser
+propagados somente como contexto de observabilidade. O controlador fará a
+importação do resultado e o trace sob seu próprio lease depois que o processo
+terminar.
+
+Antes do OpenCode, a branch deverá corrigir o caminho controlado que atualmente
+herda o ambiente completo do processo em `bin/ralph-control:2973-2981`.
+Enquanto essa barreira não existir e não houver teste negativo provando que um
+executor não consegue chamar `gate`, `approve`, `release` ou `advance`, a
+engine não está apta para smoke nem campo.
 
 ### Identidade não comprovada permanece não comprovada
 
@@ -133,7 +161,8 @@ runner.run
   "session_id": "ses_...",
   "status": "completed",
   "exit_code": 0,
-  "fallback_used": false,
+  "fallback_used": null,
+  "fallback_status": "unknown",
   "events_seen": 12,
   "terminal_event": "step_finish",
   "error_summary": null,
@@ -147,11 +176,17 @@ Campos obrigatórios do contrato:
 - `requested_model` quando a execução for de implementação ou verificação;
 - `session_id` quando o provider tiver criado uma sessão;
 - `identity_status` e `identity_source`;
-- `exit_code` e `fallback_used`;
+- `exit_code`, `fallback_used` e `fallback_status`;
 - resumo de erro sanitizado quando a execução não for concluída.
 
 O resultado não deve conter prompt, resposta, token, segredo, variável de
 ambiente, conteúdo completo de evento ou raciocínio.
+
+`fallback_used=false` não poderá significar “nenhum fallback ocorreu” quando a
+CLI não forneceu evidência para essa conclusão. Nesse caso, o resultado usa
+`fallback_used=null` e `fallback_status=unknown`. O trace será ampliado para
+aceitar essa distinção; somente `fallback_status=detected` poderá afirmar uma
+troca, e somente uma evidência estruturada poderá marcar `fallback_used=true`.
 
 ### Operações do adapter
 
@@ -168,16 +203,24 @@ referências de artefato com hash.
 
 ## Invocação OpenCode planejada
 
-A forma base será equivalente a:
+A forma preferida será transportar o prompt por arquivo anexado, evitando
+expor todo o texto na lista de argumentos do processo:
 
 ```bash
 opencode run \
   --format json \
   --dir "$RALPH_REPO" \
   --model "$RALPH_OPENCODE_MODEL" \
-  --auto \
-  "$PROMPT"
+  --file "$PROMPT_FILE" \
+  "Execute a instrução de fase anexada e devolva o resultado da execução."
 ```
+
+O suporte de arquivo de texto será confirmado no smoke real. Se a versão
+instalada não o tratar como instrução, o adapter poderá usar o modo de
+argumento como fallback explícito, mas somente após validar o tamanho contra
+`getconf ARG_MAX`, aplicar um limite próprio e registrar
+`prompt_transport=argument`. O modo de arquivo continuará sendo o padrão
+quando suportado.
 
 Flags opcionais serão acrescentadas somente quando definidas na política do
 projeto:
@@ -198,18 +241,26 @@ Regras da invocação:
 3. `--dir` deve apontar para a raiz do projeto autorizado.
 4. `--continue`, `--session` e `--fork` ficam proibidos na primeira versão; cada
    ciclo do Ralph abre uma execução nova, como ocorre nos runners atuais.
-5. `--auto` deve ser uma escolha visível da política do perfil e permanecer
-   sujeito a regras explícitas de negação do `opencode.json`.
+5. `--auto` não é implícito no contrato. Em modo de implementação, ele só será
+   acrescentado quando `RALPH_OPENCODE_AUTO=1` estiver definido no perfil. Em
+   modo de verificação, o preflight exigirá uma política read-only verificável
+   antes de permitir qualquer autorização automática.
 6. `--pure` será a opção recomendada para smoke e regressão, evitando plugins
    externos não declarados. Um projeto real poderá desativá-la explicitamente.
-7. nenhuma opção de telemetria deve imprimir raciocínio ou resposta completa
+7. `--attach`, `--port`, servidor remoto e opções de sessão persistente ficam
+   proibidos na primeira versão; o adapter não pode iniciar um processo fora do
+   grupo controlado.
+8. nenhuma opção de telemetria deve imprimir raciocínio ou resposta completa
    no trace.
 
 ## Classificação da saída JSONL
 
 O OpenCode documenta `--format json` como uma linha JSON por evento, com campos
 como `type`, `timestamp` e `sessionID`. O parser do adapter será tolerante a
-campos opcionais, mas fail-closed para os fatos necessários.
+campos opcionais, mas fail-closed para os fatos necessários. O conjunto de
+eventos terminais será confirmado pela versão real no fixture e no smoke; a
+documentação atual sugere `step_finish`, mas o parser não poderá aceitar essa
+hipótese sem comprovação da execução.
 
 ### Sucesso
 
@@ -218,7 +269,7 @@ Considerar a execução concluída somente quando:
 - o processo terminar com exit code `0`;
 - todas as linhas necessárias forem JSON válidos;
 - houver `sessionID` não vazio;
-- existir evento terminal aceito pelo contrato, inicialmente `step_finish`;
+- existir evento terminal aceito pelo contrato e registrado no resultado;
 - não existir evento `error` fatal.
 
 ### Falha
@@ -243,6 +294,78 @@ Classificar como falha quando ocorrer qualquer uma destas situações:
 | nenhum identificador confiável | `unavailable` |
 
 O parser nunca deve inferir `exact` a partir de texto de resposta.
+
+### Identidade e fallback
+
+O parser relacionará `execution_id`, `sessionID`, hash da invocação e arquivo
+JSONL. Provider e modelo solicitados vêm do perfil; provider/modelo efetivos
+somente entram como `observed` ou `exact` se houver campo estruturado ou
+artefato de sessão que os vincule àquela execução. Caso contrário:
+
+```text
+effective_model=null
+identity_status=declared|partial|unavailable
+fallback_used=null
+fallback_status=unknown
+```
+
+Isso impede que a ausência de telemetria seja publicada como prova negativa de
+fallback.
+
+## Capability, permissões e término do processo
+
+### Capability do controlador
+
+O `ralph-control` continuará sendo a única autoridade, mas o plano precisa
+fechar a capability herdada antes da engine:
+
+1. separar contexto de feedback (`workflow_id`, `feature_key`) de credenciais
+   de transição (`lease_token`, fencing e comandos privilegiados);
+2. remover credenciais de transição do ambiente entregue a `ralph.sh` e aos
+   filhos do provider;
+3. fazer o controlador importar o resultado normalizado e chamar o trace sob
+   lock e lease, depois do retorno do bloco;
+4. adicionar fixture adversarial em que o executor tenta `gate`, `approve`,
+   `release` e `advance` sem receber capability;
+5. falhar fechado se o bloco não conseguir provar que executou sem capability
+   privilegiada.
+
+### Permissões do OpenCode
+
+`--auto` é uma autorização ampla e não pode ser tratado como detalhe de CLI.
+O preflight deverá produzir um `permission_policy_hash` e validar:
+
+- modo de implementação: `RALPH_OPENCODE_AUTO=1` explícito, branch/worktree
+  limpa e deny rules do projeto carregadas;
+- modo de verificação: agente ou configuração read-only identificável, com
+  mutações (`edit`, `write`, `bash` e equivalentes disponíveis) negadas;
+- ausência de política read-only: execução de verificação bloqueada, sem
+  tentar convencer o modelo por texto;
+- mudança no `opencode.json`, agente ou política depois do preflight:
+  resultado stale e recuperação necessária.
+
+O hash e o resumo da política entram no artefato, nunca o conteúdo de segredo.
+
+### Término e processo órfão
+
+O caminho `ralph-control → ralph.sh` é o caminho normativo de execução; a
+garantia não pode depender apenas do wrapper manual `ralph-bloco`. Antes do
+smoke, o controlador deverá:
+
+- registrar PID raiz, PGID, árvore inicial e fingerprint da invocação;
+- observar o PGID e todos os PIDs conhecidos mesmo depois que o PID raiz sair;
+- encerrar primeiro o grupo e depois os descendentes registrados;
+- tratar qualquer processo ainda vivo ou qualquer impossibilidade de prova
+  como `recovery_required`, nunca como término verificado;
+- rejeitar `--attach`, `--port` e daemonização na engine inicial;
+- executar fixture adversarial com filho que tenta criar nova sessão/PGID;
+- documentar o limite residual: um processo que escape completamente da
+  observação do sistema operacional exige recuperação manual e bloqueia a
+  liberação.
+
+O plano não promete “sem órfãos” antes dessa prova; ele promete somente
+`process_verified_terminated=true` quando a evidência de grupo e árvore for
+conclusiva.
 
 ## Gates e recuperação
 
@@ -298,8 +421,9 @@ para escolher um modelo arbitrariamente.
 
 Para o gate de revisão, a primeira versão deve exigir um perfil de agente
 read-only (`RALPH_OPENCODE_VERIFY_AGENT`) ou uma política equivalente de
-permissões. Uma instrução textual de “não editar” não é uma fronteira de
-segurança suficiente.
+permissões validada pelo preflight. Uma instrução textual de “não editar” não é
+uma fronteira de segurança suficiente. Essa condição é bloqueante para o gate
+de verificação, e não uma pendência do smoke.
 
 ## Trace e evidências
 
@@ -319,7 +443,8 @@ O ledger registra somente:
 - provider e identidade do modelo conforme o nível comprovado;
 - modo (`impl` ou `verify`), feature, fase e tentativa;
 - status, exit code, evento terminal e hash dos artefatos;
-- `fallback_used=false` ou um fallback explicitamente autorizado.
+- `fallback_status` e `fallback_used` somente quando houver evidência; ausência
+  de observação fica como `unknown`/`null`.
 
 O relatório `TRC` deverá mostrar OpenCode como nó do executor, sem confundir
 `session_id` com `execution_id` e sem duplicar eventos quando o controlador for
@@ -331,11 +456,6 @@ executado novamente.
 adapters/
 ├── README.md
 ├── contract.md
-├── common.sh
-├── codex/
-│   └── runner.sh
-├── claude/
-│   └── runner.sh
 └── opencode/
     ├── runner.sh
     ├── parser.sh
@@ -349,35 +469,44 @@ adapters/
 └── opencode.env
 ```
 
-O desenho pode ser implementado inicialmente com wrappers shell, mantendo a
-possibilidade de substituir apenas o adapter por uma implementação diferente
-quando outro provider exigir protocolo mais rico.
+O desenho pode ser implementado inicialmente com um adapter OpenCode isolado.
+Codex e Claude permanecem nos caminhos estáveis até que um segundo adapter
+real prove que a migração para wrappers comuns paga seu custo de regressão.
 
 ## Fases de implementação
 
-### Fase A — contrato e proteção da regressão
+### Fase A — contrato, capability e proteção da regressão
 
 - congelar o comportamento atual de Codex e Claude com characterization tests;
 - documentar o contrato do runner;
 - definir o schema do resultado normalizado;
 - definir eventos mínimos aceitos e estados de falha;
+- remover capability de lease do ambiente do executor;
+- fortalecer a prova de término no caminho `ralph-control`;
+- adicionar testes negativos de transição e de processo desacoplado;
 - adicionar fixture JSONL do OpenCode sem chamar rede ou modelo.
 
-Saída: contrato revisável e nenhuma alteração de comportamento existente.
+Saída: contrato revisável, capability isolada e nenhuma alteração de
+comportamento existente.
 
-### Fase B — seam agnóstica no loop
+### Fase B — seam mínima, sem migração especulativa
 
-- extrair o dispatch provider-específico de `scripts/ralph.sh`;
-- preservar exatamente os comandos atuais de Codex e Claude atrás do contrato;
+- introduzir a interface de runner sem mover ainda os caminhos estáveis de
+  Codex e Claude;
+- adicionar o dispatch OpenCode atrás dessa interface;
+- preservar os comandos atuais de Codex e Claude como legacy até a prova real;
 - manter o mesmo gate 0, detecção de limite, log e feedback;
 - tornar o engine desconhecido um erro explícito de preflight.
 
-Saída: o núcleo passa a depender de um runner, não de flags Codex/Claude.
+Saída: OpenCode tem uma seam limpa sem criar wrappers especulativos para todos
+os providers.
 
 ### Fase C — adapter OpenCode
 
 - implementar preflight do modelo e das opções de segurança;
 - montar a invocação por arrays shell, sem `eval` nem concatenação insegura;
+- validar transporte por arquivo e, se necessário, modo de argumento com limite
+  de bytes antes do primeiro smoke;
 - executar `opencode run --format json` com diretório e modelo explícitos;
 - capturar saída JSONL e código de saída sem perder o status do processo;
 - encerrar o grupo de processos em caso de interrupção;
@@ -402,6 +531,8 @@ realmente configurado.
 
 - registrar `session_id` e identidade do modelo conforme evidência;
 - publicar feedback com `engine=opencode` sem incluir resposta completa;
+- importar trace no controlador depois do retorno, sem entregar lease ao
+  adapter;
 - referenciar hashes dos artefatos locais;
 - validar idempotência e não duplicação de eventos;
 - atualizar o relatório `TRC` e a documentação operacional.
@@ -411,6 +542,8 @@ Saída: o orquestrador externo acompanha a execução real do OpenCode.
 ### Fase F — regressão automatizada
 
 - fixtures de sucesso, erro, timeout, processo interrompido e saída inválida;
+- teste de capability ausente para gates e transições;
+- teste de filho desacoplado e grupo ainda vivo após PID raiz;
 - teste de modelo ausente e modelo sem formato `provider/model`;
 - teste de permissão não resolvida sem loop infinito;
 - teste de ausência de sessão e de evento terminal;
@@ -452,11 +585,12 @@ Checklist obrigatório:
 7. cinco gates verdes;
 8. commit da feature e árvore compatível;
 9. trace com sessão e modelo classificados honestamente;
-10. feedback recebido no terminal do orquestrador;
-11. monitor sem heartbeat parado ou processo órfão;
-12. handoff e evidências gerados;
-13. uninstall testado somente na cópia de campo;
-14. nenhuma alteração na `main` do Ralph Method.
+10. política de permissão read-only comprovada para a revisão;
+11. feedback recebido no terminal do orquestrador;
+12. monitor sem heartbeat parado ou processo órfão;
+13. handoff e evidências gerados;
+14. uninstall testado somente na cópia de campo;
+15. nenhuma alteração na `main` do Ralph Method.
 
 Esse teste será uma etapa posterior de execução, não parte do dry-run de
 instalação.
@@ -499,7 +633,7 @@ instalação.
 |---|---|---|
 | formato JSONL evoluir | parser tolerante + versão registrada + fixtures reais | mudança de versão sem evento terminal reconhecível |
 | modelo efetivo não ser exposto | identidade `declared`/`partial`, nunca `exact` por inferência | necessidade de auditoria exata por execução |
-| prompt exceder limite de argumento | medir no smoke; introduzir transporte por arquivo/protocolo somente se ocorrer | fase real com prompt acima do limite do sistema |
+| prompt exceder limite de argumento | preferir `--file`; modo de argumento só com limite e teste prévios | falha no transporte por arquivo ou fase acima do limite próprio |
 | `--auto` liberar ferramenta perigosa | deny explícito e branch/worktree isolada | primeiro incidente de permissão ou necessidade de granularidade |
 | provider interno fazer fallback | registrar somente o que for comprovado e falhar em contradição | evento estruturado indicar troca de modelo |
 | plugins alterarem comportamento | `--pure` no smoke/regressão | projeto real depender de plugin para executar a feature |
@@ -510,7 +644,9 @@ A branch só poderá ser promovida para `main` depois de uma revisão que confir
 simultaneamente:
 
 ```text
-contrato agnóstico
+capability isolada
+→ término verificável
+→ contrato agnóstico
 → regressão verde
 → smoke real pelo OpenCode
 → teste de campo real
@@ -519,5 +655,7 @@ contrato agnóstico
 → working tree limpo
 ```
 
-A versão sugerida para a entrega completa é `v0.4.0`, pois a branch adiciona um
-runner efetivo a um provider que antes era apenas diagnosticado.
+A versão sugerida para a entrega completa continua sendo `v0.4.0`, pois a
+branch adiciona um runner efetivo a um provider que antes era apenas
+diagnosticado. Essa sugestão só permanece válida depois dos bloqueios de
+capability, permissões e processo.

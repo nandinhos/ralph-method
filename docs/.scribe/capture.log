@@ -18,3 +18,4 @@
 2026-08-08T00:00:00-03:00 | decision | branch feat/opencode-engine preserva a base v0.3.1; main não receberá a engine antes de regressão, smoke real e teste de campo.
 2026-08-08T00:00:00-03:00 | decision | engine OpenCode será implementada atrás de contrato agnóstico de runner; adapter não terá autoridade sobre workflow, gates, leases ou fallback.
 2026-08-08T00:00:00-03:00 | assumption | OpenCode 1.18.15 expõe opencode run --format json em JSONL com sessionID; o contrato será confirmado por fixture e sessão real antes da promoção.
+2026-08-08T00:00:00-03:00 | review | revisão adversarial encontrou capability de lease herdada, prova incompleta de processo órfão, política --auto não verificável, fallback/identidade ambíguos, transporte de prompt arriscado e generalização excessiva; findings incorporados como pré-condições do plano.

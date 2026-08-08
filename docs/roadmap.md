@@ -6,8 +6,10 @@ O trabalho será executado isoladamente na branch `feat/opencode-engine`. A
 engine somente será promovida depois da regressão completa, de uma execução
 real pelo próprio OpenCode e de um teste de campo em projeto real.
 
+- [ ] fechar a capability: executor sem lease e teste negativo de transição;
+- [ ] provar término do grupo no caminho `ralph-control`, inclusive PID raiz que sai;
 - [ ] congelar o contrato agnóstico de runner e a caracterização de Codex/Claude;
-- [ ] extrair o dispatch de provider de `scripts/ralph.sh`;
+- [ ] introduzir a seam mínima sem migrar Codex/Claude prematuramente;
 - [ ] implementar preflight, execução e parser JSONL do OpenCode;
 - [ ] registrar sessão, provider e modelo no `ralph-trace` sem inferência indevida;
 - [ ] adicionar perfil, doctor, install/uninstall e seleção condicional;
