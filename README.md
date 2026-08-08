@@ -47,9 +47,10 @@ ralph-init uninstall --project /caminho/do/projeto --apply
 `plan` é somente leitura. `apply` cria uma instalação local e idempotente. A
 detecção padrão registra somente fatos como arquivos presentes, versões de CLI,
 comando de teste e capacidade declarada; não consulta autenticação, não copia
-tokens nem credenciais. Para habilitar um adapter, execute o probe seguro
-explicitamente com `--verify-providers`; somente o status `functional` pode
-definir `adapter_enabled=true`.
+tokens nem credenciais. Para certificar as sessões autenticadas, execute o
+probe seguro explicitamente com `--verify-providers`. O status `functional`
+certifica a CLI; `adapter_enabled` só fica verdadeiro quando também existe
+runner do Ralph para aquele provider.
 `uninstall` primeiro mostra um plano e só remove arquivos que continuam iguais
 ao hash instalado quando recebe `--apply`. Arquivos modificados, histórico,
 workflow, handoffs e relatórios são preservados.
@@ -64,9 +65,12 @@ exclusiva do `ralph-control`.
 
 ## Providers
 
-O caminho padrão é `native_codex`. Claude, OpenCode, Hermes e agy só são
-selecionados por configuração explícita ou por uma decisão `auto` materializada
-no manifesto da instalação. Ausência de telemetria não vira erro de gate.
+O caminho padrão é `native_codex`. O modo `auto` consulta todos os providers
+certificados, mas seleciona somente um runner com `adapter_enabled=true`, em
+ordem determinística e sem fallback silencioso. Nesta versão, Codex e Claude
+possuem runner; OpenCode e Hermes podem ser certificados como CLIs prontas,
+mas ainda aguardam seus adapters de execução. Ausência de telemetria não vira
+erro de gate.
 
 O `ralph-trace` diferencia identidade `exact`, `declared`, `observed`,
 `partial` e `unavailable`. Um provider que não expõe modelo efetivo não pode
@@ -77,11 +81,12 @@ opt-in.
 
 ## Estado
 
-A versão atual em desenvolvimento é `0.3.0`, extraída do núcleo validado do
+A versão atual em desenvolvimento é `0.3.1`, extraída do núcleo validado do
 `refactor-radar` no commit `7ab25f8`. A instalação reversível e o canal de
 feedback estão incluídos, assim como o guia operacional sincronizado para
-agentes de IA. Os adaptadores OpenCode serão incremento posterior, sempre
-acompanhado de fixtures offline e regressão.
+agentes de IA. A certificação segura de OpenCode e Hermes está incluída; seus
+adapters de execução continuam sendo incremento posterior, sempre acompanhado
+de fixtures offline e regressão.
 
 Consulte [docs/STATUS.md](docs/STATUS.md), [docs/architecture/README.md](docs/architecture/README.md),
 [docs/AGENT_GUIDE.md](docs/AGENT_GUIDE.md) e [docs/roadmap.md](docs/roadmap.md).

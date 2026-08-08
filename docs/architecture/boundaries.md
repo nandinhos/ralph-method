@@ -36,9 +36,9 @@ Executável encontrado, autenticação isolada ou versão conhecida não habilit
 um adapter.
 
 O probe da primeira versão é explícito (`--verify-providers`), não generativo,
-tem timeout e não publica a saída bruta. Somente o estado `functional` define
-`adapter_enabled=true`; `needs_review` é preservado quando a prontidão não foi
-comprovada.
+tem timeout e não publica a saída bruta. `functional` certifica a CLI;
+`adapter_enabled=true` exige também um runner implementado para ela.
+`needs_review` é preservado quando não há runner apto.
 
 | Future | Seam atual | Trigger |
 |---|---|---|

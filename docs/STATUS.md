@@ -3,10 +3,11 @@
 ## Estado atual
 
 O repositório é uma extração independente do núcleo Ralph validado no
-`refactor-radar`. A versão `0.3.0` mantém a instalação local reversível,
+`refactor-radar`. A versão `0.3.1` mantém a instalação local reversível,
 doctor, ownership por hash e canal de feedback para o orquestrador externo, e
 adiciona o guia operacional versionado para agentes de IA e a prontidão
-condicional de providers.
+condicional de providers e certifica sessões reais de OpenCode e Hermes sem
+confundir prontidão da CLI com disponibilidade do runner do Ralph.
 
 ## Componentes extraídos
 
@@ -27,7 +28,8 @@ condicional de providers.
 ## Entrega concluída nesta fase
 
 `ralph-init plan/apply/uninstall`, `ralph-doctor`, manifesto de instalação,
-capabilities dos providers, prontidão condicional e feedback do loop foram
+capabilities dos providers, prontidão condicional, seleção determinística e
+feedback do loop foram
 implementados com testes portáteis. O uninstall preserva runtime, workflow e evidências; arquivos
 alterados pelo usuário ficam intactos. O apply usa staging e rollback para não
 deixar instalação parcial em falha; os perfis gerados apontam para o loop local.
@@ -40,11 +42,13 @@ generativos.
 ## Providers
 
 O loop herdado do `bc-harness` possui execução Codex e Claude. Nesta versão,
-provider só pode ser habilitado como adapter quando `auth_status` é
-`authenticated`, `health_status` é `healthy` e `status` é `functional`.
-OpenCode pode ser certificado pelo probe seguro; Hermes exige
-`RALPH_HERMES_PROVIDER`; agy permanece `unsupported` até existir diagnóstico
-seguro validado. Nenhum probe inicia geração.
+provider pode ser certificado como `functional` quando `auth_status` é
+`authenticated` e `health_status` é `healthy`. `adapter_enabled` exige também
+`runner_supported=true`. OpenCode é certificado com `auth list` + `models`;
+Hermes identifica e verifica o provider selecionado; agy permanece
+`unsupported` até existir diagnóstico seguro validado. Nenhum probe inicia
+geração. Quando nenhum runner está disponível, `auto` mantém o plano em
+`needs_review` sem materializar `codex` ou outro executor fictício.
 
 ## Validação
 

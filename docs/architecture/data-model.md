@@ -24,11 +24,14 @@
 - relatório `TRC` é projeção do ledger e não fonte de estado;
 - o manifesto de instalação registra versão e hashes, não segredos.
 - `.ralph/providers.json` registra somente path, versão, capacidades, status,
-  códigos de saída e timestamps dos probes; não registra saída bruta,
+  suporte do runner, provider-alvo, códigos de saída e timestamps dos probes;
+  não registra saída bruta,
   credenciais, tokens ou prompts.
-- `adapter_enabled` só pode ser verdadeiro quando `status` é `functional`.
+- `adapter_enabled` só pode ser verdadeiro quando `status` é `functional` e
+  `runner_supported` é verdadeiro.
 - `functional` nesta versão significa autenticação confirmada e diagnóstico
-  local não generativo aprovado; não significa probe real de geração.
+  local não generativo aprovado para a CLI; não significa probe real de
+  geração.
 - feedback é telemetria operacional local, não é fonte de transição;
 - o uninstall respeita hashes e preserva qualquer arquivo que o usuário tenha
   alterado depois da instalação.

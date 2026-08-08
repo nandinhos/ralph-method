@@ -14,7 +14,7 @@
       "required": ["mode", "primary_runner", "fallback_policy"],
       "properties": {
         "mode": {"enum": ["native_codex", "single_provider", "multi_provider", "needs_review"]},
-        "primary_runner": {"enum": ["codex", "claude", "opencode", "hermes", "agy"]},
+        "primary_runner": {"enum": ["codex", "claude", "opencode", "hermes", "agy", null]},
         "fallback_policy": {"enum": ["none", "explicit_only"]}
       },
       "additionalProperties": true

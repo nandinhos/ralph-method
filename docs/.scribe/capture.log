@@ -8,3 +8,10 @@
 2026-08-07T00:00:00-03:00 | verification | fixture offline cobriu provider funcional, autenticação ausente, provider sem probe seguro, segredo na saída e bloqueio do apply.
 2026-08-07T00:00:00-03:00 | error | timeout manual do probe podia aguardar processo filho que mantinha pipes abertos.
 2026-08-07T00:00:00-03:00 | fix | commandResult passou a usar timeout com TERM/KILL graduais e fixture de pane comprova retorno dentro do limite.
+2026-08-07T00:00:00-03:00 | error | OpenCode e Hermes retornaram exit 0, mas o classificador comum não reconheceu seus formatos reais de sessão.
+2026-08-07T00:00:00-03:00 | decision | separar status functional da disponibilidade de runner com runner_supported e adapter_enabled.
+2026-08-07T00:00:00-03:00 | fix | classificar OpenCode por auth list + models e Hermes pelo provider selecionado, ignorando estados de providers não-alvo.
+2026-08-07T00:00:00-03:00 | verification | dry-run real certificou Codex, Claude, OpenCode e Hermes; auto manteve somente Codex e Claude em available_runners.
+2026-08-07T00:00:00-03:00 | error | revisão adversarial encontrou autenticação OpenCode reconhecida apesar de exit não zero e codex fantasma quando nenhum runner estava disponível.
+2026-08-07T00:00:00-03:00 | fix | auth list só certifica OpenCode com exit zero; seleção auto sem runner retorna primary_runner nulo e needs_review.
+2026-08-07T00:00:00-03:00 | verification | fixtures negativos de OpenCode e ausência total de runners passaram; suíte do loop permaneceu verde.

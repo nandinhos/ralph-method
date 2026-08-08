@@ -80,14 +80,18 @@ O contrato mínimo de cada provider contém:
 ```text
 installed, path, version,
 auth_status, health_status, status,
-capabilities, adapter_enabled, reason
+capabilities, runner_supported, adapter_enabled, reason
 ```
 
-Um adapter somente é elegível se `status=functional` e
+Uma CLI é certificada quando `status=functional`. Um adapter somente é
+elegível se `status=functional`, `runner_supported=true` e
 `adapter_enabled=true`. `detected`, `authenticated`, `degraded`,
 `unsupported` e `authentication_unknown` nunca habilitam execução alternativa.
-O modo `auto` não faz fallback silencioso; quando não encontra provider apto,
-materializa `orchestration.mode=needs_review`.
+O modo `auto` considera todos os providers certificados, mas escolhe somente
+os runners disponíveis em ordem determinística. Ele não faz fallback silencioso;
+quando não encontra runner apto, materializa `orchestration.mode=needs_review`.
+Nesse caso, `selection.selected_provider` e `orchestration.primary_runner` são
+`null`.
 
 ## Contrato de provider
 

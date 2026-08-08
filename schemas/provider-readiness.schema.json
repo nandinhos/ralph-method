@@ -50,6 +50,7 @@
         "health_status",
         "status",
         "adapter_enabled",
+        "runner_supported",
         "capabilities",
         "verification",
         "reason"
@@ -62,6 +63,7 @@
         "health_status": {"enum": ["not_checked", "unsupported", "healthy", "unhealthy"]},
         "status": {"enum": ["unavailable", "detected", "authentication_unknown", "unauthenticated", "authenticated", "functional", "degraded", "unsupported"]},
         "adapter_enabled": {"type": "boolean"},
+        "runner_supported": {"type": "boolean"},
         "capabilities": {"type": "array", "items": {"type": "string"}},
         "verification": {
           "type": "object",
@@ -73,6 +75,7 @@
             "checked_at": {"type": ["string", "null"], "format": "date-time"},
             "auth_exit": {"type": "integer"},
             "auth_timed_out": {"type": "boolean"},
+            "provider_target": {"type": "string", "minLength": 1},
             "health_exit": {"type": "integer"},
             "health_timed_out": {"type": "boolean"}
           },

@@ -1,7 +1,7 @@
 # Guia operacional para agentes de IA — Ralph Method
 
 - guide_version: 1.0.0
-- method_version: 0.3.0
+- method_version: 0.3.1
 - status: ativo
 - fonte_do_metodo: `VERSION`
 - contrato_de_feedback: `schemas/feedback-event.schema.json`
@@ -186,6 +186,7 @@ unavailable|detected
 → autenticação confirmada
 → diagnóstico local seguro
 → functional
+→ runner suportado
 → adapter_enabled=true
 ```
 
@@ -201,9 +202,17 @@ use:
 
 O modo `safe` usa somente comandos diagnósticos do provider, tem timeout,
 redige a saída e não inicia conversa, não envia prompt e não executa probe de
-geração. `functional` significa que a sessão foi confirmada e o diagnóstico
-local não generativo passou; não é uma afirmação de que uma chamada de modelo
-foi consumida ou concluída.
+geração. `functional` significa que a sessão da CLI foi confirmada e o
+diagnóstico local não generativo passou; não é uma afirmação de que uma
+chamada de modelo foi consumida ou concluída.
+
+`runner_supported` separa a certificação da sessão da existência do adapter de
+execução no Ralph. `adapter_enabled` só fica verdadeiro quando a CLI está
+functional e o runner correspondente já está implementado nesta versão.
+OpenCode usa `auth list` e `models`; Hermes identifica o provider selecionado
+no próprio `status` (ou respeita `RALPH_HERMES_PROVIDER`) e valida
+`auth status <provider>`. O status de outros providers listados pelo Hermes
+não reprova o provider selecionado.
 
 Estados importantes em `.ralph/providers.json`:
 
@@ -212,12 +221,16 @@ unavailable | detected | authentication_unknown | unauthenticated
 authenticated | functional | degraded | unsupported
 ```
 
-Somente `functional` pode definir `adapter_enabled=true`. Um provider
-alternativo explicitamente solicitado no `apply` é recusado se não estiver
-funcional. Em `auto`, a instalação do núcleo pode continuar em
-`orchestration.mode=needs_review`, sem fallback silencioso. Hermes precisa de
-`RALPH_HERMES_PROVIDER` para identificar o backend; agy permanece bloqueado
-até existir um diagnóstico seguro registrado.
+Somente uma CLI `functional` com `runner_supported=true` pode definir
+`adapter_enabled=true`. Um provider alternativo explicitamente solicitado no
+`apply` é recusado se não estiver functional e com adapter disponível. Em
+`auto`, a instalação do núcleo pode continuar em
+`orchestration.mode=needs_review`, sem fallback silencioso. Hermes tenta
+identificar automaticamente o provider selecionado e aceita
+`RALPH_HERMES_PROVIDER` como override; agy permanece bloqueado até existir um
+diagnóstico seguro registrado. Quando não houver runner apto, o plano deixa
+`selection.selected_provider` e `orchestration.primary_runner` como `null`; não
+materializa um executor fantasma.
 
 ## 4. Instalação em um projeto-alvo
 
@@ -242,6 +255,7 @@ Leia o JSON do plano. Procure especialmente por:
 - `conflict` em qualquer arquivo;
 - provider detectado e seu `auth_status`;
 - `status`, `health_status` e `adapter_enabled` do provider;
+- `runner_supported`, `functional_providers` e `available_runners`;
 - comando de teste detectado;
 - sinais de `.codex`, `.claude` ou OpenCode;
 - working tree suja;

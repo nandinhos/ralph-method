@@ -39,7 +39,8 @@ persistido em `.ralph/providers.json`. Cada provider informa:
   `unauthenticated`;
 - `health_status`: `not_checked`, `unsupported`, `healthy` ou `unhealthy`;
 - `status`: estado agregado, incluindo `functional`;
-- `adapter_enabled`: verdadeiro somente para `functional`;
+- `runner_supported`: informa se existe runner do Ralph nesta versão;
+- `adapter_enabled`: verdadeiro somente para `functional` com runner suportado;
 - `capabilities`, motivo sanitizado, códigos de saída e timestamps.
 
 Seleção explícita de provider não funcional falha fechada no `apply`. Seleção
@@ -50,6 +51,22 @@ ser instalado em `needs_review`, sem fallback silencioso.
 generativo aprovado. Não é uma alegação de que uma chamada de modelo foi
 executada. Probe de geração real fica para uma política futura, opt-in, com
 consentimento e limites próprios.
+
+## Atualização 0.3.1
+
+A certificação foi refinada em duas camadas. `status=functional` significa que
+a sessão da CLI e seu diagnóstico local foram comprovados. `runner_supported`
+e `adapter_enabled` informam separadamente se o Ralph consegue executar aquele
+provider nesta versão. Assim, OpenCode e Hermes podem aparecer como CLIs
+funcionais sem serem selecionados por `auto` antes da entrega de seus runners.
+
+OpenCode usa `auth list` como inventário de credenciais e `models` como catálogo
+local de modelos. Hermes usa o `Provider:` e o `Model:` do `status`, verifica
+`auth status <provider>` e permite `RALPH_HERMES_PROVIDER` como override. A
+saída de outros providers não selecionados não reprova o provider-alvo.
+Quando nenhum runner está disponível, `auto` retorna seleção nula e conserva
+`needs_review`; isso torna explícita a ausência de executor e preserva a
+política `fallback_policy=none`.
 
 ## Consequências
 

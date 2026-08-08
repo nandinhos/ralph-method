@@ -45,7 +45,7 @@ init_output="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" plan --project
 INIT_JSON="$init_output" php -r '
     $plan = json_decode(getenv("INIT_JSON"), true, 512, JSON_THROW_ON_ERROR);
     $actions = array_column($plan["files"] ?? [], "action");
-    if (($plan["method_version"] ?? null) !== "0.3.0" || ! in_array("create", $actions, true)) {
+    if (($plan["method_version"] ?? null) !== "0.3.1" || ! in_array("create", $actions, true)) {
         exit(1);
     }
 '

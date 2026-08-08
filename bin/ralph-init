@@ -3,7 +3,7 @@
 
 declare(strict_types=1);
 
-const RALPH_METHOD_VERSION = '0.3.0';
+const RALPH_METHOD_VERSION = '0.3.1';
 const RALPH_INSTALL_SCHEMA_VERSION = '1.0.0';
 
 $sourceRoot = realpath(getenv('RALPH_METHOD_SOURCE') ?: dirname(__DIR__)) ?: dirname(__DIR__);
@@ -151,29 +151,81 @@ function providerDefinitions(): array
         'codex' => [
             'auth' => ['args' => ['login', 'status'], 'classifier' => 'codex'],
             'health' => ['args' => ['doctor', '--json']],
+            'runner_supported' => true,
             'capabilities' => ['execution', 'model_selection', 'diagnostics'],
         ],
         'claude' => [
             'auth' => ['args' => ['auth', 'status', '--json']],
             'health' => ['args' => ['auth', 'status', '--json']],
+            'runner_supported' => true,
             'capabilities' => ['execution', 'model_selection', 'diagnostics'],
         ],
         'opencode' => [
-            'auth' => ['args' => ['auth', 'list']],
-            'health' => ['args' => ['auth', 'list']],
+            'auth' => ['args' => ['auth', 'list'], 'classifier' => 'opencode_credentials'],
+            'health' => ['args' => ['models'], 'classifier' => 'opencode_models'],
+            'runner_supported' => false,
             'capabilities' => ['execution', 'model_selection', 'diagnostics'],
         ],
         'hermes' => [
             'auth' => ['args' => ['auth', 'status'], 'requires_env' => 'RALPH_HERMES_PROVIDER'],
             'health' => ['args' => ['status']],
+            'runner_supported' => false,
             'capabilities' => ['execution', 'model_selection', 'diagnostics'],
         ],
         'agy' => [
             'auth' => null,
             'health' => null,
+            'runner_supported' => false,
             'capabilities' => ['execution', 'model_selection'],
         ],
     ];
+}
+
+function stripAnsi(string $output): string
+{
+    $plain = preg_replace('/\x1B\[[0-?]*[ -\/]*[@-~]/', '', $output);
+
+    return $plain === null ? $output : $plain;
+}
+
+function sanitizeProviderIdentifier(string $value): string
+{
+    $sanitized = preg_replace('/[^\p{L}\p{N} ._:+-]/u', '', trim($value));
+
+    return substr(trim($sanitized === null ? '' : $sanitized), 0, 64);
+}
+
+function hasOpenCodeCredentialSignal(string $output): bool
+{
+    return preg_match('/^\s*[●•*]\s+.+\s+(?:api|oauth)\s*$/miu', stripAnsi($output)) === 1;
+}
+
+function hasOpenCodeModelSignal(string $output): bool
+{
+    return preg_match('/^\s*[a-z0-9][a-z0-9_.-]*\/[a-z0-9][a-z0-9_.-]*(?:\s|$)/mi', stripAnsi($output)) === 1;
+}
+
+function extractHermesProvider(string $output): string
+{
+    if (preg_match('/^\s*Provider:\s*(\S.+?)\s*$/mi', stripAnsi($output), $matches) !== 1) {
+        return '';
+    }
+
+    return sanitizeProviderIdentifier($matches[1]);
+}
+
+function hermesHealthPassed(array $result, string $providerTarget): bool
+{
+    if (($result['timed_out'] ?? false) === true || ($result['exit'] ?? 1) !== 0) {
+        return false;
+    }
+    $output = stripAnsi((string) ($result['output'] ?? ''));
+    $provider = extractHermesProvider($output);
+    if ($provider === '' || strcasecmp($provider, $providerTarget) !== 0) {
+        return false;
+    }
+
+    return preg_match('/^\s*Model:\s*\S.+?\s*$/mi', $output) === 1;
 }
 
 function hasUnauthenticatedSignal(string $output): bool
@@ -192,6 +244,19 @@ function classifyAuth(array $result, string $classifier): string
         return 'unknown';
     }
     $output = (string) ($result['output'] ?? '');
+    if ($classifier === 'opencode_credentials') {
+        if (($result['exit'] ?? 1) !== 0) {
+            return hasUnauthenticatedSignal($output) ? 'unauthenticated' : 'unknown';
+        }
+        if (hasOpenCodeCredentialSignal($output)) {
+            return 'authenticated';
+        }
+        if (hasUnauthenticatedSignal($output)) {
+            return 'unauthenticated';
+        }
+
+        return 'unknown';
+    }
     if (hasUnauthenticatedSignal($output)) {
         return 'unauthenticated';
     }
@@ -208,13 +273,15 @@ function classifyAuth(array $result, string $classifier): string
     return 'unknown';
 }
 
-function providerReason(string $status, string $authStatus, string $healthStatus, bool $verified): string
+function providerReason(string $status, string $authStatus, string $healthStatus, bool $verified, bool $runnerSupported = true): string
 {
     if (! $verified) {
         return 'verificação explícita ainda não solicitada';
     }
     if ($status === 'functional') {
-        return 'autenticação e diagnóstico local não generativo aprovados';
+        return $runnerSupported
+            ? 'autenticação e diagnóstico local não generativo aprovados'
+            : 'CLI autenticada e saudável; adapter de execução ainda não está disponível';
     }
     if ($status === 'unsupported') {
         return 'provider não possui probe seguro registrado';
@@ -232,6 +299,65 @@ function providerReason(string $status, string $authStatus, string $healthStatus
     return 'funcionalidade não comprovada pelo probe seguro';
 }
 
+function healthPassed(string $classifier, array $result, ?string $providerTarget = null): bool
+{
+    if (($result['timed_out'] ?? false) === true || ($result['exit'] ?? 1) !== 0) {
+        return false;
+    }
+    $output = (string) ($result['output'] ?? '');
+    if ($classifier === 'opencode_models') {
+        return hasOpenCodeModelSignal($output);
+    }
+    if ($classifier === 'hermes_status') {
+        return $providerTarget !== null && hermesHealthPassed($result, $providerTarget);
+    }
+
+    return ! hasUnauthenticatedSignal($output);
+}
+
+/** @return array<string, mixed> */
+function verifyHermesProvider(string $path, string $root, array $definition, array $base): array
+{
+    $statusResult = commandResult(commandLine($path, $definition['health']['args']), $root);
+    $providerTarget = sanitizeProviderIdentifier((string) getenv('RALPH_HERMES_PROVIDER'));
+    if ($providerTarget === '') {
+        $providerTarget = extractHermesProvider((string) ($statusResult['output'] ?? ''));
+    }
+    if ($providerTarget === '') {
+        $base['status'] = 'authentication_unknown';
+        $base['reason'] = 'provider alvo não informado e não foi identificado no diagnóstico Hermes';
+        $base['verification']['health_exit'] = $statusResult['exit'];
+        $base['verification']['health_timed_out'] = $statusResult['timed_out'];
+
+        return $base;
+    }
+
+    $authArgs = $definition['auth']['args'];
+    $authArgs[] = $providerTarget;
+    $authResult = commandResult(commandLine($path, $authArgs), $root);
+    $authStatus = classifyAuth($authResult, 'hermes');
+    $base['auth_status'] = $authStatus;
+    $base['verification']['provider_target'] = $providerTarget;
+    $base['verification']['auth_exit'] = $authResult['exit'];
+    $base['verification']['auth_timed_out'] = $authResult['timed_out'];
+    if ($authStatus !== 'authenticated') {
+        $base['status'] = $authStatus === 'unauthenticated' ? 'unauthenticated' : 'authentication_unknown';
+        $base['reason'] = providerReason($base['status'], $authStatus, 'unsupported', true, $base['runner_supported']);
+
+        return $base;
+    }
+
+    $healthStatus = healthPassed('hermes_status', $statusResult, $providerTarget) ? 'healthy' : 'unhealthy';
+    $base['health_status'] = $healthStatus;
+    $base['verification']['health_exit'] = $statusResult['exit'];
+    $base['verification']['health_timed_out'] = $statusResult['timed_out'];
+    $base['status'] = $healthStatus === 'healthy' ? 'functional' : 'degraded';
+    $base['adapter_enabled'] = $base['status'] === 'functional' && $base['runner_supported'];
+    $base['reason'] = providerReason($base['status'], $authStatus, $healthStatus, true, $base['runner_supported']);
+
+    return $base;
+}
+
 /** @return array<string, mixed> */
 function verifyProvider(string $provider, string $path, string $root): array
 {
@@ -247,11 +373,15 @@ function verifyProvider(string $provider, string $path, string $root): array
         'health_status' => 'unsupported',
         'status' => 'unsupported',
         'adapter_enabled' => false,
+        'runner_supported' => (bool) ($definition['runner_supported'] ?? false),
         'capabilities' => $definition['capabilities'] ?? [],
     ];
     if ($definition === null || $definition['auth'] === null || $definition['health'] === null) {
         $base['reason'] = providerReason('unsupported', 'unknown', 'unsupported', true);
         return $base;
+    }
+    if ($provider === 'hermes') {
+        return verifyHermesProvider($path, $root, $definition, $base);
     }
     $requiredEnv = $definition['auth']['requires_env'] ?? null;
     $providerTarget = $requiredEnv !== null ? trim((string) getenv($requiredEnv)) : '';
@@ -272,22 +402,20 @@ function verifyProvider(string $provider, string $path, string $root): array
     $base['verification']['auth_timed_out'] = $authResult['timed_out'];
     if ($authStatus !== 'authenticated') {
         $base['status'] = $authStatus === 'unauthenticated' ? 'unauthenticated' : 'authentication_unknown';
-        $base['reason'] = providerReason($base['status'], $authStatus, 'unsupported', true);
+        $base['reason'] = providerReason($base['status'], $authStatus, 'unsupported', true, $base['runner_supported']);
         return $base;
     }
 
     $healthArgs = $definition['health']['args'];
     $healthResult = commandResult(commandLine($path, $healthArgs), $root);
-    $healthPassed = ($healthResult['timed_out'] ?? false) === false
-        && ($healthResult['exit'] ?? 1) === 0
-        && ! hasUnauthenticatedSignal((string) ($healthResult['output'] ?? ''));
-    $healthStatus = $healthPassed ? 'healthy' : 'unhealthy';
+    $healthClassifier = (string) ($definition['health']['classifier'] ?? 'exit_zero');
+    $healthStatus = healthPassed($healthClassifier, $healthResult) ? 'healthy' : 'unhealthy';
     $base['health_status'] = $healthStatus;
     $base['verification']['health_exit'] = $healthResult['exit'];
     $base['verification']['health_timed_out'] = $healthResult['timed_out'];
     $base['status'] = $healthStatus === 'healthy' ? 'functional' : 'degraded';
-    $base['adapter_enabled'] = $base['status'] === 'functional';
-    $base['reason'] = providerReason($base['status'], $authStatus, $healthStatus, true);
+    $base['adapter_enabled'] = $base['status'] === 'functional' && $base['runner_supported'];
+    $base['reason'] = providerReason($base['status'], $authStatus, $healthStatus, true, $base['runner_supported']);
 
     return $base;
 }
@@ -313,6 +441,7 @@ function detectProject(string $root, bool $verifyProviders = false): array
             'health_status' => 'not_checked',
             'status' => $path === '' ? 'unavailable' : 'detected',
             'adapter_enabled' => false,
+            'runner_supported' => (bool) ($definitions[$command]['runner_supported'] ?? false),
             'capabilities' => $definitions[$command]['capabilities'] ?? [],
             'verification' => [
                 'requested' => $verifyProviders,
@@ -366,7 +495,7 @@ function detectProject(string $root, bool $verifyProviders = false): array
     ];
 }
 
-function selectProvider(array $detected, string $requested): string
+function selectProvider(array $detected, string $requested): ?string
 {
     if ($requested !== 'auto') {
         if (! ($detected['providers'][$requested]['installed'] ?? false)) {
@@ -375,23 +504,47 @@ function selectProvider(array $detected, string $requested): string
 
         return $requested;
     }
-    foreach (['codex', 'claude', 'opencode'] as $candidate) {
+    foreach (providerOrder() as $candidate) {
         if (($detected['harness_signals'][$candidate] ?? false) && ($detected['providers'][$candidate]['adapter_enabled'] ?? false)) {
             return $candidate;
         }
     }
-    foreach (['codex', 'claude', 'opencode'] as $candidate) {
+    foreach (providerOrder() as $candidate) {
         if ($detected['providers'][$candidate]['adapter_enabled'] ?? false) {
             return $candidate;
         }
     }
 
-    return 'codex';
+    return null;
 }
 
-function providerAdapterEnabled(array $detected, string $provider): bool
+/** @return list<string> */
+function providerOrder(): array
 {
-    return ($detected['providers'][$provider]['adapter_enabled'] ?? false) === true;
+    return ['codex', 'claude', 'opencode', 'hermes', 'agy'];
+}
+
+/** @return list<string> */
+function providersWithStatus(array $detected, string $status): array
+{
+    return array_values(array_filter(
+        providerOrder(),
+        static fn (string $provider): bool => ($detected['providers'][$provider]['status'] ?? null) === $status
+    ));
+}
+
+/** @return list<string> */
+function availableRunners(array $detected): array
+{
+    return array_values(array_filter(
+        providerOrder(),
+        static fn (string $provider): bool => ($detected['providers'][$provider]['adapter_enabled'] ?? false) === true
+    ));
+}
+
+function providerAdapterEnabled(array $detected, ?string $provider): bool
+{
+    return $provider !== null && ($detected['providers'][$provider]['adapter_enabled'] ?? false) === true;
 }
 
 function hashFile(string $path): ?string
@@ -548,7 +701,7 @@ function readManifest(string $path, ?string $expectedRoot = null): array
 }
 
 /** @return array<string, mixed> */
-function installationPlan(string $root, array $detected, string $provider, string $requestedProvider): array
+function installationPlan(string $root, array $detected, ?string $provider, string $requestedProvider): array
 {
     global $sourceRoot;
     $manifestPath = $root.'/.ralph/install-manifest.json';
@@ -582,8 +735,10 @@ function installationPlan(string $root, array $detected, string $provider, strin
         'selection' => [
             'requested_provider' => $requestedProvider,
             'selected_provider' => $provider,
-            'selected_status' => $detected['providers'][$provider]['status'] ?? 'unavailable',
+            'selected_status' => $provider === null ? null : ($detected['providers'][$provider]['status'] ?? 'unavailable'),
             'adapter_enabled' => providerAdapterEnabled($detected, $provider),
+            'functional_providers' => providersWithStatus($detected, 'functional'),
+            'available_runners' => availableRunners($detected),
         ],
         'orchestration' => [
             'mode' => providerAdapterEnabled($detected, $provider)

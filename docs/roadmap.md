@@ -1,5 +1,15 @@
 # Roadmap do Ralph Method
 
+## 0.3.1 — certificação de sessões CLI
+
+- [x] reconhecer inventário de credenciais e catálogo de modelos do OpenCode;
+- [x] identificar automaticamente o provider selecionado pelo Hermes;
+- [x] separar `functional` da disponibilidade de `runner_supported`;
+- [x] publicar providers funcionais e runners disponíveis no dry-run;
+- [x] selecionar runners em ordem determinística, sem fallback silencioso;
+- [x] fixtures offline de OpenCode e Hermes com bloqueio de geração;
+- [ ] adapters de execução OpenCode e Hermes.
+
 ## 0.1.0 — extração do núcleo
 
 - [x] control plane, trace, monitor e bloco extraídos;
@@ -26,6 +36,6 @@
 - [x] fixture offline de provider funcional, não autenticado e unsupported;
 - [ ] contrato de adapter Codex;
 - [ ] fixture e adapter Claude;
-- [ ] fixture e adapter OpenCode;
+- [ ] adapter de execução OpenCode;
 - [ ] Hermes/agy como delegações filhas;
 - [ ] regressão de execução multiprovider.
