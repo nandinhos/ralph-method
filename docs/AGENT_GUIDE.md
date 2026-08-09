@@ -60,7 +60,7 @@ O agente nunca deve:
 
 | Papel | Responsabilidade | Limite obrigatório |
 |---|---|---|
-| `ralph-control` | estado, lease, fencing, gates, recuperação e avanço | única autoridade de transição |
+| `ralph-control` | estado, lease, fencing, locks de workflow e execução, gates, recuperação e avanço | única autoridade de transição |
 | `ralph.sh` | executar uma fase por sessão e produzir código/testes | não escolhe a próxima feature |
 | implementação | alterar código dentro da feature autorizada | não cria commit nem altera o plano |
 | revisão técnica | verificar código e critérios em modo read-only | deve ser independente do implementador |
@@ -464,6 +464,13 @@ bin/ralph-control continue --workflow wf_exemplo_20260807_001
 
 Não execute vários supervisores no mesmo checkout. O lock do supervisor existe
 para impedir concorrência.
+
+Além do lock do supervisor, cada bloco controlado adquire uma exclusividade por
+`workflow_id + feature_key` em `.git/ralph-control/executions/`. Se outra sessão
+tentar executar a mesma feature enquanto o bloco estiver ativo, ela será
+rejeitada antes de iniciar provider ou processo. O `workflow.lock` protege as
+escritas curtas de estado e ledger; ele não permanece retido durante a execução
+do agente.
 
 ## 6. Gates, estados e evidências
 

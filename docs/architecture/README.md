@@ -15,6 +15,8 @@ O Ralph Method é um framework local instalado dentro de um projeto-alvo. O
 - [../backlog.md](../backlog.md) — itens adiados sem prioridade;
 - [../adr/0007-escopo-fechado-de-harnesses.md](../adr/0007-escopo-fechado-de-harnesses.md)
   — decisão de escopo entre Codex, Claude CLI, OpenCode, Hermes e agy.
+- [../adr/0008-execucao-exclusiva-e-ledger-protegido.md](../adr/0008-execucao-exclusiva-e-ledger-protegido.md)
+  — decisão de exclusividade por feature e escrita protegida do ledger.
 - [../reports/0001-prova-real-opencode.md](../reports/0001-prova-real-opencode.md)
   — evidência da primeira prova real isolada.
 

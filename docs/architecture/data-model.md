@@ -9,6 +9,7 @@
 | configuração do método | `.ralph/method.json` | instalação local |
 | capabilities/providers | `.ralph/providers.json` | instalador/usuário, com prontidão verificada |
 | eventos e locks | `.git/ralph-control/` | `ralph-control` |
+| exclusividade de execução | `.git/ralph-control/executions/<sha256>.lock` | `ralph-control`, mantido durante o bloco |
 | handoffs | `.ralph/handoffs/` | controlador e projeto |
 | memória curada | `docs/engineering/` | projeto-alvo |
 | manifesto de instalação | `.ralph/install-manifest.json` | `ralph-init` |
@@ -20,6 +21,10 @@
 ## Regras
 
 - o ledger é JSONL append-only com hash chain;
+- toda escrita no ledger passa pelo `workflow.lock`; chamadas aninhadas ao
+  controlador reutilizam a mesma posse lógica do lock;
+- o lock de execução por feature é mantido enquanto o processo controlado e
+  seus filhos estão vivos; sua liberação ocorre no encerramento do processo;
 - leases em claro não entram no ledger;
 - tokens, prompts e custos não entram em eventos;
 - relatório `TRC` é projeção do ledger e não fonte de estado;

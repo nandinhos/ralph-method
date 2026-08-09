@@ -26,6 +26,8 @@ $supervisorLockFile = $runtime.DIRECTORY_SEPARATOR.'supervisor.lock';
 $documentIndexFile = $runtime.DIRECTORY_SEPARATOR.'document-index.json';
 $gateSessionsDirectory = $runtime.DIRECTORY_SEPARATOR.'gate-sessions';
 $activeVerificationProof = null;
+$workflowLockHandle = null;
+$workflowLockDepth = 0;
 
 const RALPH_DOCUMENT_SCHEMA_VERSION = '1.0.0';
 
@@ -988,19 +990,53 @@ function clearGateSession(array $feature): void
 
 function withLock(callable $callback): mixed
 {
-    global $runtime, $lockFile;
+    global $runtime, $lockFile, $workflowLockHandle, $workflowLockDepth;
     runtimeInit();
+    if (is_resource($workflowLockHandle)) {
+        $workflowLockDepth++;
+        try {
+            return $callback();
+        } finally {
+            $workflowLockDepth--;
+        }
+    }
+
     $handle = fopen($lockFile, 'c+');
     if ($handle === false || ! flock($handle, LOCK_EX)) {
         fail('não foi possível adquirir workflow.lock');
     }
+    $workflowLockHandle = $handle;
+    $workflowLockDepth = 1;
 
     try {
         return $callback();
     } finally {
+        $workflowLockDepth = 0;
+        $workflowLockHandle = null;
         flock($handle, LOCK_UN);
         fclose($handle);
     }
+}
+
+function acquireExecutionLock(string $workflowId, string $featureKey): mixed
+{
+    global $runtime;
+    $directory = $runtime.DIRECTORY_SEPARATOR.'executions';
+    if (! is_dir($directory) && ! mkdir($directory, 0700, true) && ! is_dir($directory)) {
+        fail('não foi possível criar diretório de execuções');
+    }
+    $path = $directory.DIRECTORY_SEPARATOR.hash('sha256', $workflowId.'|'.$featureKey).'.lock';
+    $handle = fopen($path, 'c+');
+    if ($handle === false) {
+        fail('não foi possível abrir lock da execução');
+    }
+    if (! flock($handle, LOCK_EX | LOCK_NB)) {
+        fclose($handle);
+        fail('já existe uma execução ativa para esta feature', 12);
+    }
+    @chmod($path, 0600);
+
+    return $handle;
 }
 
 function loadWorkflow(): array
@@ -1258,6 +1294,11 @@ function repairLedger(array $arguments): array
 }
 
 function appendEvent(array $payload): array
+{
+    return withLock(static fn (): array => appendEventUnlocked($payload));
+}
+
+function appendEventUnlocked(array $payload): array
 {
     global $eventsFile, $eventTypes;
     runtimeInit();
@@ -3352,6 +3393,18 @@ function runControlled(array $arguments): void
     if (($feature['state'] ?? null) !== 'running') {
         fail('run exige feature em running; use claim antes de executar');
     }
+    $executionLock = acquireExecutionLock($workflowId, $featureKey);
+    $feature = withLock(function () use ($featureKey, $lease): array {
+        $workflow = loadWorkflow();
+        $projection = project($workflow, readEvents());
+        $lockedFeature = featureFrom($projection, $featureKey);
+        checkLease($lockedFeature, $lease);
+        if (($lockedFeature['state'] ?? null) !== 'running') {
+            fail('execução não pode iniciar; a feature deixou de estar em running');
+        }
+
+        return $lockedFeature;
+    });
     $attempt = (int) $feature['attempt'];
     appendEvent(eventContext($arguments, $feature, 'attempt.started', 'Processo controlado do Ralph iniciado', [
         'command_fingerprint' => hashValue($command),
@@ -3584,6 +3637,7 @@ function runControlled(array $arguments): void
             'artifact_refs' => $facts['artifact_refs'],
         ]));
     }
+    fclose($executionLock);
     printJson(['status' => $exitCode === 0 ? 'awaiting_gates' : 'debugging_required', 'feature_key' => $featureKey, 'exit_code' => $exitCode, 'artifacts' => [$prefix.'.stdout.log', $prefix.'.stderr.log']]);
 }
 

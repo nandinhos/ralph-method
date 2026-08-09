@@ -71,3 +71,5 @@
 2026-08-09T02:19:12-03:00 | review | revisão independente bounded foi encerrada após exceder o limite sem parecer estruturado; não foi tratada como aprovação, e os checks reproduzíveis locais permaneceram como evidência da regressão.
 2026-08-09T03:11:48-03:00 | decision | documentação de alto nível ganhou mapa conceitual, fluxo agnóstico e matriz de configuração; AGENT_GUIDE recebeu procedimento determinístico pós-identificação do harness e foi atualizado para guide_version 1.1.0.
 2026-08-09T04:21:34-03:00 | decision | matriz estrutural foi consolidada em docs/architecture/README.md com camada, componente, função, limite e artefatos locais; docs/README.md e STATUS.md passaram a apontar para a referência única.
+2026-08-09T16:25:25-03:00 | decision | Fase 0 do hardening adotou lock exclusivo por workflow e feature, com appendEvent protegido por workflow.lock.
+2026-08-09T16:25:25-03:00 | fix | O teste concorrente reproduziu duas execuções simultâneas; a segunda passou a ser rejeitada com exit 12 e o ledger permaneceu íntegro.

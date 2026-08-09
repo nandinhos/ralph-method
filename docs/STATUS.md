@@ -2,11 +2,16 @@
 
 ## Estado atual
 
-A versão `0.4.0` foi promovida localmente para `main` em 2026-08-08 pelo
-commit candidato `c6a7f74995bc5f93aefe51212b3ba1e949788baf`, usando
-`git merge --ff-only`. O push remoto não foi realizado. A certificação completa
-está em
+A versão `0.4.0` foi promovida para `main` e está sincronizada com
+`origin/main` no commit `6dd9b29`. A certificação completa está em
 [`docs/reports/0007-certificacao-e-promocao-v0-4-0.md`](reports/0007-certificacao-e-promocao-v0-4-0.md).
+
+A branch `feat/ralph-hardening` iniciou a evolução de segurança da v0.5.0. A
+primeira entrega adiciona exclusividade por feature durante o bloco controlado,
+protege o ledger com `workflow.lock` e comprova a rejeição de duas execuções
+simultâneas no teste de método. A promoção desta evolução ainda não ocorreu.
+O incidente e a correção estão documentados em
+[`docs/incidents/0008-concorrencia-no-bloco-controlado.md`](incidents/0008-concorrencia-no-bloco-controlado.md).
 
 O repositório é uma extração independente do núcleo Ralph validado no
 `refactor-radar`: essa é a origem histórica, não uma dependência de runtime.

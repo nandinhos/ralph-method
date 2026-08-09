@@ -117,6 +117,43 @@ printf '%s' "$workflow_output" | grep -q 'workflow incompatível' || fail 'mensa
 
 (cd "$TMP" && control verify) >/dev/null
 
+concurrency_tmp="$TMP/concurrency-fixture"
+mkdir -p "$concurrency_tmp"
+git -C "$concurrency_tmp" init -q
+git -C "$concurrency_tmp" config user.email ralph-method@example.invalid
+git -C "$concurrency_tmp" config user.name 'Ralph Method Concurrency Test'
+printf '%s\n' '# Concorrência' > "$concurrency_tmp/README.md"
+printf '%s\n' '# Plano' > "$concurrency_tmp/plan.md"
+printf '%s\n' '{"schema_version":"1.0.0","workflow_id":"wf_concurrency","plan_file":"plan.md","knowledge_policy":{"mode":"non_blocking"},"features":[{"feature_key":"FEATURE-001","title":"Execução exclusiva","position":1}]}' > "$concurrency_tmp/workflow.json"
+git -C "$concurrency_tmp" add README.md plan.md workflow.json
+git -C "$concurrency_tmp" commit -qm base
+(cd "$concurrency_tmp" && control init --workflow wf_concurrency --manifest workflow.json >/dev/null)
+concurrency_claim="$(cd "$concurrency_tmp" && control claim --workflow wf_concurrency --feature FEATURE-001 --actor concurrency-test)"
+concurrency_lease="$(json_field "$concurrency_claim" lease_token)"
+
+set +e
+(cd "$concurrency_tmp" && control run --workflow wf_concurrency --feature FEATURE-001 --lease "$concurrency_lease" --command 'sleep 3' > "$TMP/concurrency-first.log" 2>&1) &
+concurrency_first_pid=$!
+sleep 1
+concurrency_second_output="$(cd "$concurrency_tmp" && control run --workflow wf_concurrency --feature FEATURE-001 --lease "$concurrency_lease" --command 'sleep 1' 2>&1)"
+concurrency_second_exit=$?
+wait "$concurrency_first_pid"
+concurrency_first_exit=$?
+set -e
+assert_eq '0' "$concurrency_first_exit" 'primeira execução concorrente terminou'
+assert_eq '12' "$concurrency_second_exit" 'segunda execução concorrente foi rejeitada'
+printf '%s' "$concurrency_second_output" | grep -q 'execução ativa' || fail 'mensagem da execução concorrente'
+(cd "$concurrency_tmp" && control verify) >/dev/null
+EVENTS_FILE="$concurrency_tmp/.git/ralph-control/events.jsonl" php -r '
+  $events = file(getenv("EVENTS_FILE"), FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+  $counts = [];
+  foreach ($events as $line) {
+      $event = json_decode($line, true, 512, JSON_THROW_ON_ERROR);
+      $counts[$event["type"] ?? ""] = ($counts[$event["type"] ?? ""] ?? 0) + 1;
+  }
+  exit(($counts["attempt.started"] ?? 0) === 1 && ($counts["command.started"] ?? 0) === 1 && ($counts["block.finished"] ?? 0) === 1 ? 0 : 1);
+'
+
 mkdir -p "$TMP/.phases/logs"
 cat > "$TMP/.phases/logs/historical-feature-002.result.json" <<'JSON'
 {

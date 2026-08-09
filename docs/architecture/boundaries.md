@@ -2,7 +2,7 @@
 
 | Componente | Pode fazer | Não pode fazer |
 |---|---|---|
-| `ralph-control` | validar estado, lease, fencing, gates e avanço | delegar autoridade ao hook ou provider |
+| `ralph-control` | validar estado, lease, fencing, locks de workflow e execução, gates e avanço | delegar autoridade ao hook ou provider |
 | `ralph-trace` | registrar fatos de execução e projetar relatório | alterar estado ou iniciar feature |
 | `ralph-monitor` | observar processos e publicar snapshot | aprovar, retry ou liberar lease |
 | `ralph.sh` | criar sessões e executar fases | concluir por parsing de log |
@@ -47,3 +47,16 @@ tem timeout e não publica a saída bruta. `functional` certifica a CLI;
 | OpenCode | adapter de saída + runner selecionável após prontidão | fechado; fixture real, política read-only, saída normalizada, prova de processo e campo verde |
 | Hermes/agy | delegação filha registrada no trace após diagnóstico suportado | backlog, prioridade nenhuma |
 | instalação remota | manifesto local com hashes | necessidade de vários hosts compartilhando estado |
+
+## Exclusividade de execução
+
+O controlador mantém um lock de execução por `workflow_id + feature_key` em
+`.git/ralph-control/executions/`. O lock fica adquirido durante todo o bloco
+controlado e impede que dois processos usem o mesmo checkout para executar a
+mesma feature simultaneamente. O `workflow.lock` continua protegendo cada
+mutação curta do estado e do ledger; ele não fica retido durante a chamada ao
+provider.
+
+O bloqueio é fail-closed: uma segunda execução recebe erro e não inicia
+provider, não cria processo e não altera a fila. O lock é local ao checkout e
+não é uma autorização para executar features diferentes em paralelo.

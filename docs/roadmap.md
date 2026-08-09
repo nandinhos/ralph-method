@@ -1,6 +1,6 @@
 # Roadmap do Ralph Method
 
-## Entrega atual — engine OpenCode (`v0.4.0` promovida localmente)
+## Entrega concluída — engine OpenCode (`v0.4.0`)
 
 O trabalho foi executado isoladamente na branch `feat/opencode-engine` e
 promovido localmente para `main` depois da regressão completa, da execução real
@@ -19,7 +19,18 @@ pelo próprio OpenCode e do teste de campo em projeto real.
 - [x] realizar teste de campo em worktree isolada de projeto real, com os cinco gates e handoff;
 - [x] maturar completamente o adversarial do adapter OpenCode: revisão independente bounded, contrato de timeout, saída estruturada e repetição sem timeout; relatório `0006`;
 - [x] revisar a superfície crítica da release com agente independente bounded e preparar promoção para `main`; relatório `0007`.
-- [x] promover localmente a `v0.4.0` para `main` com `merge --ff-only`; push remoto permanece deliberadamente pendente.
+- [x] promover a `v0.4.0` para `main` e sincronizar `origin/main`.
+
+## Próxima evolução — hardening do control plane (`v0.5.0`)
+
+- [x] reproduzir a concorrência de duas execuções para a mesma feature;
+- [x] rejeitar a segunda execução antes de iniciar provider ou processo;
+- [x] proteger `appendEvent()` com `workflow.lock` e posse reentrante;
+- [x] validar o ledger após a execução concorrente focal;
+- [ ] ampliar os testes para crash, fencing, recuperação e concorrência de eventos;
+- [ ] validar handoff e conhecimento não bloqueante;
+- [ ] automatizar regressão portátil em CI;
+- [ ] publicar métricas operacionais somente leitura.
 
 O desenho detalhado, os riscos e os critérios estão em
 [`architecture/opencode-engine-plan.md`](architecture/opencode-engine-plan.md).
