@@ -1,0 +1,42 @@
+name: CI portátil do Ralph Method
+
+on:
+  push:
+    branches:
+      - main
+      - 'feat/**'
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ralph-method-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  portable:
+    name: Checks portáteis
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Baixar o repositório
+        uses: actions/checkout@v7
+
+      - name: Preparar PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          coverage: none
+
+      - name: Verificar ferramentas
+        run: |
+          php --version
+          bash --version
+          shellcheck --version
+
+      - name: Executar regressão portátil
+        run: bash scripts/ci-portable.sh

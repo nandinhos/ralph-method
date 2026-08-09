@@ -31,7 +31,7 @@ pelo próprio OpenCode e do teste de campo em projeto real.
 - [ ] cobrir `repair-ledger`, restauração após falha intermediária e inicialização concorrente do runtime;
 - [x] validar handoff e conhecimento não bloqueante, com curadoria idempotente e recuperação seletiva;
 - [x] sincronizar `VERSION`, guia de agentes, `STATUS` e changelog da candidata `v0.5.0`;
-- [ ] automatizar regressão portátil em CI;
+- [x] automatizar regressão portátil em CI sem credenciais ou geração real;
 - [ ] publicar métricas operacionais somente leitura.
 
 O desenho detalhado, os riscos e os critérios estão em

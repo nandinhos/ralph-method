@@ -38,6 +38,8 @@ anotada e promoção documentada.
 - adicionados ADR e incidente sobre a exclusividade e o ledger protegido;
 - testes de instalação e reprodução passaram a comparar a versão publicada
   pelo bundle com o arquivo `VERSION`, evitando hardcode obsoleto.
+- adicionada CI portátil com uma fronteira explícita de checks offline,
+  permissões mínimas e exclusão consciente das provas reais de provider.
 
 ### Estado da publicação
 

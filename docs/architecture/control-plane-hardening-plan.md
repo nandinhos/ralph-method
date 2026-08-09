@@ -20,7 +20,7 @@ de um teste que reproduza a pane ou a corrida que ela pretende impedir.
 | 0C | Integridade do ledger | append concorrente serializado; inicialização atômica; repair de corrupção terminal preservado | parcial; ampliar cobertura de restauração intermediária |
 | 1 | Handoff e conhecimento não bloqueante | entrega liberada sem curadoria; curadoria idempotente; lição validada e recuperação seletiva | concluída nesta branch |
 | 2 | Documentação e release | STATUS, ADR, incidentes, changelog, versão e tags coerentes | concluída nesta branch; publicação ainda pendente |
-| 3 | CI portátil | checks oficiais reproduzidos em ambiente limpo a cada alteração | pendente |
+| 3 | CI portátil | checks oficiais reproduzidos em ambiente limpo a cada alteração | concluída nesta branch |
 | 4 | Métricas read-only | agregados históricos sem mutar ledger ou estado | pendente |
 | 5 | DX e escala opcional | diff preview, exemplos e extensões só se houver benefício comprovado | pendente |
 

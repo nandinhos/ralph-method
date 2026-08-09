@@ -13,6 +13,8 @@ STATUS.md
   → histórico de versões e mudanças verificáveis
 architecture/
   → como os componentes se relacionam
+../.github/workflows/ci.yml
+  → regressão portátil automática, sem credenciais
 AGENT_GUIDE.md
   → como instalar, identificar o harness e executar
 adr/

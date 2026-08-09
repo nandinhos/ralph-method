@@ -89,6 +89,7 @@ está disponível, `auto` mantém o plano em `needs_review` sem materializar
 ## Validação
 
 Os checks portáteis verdes são `scripts/check-shell.sh`,
+`scripts/ci-portable.sh`,
 `scripts/test-installation.sh`, `scripts/test-feedback.sh`,
 `scripts/test-provider-readiness.sh`, `scripts/test-multiprovider.sh`,
 `scripts/test-ralph-method.sh`, `scripts/test-ralph-knowledge.sh` e
@@ -101,6 +102,9 @@ complexa por OpenCode com implementação e revisão preservadas no trace.
 
 A regressão multiprovider offline está verde no relatório
 [`docs/reports/0009-regressao-multiprovider.md`](reports/0009-regressao-multiprovider.md).
+A CI portátil local também está verde no relatório
+[`docs/reports/0011-ci-portatil-v0-5-0.md`](reports/0011-ci-portatil-v0-5-0.md);
+o workflow não usa credenciais nem executa geração real de provider.
 Ela prova que a seleção `auto` escolhe somente providers funcionais com
 `runner_supported=true`, mantém a ordem Codex → Claude CLI → OpenCode, não
 faz fallback silencioso, bloqueia `apply` explícito não autenticado e mantém
