@@ -42,6 +42,8 @@ anotada e promoção documentada.
   permissões mínimas e exclusão consciente das provas reais de provider.
 - adicionado `bin/ralph-metrics`, uma projeção JSON/Markdown somente leitura
   para contagens e durações do ledger, sem telemetria de custo/token.
+- a CI portátil foi reexecutada contra o bundle commitado com as métricas
+  instaláveis e permaneceu verde.
 
 ### Estado da publicação
 

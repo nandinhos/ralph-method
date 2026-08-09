@@ -103,7 +103,8 @@ complexa por OpenCode com implementação e revisão preservadas no trace.
 
 O teste de métricas comprova agregação por workflow/feature, duração observada,
 saída Markdown, rejeição de ledger corrompido e ausência de mutação no arquivo
-de eventos.
+de eventos. A evidência completa está em
+[`docs/reports/0012-metricas-read-only-v0-5-0.md`](reports/0012-metricas-read-only-v0-5-0.md).
 
 A regressão multiprovider offline está verde no relatório
 [`docs/reports/0009-regressao-multiprovider.md`](reports/0009-regressao-multiprovider.md).
