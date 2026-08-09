@@ -36,6 +36,7 @@ bash scripts/check-doc-sync.sh
 bash scripts/test-installation.sh
 bash scripts/test-feedback.sh
 bash scripts/test-provider-readiness.sh
+bash scripts/test-multiprovider.sh
 bash scripts/test-ralph-method.sh
 bash scripts/test-ralph.sh
 bash scripts/test-reproducibility.sh

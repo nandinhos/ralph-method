@@ -70,13 +70,23 @@ está disponível, `auto` mantém o plano em `needs_review` sem materializar
 
 Os checks portáteis verdes são `scripts/check-shell.sh`,
 `scripts/test-installation.sh`, `scripts/test-feedback.sh`,
-`scripts/test-provider-readiness.sh`, `scripts/test-ralph-method.sh` e
+`scripts/test-provider-readiness.sh`, `scripts/test-multiprovider.sh`,
+`scripts/test-ralph-method.sh` e
 `scripts/test-ralph.sh`, além de `scripts/test-opencode-policy.sh`,
 `scripts/test-opencode-adapter.sh`, `scripts/test-opencode-adversarial.sh` e da prova real
 `scripts/test-opencode-field.sh`. Eles cobrem ownership, conflito, idempotência,
 remoção segura, eventos, prontidão de providers, progresso e a regressão do
 loop, capability adversarial, parsing JSONL, política read-only e execução
 complexa por OpenCode com implementação e revisão preservadas no trace.
+
+A regressão multiprovider offline está verde no relatório
+[`docs/reports/0009-regressao-multiprovider.md`](reports/0009-regressao-multiprovider.md).
+Ela prova que a seleção `auto` escolhe somente providers funcionais com
+`runner_supported=true`, mantém a ordem Codex → Claude CLI → OpenCode, não
+faz fallback silencioso, bloqueia `apply` explícito não autenticado e mantém
+`fallback_policy=none`. A mesma prova registra no `ralph-trace` identidade
+exata, modelo e sessão dos três harnesses. Hermes e agy não participam da
+seleção executável e continuam no backlog sem prioridade.
 
 Os smoke tests reais dos CLIs também foram comprovados fora do loop: Codex
 retornou exit `0`, JSONL válido, thread e marcador determinístico; Claude

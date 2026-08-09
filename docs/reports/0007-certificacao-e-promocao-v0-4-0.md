@@ -50,9 +50,12 @@ veredicto. Isso não foi convertido em aprovação. A causa, a evidência e a
 mitigação bounded estão registradas em
 [`docs/incidents/0007-timeout-revisao-ampla-release.md`](../incidents/0007-timeout-revisao-ampla-release.md).
 
-## Próximos limites conhecidos
+## Próximos limites conhecidos na data da promoção
 
-Esta promoção encerra a maturação do adapter OpenCode nesta versão. Permanecem
-fora do escopo desta release o adapter Hermes, o adapter agy, contratos
-dedicados para Codex/Claude e a regressão multiprovider completa. Eles devem
-entrar como novas features, preservando o mesmo ciclo de prova e promoção.
+Esta promoção encerrou a maturação do adapter OpenCode nesta versão. Na data
+do relatório, permaneciam fora do escopo imediato o adapter Hermes, o adapter
+agy, contratos dedicados para Codex/Claude e a regressão multiprovider
+completa. A regressão dos três harnesses fechados foi concluída posteriormente
+no relatório
+[`0009-regressao-multiprovider.md`](0009-regressao-multiprovider.md). Hermes e
+agy continuam adiados sem prioridade no backlog atual.

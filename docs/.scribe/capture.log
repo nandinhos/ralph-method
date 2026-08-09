@@ -66,3 +66,6 @@
 2026-08-09T00:42:00-03:00 | review | revisão adversarial final encontrou que o teste de reprodução passaria a localizar a própria string histórica após ser commitado e que o plano OpenCode ainda dizia promoção bloqueada em duas seções.
 2026-08-09T00:46:00-03:00 | fix | auditoria de desacoplamento passou a varrer somente runtime; Fases F/H e critérios do plano OpenCode foram atualizados para o estado promovido da v0.4.0.
 2026-08-09T00:55:00-03:00 | verification | segunda revisão adversarial bounded passou com FINAL_SCOPE_REVIEW_VERDICT=PASS, uma sessão, três step_finish, oito leituras e nenhum finding.
+2026-08-09T02:13:15-03:00 | decision | regressão multiprovider foi limitada aos três harnesses fechados; Hermes e agy continuam fora da seleção executável e no backlog sem prioridade.
+2026-08-09T02:13:15-03:00 | verification | scripts/test-multiprovider.sh passou com seleção auto determinística, bloqueio sem fallback silencioso, probes sem geração e três identidades exatas no ralph-trace; relatório 0009.
+2026-08-09T02:19:12-03:00 | review | revisão independente bounded foi encerrada após exceder o limite sem parecer estruturado; não foi tratada como aprovação, e os checks reproduzíveis locais permaneceram como evidência da regressão.

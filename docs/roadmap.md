@@ -76,4 +76,4 @@ e agy não são prioridades desta linha; seus itens estão formalmente adiados e
 - [x] runner nativo Claude CLI e fixture do loop;
 - [x] adapter de execução OpenCode (entregue na v0.4.0);
 - [ ] Hermes/agy como delegações filhas — backlog sem prioridade;
-- [ ] regressão de execução multiprovider.
+- [x] regressão de execução multiprovider dos três harnesses fechados; relatório `0009`.
