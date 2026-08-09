@@ -75,3 +75,4 @@
 2026-08-09T16:25:25-03:00 | fix | O teste concorrente reproduziu duas execuções simultâneas; a segunda passou a ser rejeitada com exit 12 e o ledger permaneceu íntegro.
 2026-08-09T16:32:00-03:00 | review | A revisão adversarial encontrou bypass por workflow_id divergente, finish concorrente e replay após crash; o checkpoint não foi promovido.
 2026-08-09T16:45:00-03:00 | fix | O controlador passou a validar workflow canônico, proteger transições externas, exigir recovery após tentativa sem terminal e cobrir crash, fencing, append concorrente e repair-ledger.
+2026-08-09T16:49:13-03:00 | review | A revisão adversarial posterior aprovou a correção dos dois bloqueios: workflow divergente exit 2, finish concorrente exit 12, execução única e ledger íntegro.
