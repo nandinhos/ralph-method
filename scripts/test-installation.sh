@@ -57,6 +57,7 @@ assert_file "$project/.ralph/install-manifest.json"
 assert_file "$project/.ralph/method.json"
 assert_file "$project/bin/ralph-control"
 assert_file "$project/bin/ralph-init"
+assert_file "$project/bin/ralph-metrics"
 assert_file "$project/.ralph/codex.env"
 assert_file "$project/.ralph/claude.env"
 assert_file "$project/adapters/README.md"
@@ -146,6 +147,7 @@ bin/ralph-monitor
 bin/ralph-block
 bin/ralph-bloco
 bin/ralph-knowledge
+bin/ralph-metrics
 bin/ralph-init
 bin/ralph-doctor
 scripts/ralph.sh

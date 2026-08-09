@@ -21,7 +21,7 @@ de um teste que reproduza a pane ou a corrida que ela pretende impedir.
 | 1 | Handoff e conhecimento não bloqueante | entrega liberada sem curadoria; curadoria idempotente; lição validada e recuperação seletiva | concluída nesta branch |
 | 2 | Documentação e release | STATUS, ADR, incidentes, changelog, versão e tags coerentes | concluída nesta branch; publicação ainda pendente |
 | 3 | CI portátil | checks oficiais reproduzidos em ambiente limpo a cada alteração | concluída nesta branch |
-| 4 | Métricas read-only | agregados históricos sem mutar ledger ou estado | pendente |
+| 4 | Métricas read-only | agregados históricos sem mutar ledger ou estado | em implementação |
 | 5 | DX e escala opcional | diff preview, exemplos e extensões só se houver benefício comprovado | pendente |
 
 ## Contratos da Fase 0

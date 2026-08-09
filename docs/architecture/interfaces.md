@@ -11,6 +11,7 @@ ralph-doctor --project <path> [--verify-providers]
 bin/ralph-control <command> ...
 bin/ralph-trace record|report|tree ...
 bin/ralph-monitor --workflow <id> [--interval 30]
+bin/ralph-metrics [--workflow <id>] [--feature <key>] [--format json|markdown]
 ```
 
 ## Harnesses suportados nesta linha
@@ -114,6 +115,12 @@ credencial ou saída integral do comando.
 `bin/ralph-monitor` continua sendo somente leitura. Além do snapshot do
 workflow, ele mostra o último evento do JSONL do loop e permite detectar
 processo ausente, heartbeat parado, gates sem atividade e workflow bloqueado.
+
+`bin/ralph-metrics` também é somente leitura. Ele agrega `events.jsonl` em
+JSON ou Markdown, aceita filtros por workflow/feature e calcula contagens de
+eventos, comandos, gates, recuperações, conhecimento e durações observadas.
+Não grava arquivo por padrão e não deve ser interpretado como métrica de
+custo, consumo de tokens ou autorização de continuidade.
 
 ## Prontidão de provider
 

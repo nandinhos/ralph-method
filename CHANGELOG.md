@@ -40,6 +40,8 @@ anotada e promoção documentada.
   pelo bundle com o arquivo `VERSION`, evitando hardcode obsoleto.
 - adicionada CI portátil com uma fronteira explícita de checks offline,
   permissões mínimas e exclusão consciente das provas reais de provider.
+- adicionado `bin/ralph-metrics`, uma projeção JSON/Markdown somente leitura
+  para contagens e durações do ledger, sem telemetria de custo/token.
 
 ### Estado da publicação
 

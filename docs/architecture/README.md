@@ -37,6 +37,7 @@ Ralph for instalado em outro projeto ou receber outro harness.
 | Compatibilidade | `bin/ralph-bloco` | Alias operacional do bloco | Mantém compatibilidade com invocações em português; não cria uma segunda máquina de estados. |
 | Trace | `bin/ralph-trace` | Registrar delegações | Encaminha fatos de runner, provider, modelo, sessão e identidade ao controlador; não aprova nem libera. |
 | Monitor | `bin/ralph-monitor` | Exibir saúde e progresso | Consulta snapshots, heartbeat, processo e último feedback; não faz retry, recovery ou transição. |
+| Métricas | `bin/ralph-metrics` | Agregar o ledger historicamente | Emite JSON ou Markdown somente por leitura; não grava relatório, altera eventos ou calcula custo/token. |
 | Loop | `scripts/ralph.sh` | Executar fases do harness | Abre sessões por fase, executa testes e emite feedback; não interpreta log como aprovação nem decide a fila. |
 | Hook | `scripts/ralph-hook.sh` | Observar o loop | Emite telemetria sanitizada e best-effort; não altera ledger, gates, leases ou estado global. |
 

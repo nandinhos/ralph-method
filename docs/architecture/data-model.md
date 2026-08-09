@@ -16,6 +16,7 @@
 | relatório de remoção | `.ralph/uninstall-report.json` | `ralph-init` |
 | lock de instalação | `.ralph/install.lock` | `ralph-init`, preservado para coordenação local |
 | feedback do loop | `.git/ralph-control/feedback/events.jsonl` | `ralph.sh` |
+| métricas derivadas | stdout de `bin/ralph-metrics` | consumidor do projeto/orquestrador, sem persistência implícita |
 | perfis de execução | `.ralph/codex.env`, `.ralph/claude.env` | instalador/usuário |
 
 ## Regras
@@ -39,5 +40,7 @@
   local não generativo aprovado para a CLI; não significa probe real de
   geração.
 - feedback é telemetria operacional local, não é fonte de transição;
+- métricas são uma projeção descartável do ledger: a execução não cria,
+  reescreve ou repara eventos e não mede custo/token;
 - o uninstall respeita hashes e preserva qualquer arquivo que o usuário tenha
   alterado depois da instalação.

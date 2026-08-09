@@ -1,0 +1,384 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+const RALPH_METRICS_SCHEMA_VERSION = '1.0.0';
+
+function failMetrics(string $message, int $code = 2): never
+{
+    fwrite(STDERR, "erro: {$message}\n");
+    exit($code);
+}
+
+/** @return array<string, string|bool> */
+function parseMetricsArguments(array $argv): array
+{
+    $result = [];
+    for ($index = 1; $index < count($argv); $index++) {
+        $argument = $argv[$index];
+        if (! str_starts_with($argument, '--')) {
+            failMetrics('argumento posicional não reconhecido: '.$argument);
+        }
+        $argument = substr($argument, 2);
+        if (str_contains($argument, '=')) {
+            [$key, $value] = explode('=', $argument, 2);
+            $result[$key] = $value;
+            continue;
+        }
+        $next = $argv[$index + 1] ?? null;
+        if ($next !== null && ! str_starts_with($next, '--')) {
+            $result[$argument] = $next;
+            $index++;
+            continue;
+        }
+        $result[$argument] = true;
+    }
+
+    return $result;
+}
+
+function gitEventsPath(): string
+{
+    $root = realpath(getcwd()) ?: getcwd();
+    $commonDirectory = trim((string) shell_exec('git rev-parse --git-common-dir 2>/dev/null'));
+    if ($commonDirectory === '') {
+        failMetrics('o comando precisa rodar dentro de um checkout Git');
+    }
+    if (! str_starts_with($commonDirectory, DIRECTORY_SEPARATOR)) {
+        $commonDirectory = $root.DIRECTORY_SEPARATOR.$commonDirectory;
+    }
+    $commonDirectory = realpath($commonDirectory) ?: $commonDirectory;
+
+    return $commonDirectory.DIRECTORY_SEPARATOR.'ralph-control'.DIRECTORY_SEPARATOR.'events.jsonl';
+}
+
+function eventTimestamp(array $event): ?float
+{
+    $timestamp = $event['timestamp'] ?? null;
+    if (! is_string($timestamp) || trim($timestamp) === '') {
+        return null;
+    }
+    try {
+        $date = new DateTimeImmutable($timestamp);
+    } catch (Throwable) {
+        return null;
+    }
+
+    return (float) $date->format('U.u');
+}
+
+function formatSeconds(?float $seconds): string
+{
+    if ($seconds === null) {
+        return 'n/d';
+    }
+
+    return number_format($seconds, 2, ',', '.').' s';
+}
+
+/** @param array<int, float> $values @return array<string, float|int|null> */
+function durationSummary(array $values): array
+{
+    if ($values === []) {
+        return ['count' => 0, 'total_seconds' => 0.0, 'average_seconds' => null, 'max_seconds' => null];
+    }
+
+    return [
+        'count' => count($values),
+        'total_seconds' => round(array_sum($values), 3),
+        'average_seconds' => round(array_sum($values) / count($values), 3),
+        'max_seconds' => round(max($values), 3),
+    ];
+}
+
+function markdownValue(mixed $value): string
+{
+    return str_replace('|', '\\|', (string) $value);
+}
+
+/** @param array<string, mixed> $metrics */
+function renderMetricsMarkdown(array $metrics): string
+{
+    $summary = $metrics['summary'];
+    $duration = $summary['attempt_duration_seconds'];
+    $recoveryDuration = $summary['recovery_duration_seconds'];
+    $lines = [
+        '# Métricas do Ralph Method',
+        '',
+        'Relatório derivado somente por leitura de `events.jsonl`. Este comando não altera o ledger, o workflow ou qualquer estado do projeto.',
+        '',
+        '| Métrica | Valor |',
+        '|---|---:|',
+        '| Eventos considerados | '.markdownValue($summary['events_total']).' |',
+        '| Workflows | '.markdownValue($summary['workflows_total']).' |',
+        '| Features | '.markdownValue($summary['features_total']).' |',
+        '| Tentativas | '.markdownValue($summary['attempts_total']).' |',
+        '| Tentativas concluídas | '.markdownValue($summary['completed_attempts']).' |',
+        '| Comandos | '.markdownValue($summary['commands_total']).' |',
+        '| Comandos aprovados | '.markdownValue($summary['commands_passed']).' |',
+        '| Comandos falhos | '.markdownValue($summary['commands_failed']).' |',
+        '| Gates aprovados | '.markdownValue($summary['gates_passed']).' |',
+        '| Gates rejeitados | '.markdownValue($summary['gates_rejected']).' |',
+        '| Recuperações exigidas | '.markdownValue($summary['recoveries_required']).' |',
+        '| Recuperações resolvidas | '.markdownValue($summary['recoveries_resolved']).' |',
+        '| Candidatos de conhecimento | '.markdownValue($summary['knowledge_candidates']).' |',
+        '| Lições curadas | '.markdownValue($summary['knowledge_curated']).' |',
+        '| Duração média da tentativa | '.formatSeconds($duration['average_seconds']).' |',
+        '| Duração máxima da tentativa | '.formatSeconds($duration['max_seconds']).' |',
+        '| Duração média da recuperação | '.formatSeconds($recoveryDuration['average_seconds']).' |',
+        '',
+        '## Eventos por tipo',
+        '',
+        '| Tipo | Quantidade |',
+        '|---|---:|',
+    ];
+    foreach ($metrics['events_by_type'] as $type => $count) {
+        $lines[] = '| `'.markdownValue($type).'` | '.markdownValue($count).' |';
+    }
+    $lines[] = '';
+    $lines[] = '## Features observadas';
+    $lines[] = '';
+    $lines[] = '| Workflow | Feature | Estado | Tentativas | Gates aprovados | Gates rejeitados |';
+    $lines[] = '|---|---|---|---:|---:|---:|';
+    foreach ($metrics['features'] as $feature) {
+        $lines[] = '| `'.markdownValue($feature['workflow_id']).'` | `'.markdownValue($feature['feature_key']).'` | '
+            .markdownValue($feature['last_state'] ?? 'n/d').' | '
+            .markdownValue($feature['attempts']).' | '
+            .markdownValue($feature['gates_passed']).' | '
+            .markdownValue($feature['gates_rejected']).' |';
+    }
+    if ($metrics['features'] === []) {
+        $lines[] = '| — | — | nenhum evento de feature | 0 | 0 | 0 |';
+    }
+    $lines[] = '';
+    $lines[] = 'Fonte: `'.markdownValue($metrics['source']['events_file']).'`; última ocorrência: `'.markdownValue($metrics['source']['last_event_at'] ?? 'n/d').'`.';
+
+    return implode("\n", $lines)."\n";
+}
+
+$arguments = parseMetricsArguments($argv);
+$format = strtolower((string) ($arguments['format'] ?? 'json'));
+if (! in_array($format, ['json', 'markdown'], true)) {
+    failMetrics('--format deve ser json ou markdown');
+}
+$workflowFilter = isset($arguments['workflow']) && is_string($arguments['workflow']) ? trim($arguments['workflow']) : null;
+$featureFilter = isset($arguments['feature']) && is_string($arguments['feature']) ? trim($arguments['feature']) : null;
+$eventsFile = isset($arguments['events']) && is_string($arguments['events']) ? realpath($arguments['events']) : gitEventsPath();
+if ($eventsFile === false || $eventsFile === null) {
+    failMetrics('ledger não encontrado; informe --events ou rode dentro do projeto-alvo', 3);
+}
+$eventsFile = (string) $eventsFile;
+
+$events = [];
+$eventLines = 0;
+if (is_file($eventsFile)) {
+    $handle = fopen($eventsFile, 'rb');
+    if ($handle === false) {
+        failMetrics('não foi possível ler o ledger: '.$eventsFile, 3);
+    }
+    while (($line = fgets($handle)) !== false) {
+        $eventLines++;
+        $trimmed = trim($line);
+        if ($trimmed === '') {
+            continue;
+        }
+        try {
+            $event = json_decode($trimmed, true, 512, JSON_THROW_ON_ERROR);
+        } catch (Throwable $exception) {
+            fclose($handle);
+            failMetrics("evento inválido na linha {$eventLines}: ".$exception->getMessage(), 3);
+        }
+        if (! is_array($event) || ! is_string($event['type'] ?? null) || eventTimestamp($event) === null) {
+            fclose($handle);
+            failMetrics("evento incompleto na linha {$eventLines}: type e timestamp são obrigatórios", 3);
+        }
+        if ($workflowFilter !== null && ($event['workflow_id'] ?? null) !== $workflowFilter) {
+            continue;
+        }
+        if ($featureFilter !== null && ($event['feature_key'] ?? null) !== $featureFilter) {
+            continue;
+        }
+        $events[] = $event;
+    }
+    fclose($handle);
+}
+
+$eventCounts = [];
+$workflows = [];
+$features = [];
+$attempts = [];
+$attemptStarts = [];
+$completedAttempts = [];
+$attemptDurations = [];
+$recoveryStarts = [];
+$recoveryDurations = [];
+$gatesPassed = 0;
+$gatesRejected = 0;
+$commands = 0;
+$commandsPassed = 0;
+$commandsFailed = 0;
+$recoveriesRequired = 0;
+$recoveriesResolved = 0;
+$knowledgeCandidates = 0;
+$knowledgeCurated = 0;
+$knowledgeRejected = 0;
+$knowledgeReviewRequired = 0;
+$knowledgeSkipped = 0;
+$lastEventAt = null;
+
+foreach ($events as $event) {
+    $type = (string) $event['type'];
+    $eventCounts[$type] = ($eventCounts[$type] ?? 0) + 1;
+    $workflowId = (string) ($event['workflow_id'] ?? 'sem-workflow');
+    $featureKey = isset($event['feature_key']) && is_string($event['feature_key']) ? $event['feature_key'] : null;
+    $timestamp = eventTimestamp($event);
+    if ($timestamp !== null) {
+        $lastEventAt = $event['timestamp'];
+    }
+    if (($event['workflow_id'] ?? null) !== null) {
+        $workflows[$workflowId] = true;
+    }
+    $featureId = $featureKey === null ? null : $workflowId."\0".$featureKey;
+    if ($featureId !== null) {
+        $features[$featureId] ??= [
+            'workflow_id' => $workflowId,
+            'feature_key' => $featureKey,
+            'last_state' => 'observed',
+            'knowledge_state' => 'not_started',
+            'attempts' => [],
+            'gates_passed' => 0,
+            'gates_rejected' => 0,
+        ];
+    }
+    $attempt = isset($event['attempt']) ? (string) $event['attempt'] : '0';
+    $attemptId = $featureId === null ? null : $featureId."\0".$attempt;
+    if ($attemptId !== null && in_array($type, ['attempt.started', 'block.finished', 'command.started', 'command.passed', 'command.failed', 'gate.passed', 'gate.rejected'], true)) {
+        $attempts[$attemptId] = true;
+        $features[$featureId]['attempts'][$attempt] = true;
+    }
+    if ($attemptId !== null && $type === 'attempt.started' && $timestamp !== null) {
+        $attemptStarts[$attemptId] = $timestamp;
+        $features[$featureId]['last_state'] = 'running';
+    }
+    if ($attemptId !== null && $type === 'block.finished' && $timestamp !== null) {
+        $completedAttempts[$attemptId] = true;
+        $features[$featureId]['last_state'] = 'block_finished';
+        if (isset($attemptStarts[$attemptId]) && $timestamp >= $attemptStarts[$attemptId]) {
+            $attemptDurations[] = $timestamp - $attemptStarts[$attemptId];
+        }
+    }
+    if ($featureId !== null) {
+        $stateByType = [
+            'feature.claimed' => 'claimed',
+            'feature.approved' => 'approved',
+            'feature.released' => 'released',
+            'feature.advanced' => 'advanced',
+            'recovery.required' => 'recovery_required',
+            'recovery.resolved' => 'recovery_resolved',
+        ];
+        if (isset($stateByType[$type])) {
+            $features[$featureId]['last_state'] = $stateByType[$type];
+        }
+    }
+    if ($type === 'gate.passed') {
+        $gatesPassed++;
+        if ($featureId !== null) {
+            $features[$featureId]['gates_passed']++;
+        }
+    } elseif ($type === 'gate.rejected') {
+        $gatesRejected++;
+        if ($featureId !== null) {
+            $features[$featureId]['gates_rejected']++;
+        }
+    } elseif ($type === 'command.started') {
+        $commands++;
+    } elseif ($type === 'command.passed') {
+        $commandsPassed++;
+    } elseif ($type === 'command.failed') {
+        $commandsFailed++;
+    } elseif ($type === 'recovery.required') {
+        $recoveriesRequired++;
+        if ($featureId !== null && $timestamp !== null) {
+            $recoveryStarts[$featureId] = $timestamp;
+        }
+    } elseif ($type === 'recovery.resolved') {
+        $recoveriesResolved++;
+        if ($featureId !== null && $timestamp !== null && isset($recoveryStarts[$featureId]) && $timestamp >= $recoveryStarts[$featureId]) {
+            $recoveryDurations[] = $timestamp - $recoveryStarts[$featureId];
+        }
+    } elseif ($type === 'knowledge.candidate_created') {
+        $knowledgeCandidates++;
+        if ($featureId !== null) {
+            $features[$featureId]['knowledge_state'] = 'knowledge_pending';
+        }
+    } elseif ($type === 'knowledge.curated') {
+        $knowledgeCurated++;
+        if ($featureId !== null) {
+            $features[$featureId]['knowledge_state'] = 'knowledge_curated';
+        }
+    } elseif ($type === 'knowledge.rejected') {
+        $knowledgeRejected++;
+        if ($featureId !== null) {
+            $features[$featureId]['knowledge_state'] = 'knowledge_rejected';
+        }
+    } elseif ($type === 'knowledge.review_required') {
+        $knowledgeReviewRequired++;
+        if ($featureId !== null) {
+            $features[$featureId]['knowledge_state'] = 'knowledge_review_required';
+        }
+    } elseif ($type === 'knowledge.skipped') {
+        $knowledgeSkipped++;
+        if ($featureId !== null) {
+            $features[$featureId]['knowledge_state'] = 'knowledge_skipped';
+        }
+    }
+}
+
+ksort($eventCounts);
+ksort($features);
+$featureOutput = [];
+foreach ($features as $feature) {
+    $feature['attempts'] = count($feature['attempts']);
+    $featureOutput[] = $feature;
+}
+$metrics = [
+    'schema_version' => RALPH_METRICS_SCHEMA_VERSION,
+    'generated_at' => gmdate('c'),
+    'filters' => ['workflow_id' => $workflowFilter, 'feature_key' => $featureFilter],
+    'source' => [
+        'events_file' => $eventsFile,
+        'event_lines' => $eventLines,
+        'last_event_at' => $lastEventAt,
+    ],
+    'summary' => [
+        'events_total' => count($events),
+        'workflows_total' => count($workflows),
+        'features_total' => count($featureOutput),
+        'attempts_total' => count($attempts),
+        'completed_attempts' => count($completedAttempts),
+        'commands_total' => $commands,
+        'commands_passed' => $commandsPassed,
+        'commands_failed' => $commandsFailed,
+        'gates_passed' => $gatesPassed,
+        'gates_rejected' => $gatesRejected,
+        'recoveries_required' => $recoveriesRequired,
+        'recoveries_resolved' => $recoveriesResolved,
+        'knowledge_candidates' => $knowledgeCandidates,
+        'knowledge_curated' => $knowledgeCurated,
+        'knowledge_rejected' => $knowledgeRejected,
+        'knowledge_review_required' => $knowledgeReviewRequired,
+        'knowledge_skipped' => $knowledgeSkipped,
+        'attempt_duration_seconds' => durationSummary($attemptDurations),
+        'recovery_duration_seconds' => durationSummary($recoveryDurations),
+    ],
+    'events_by_type' => $eventCounts,
+    'features' => $featureOutput,
+];
+
+if ($format === 'markdown') {
+    echo renderMetricsMarkdown($metrics);
+    exit(0);
+}
+
+echo json_encode($metrics, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR)."\n";

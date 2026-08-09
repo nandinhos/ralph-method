@@ -42,6 +42,7 @@ registrados em [`docs/backlog.md`](backlog.md) com prioridade nenhuma.
 | Control plane | `bin/ralph-control` | estado, lease, fencing, gates e ledger |
 | Trace | `bin/ralph-trace` | fatos de delegação e relatório `TRC` |
 | Monitor | `bin/ralph-monitor` | snapshot operacional sem transição |
+| Métricas | `bin/ralph-metrics` | agregação JSON/Markdown somente leitura do ledger |
 | Bloco | `bin/ralph-block`, `bin/ralph-bloco` | uma feature por execução |
 | Loop | `scripts/ralph.sh` | sessões por fase e gates externos |
 | Hook | `scripts/ralph-hook.sh` | observabilidade best-effort |
@@ -93,12 +94,16 @@ Os checks portáteis verdes são `scripts/check-shell.sh`,
 `scripts/test-installation.sh`, `scripts/test-feedback.sh`,
 `scripts/test-provider-readiness.sh`, `scripts/test-multiprovider.sh`,
 `scripts/test-ralph-method.sh`, `scripts/test-ralph-knowledge.sh` e
-`scripts/test-ralph.sh`, além de `scripts/test-opencode-policy.sh`,
+`scripts/test-ralph.sh`, `scripts/test-ralph-metrics.sh`, além de `scripts/test-opencode-policy.sh`,
 `scripts/test-opencode-adapter.sh`, `scripts/test-opencode-adversarial.sh` e da prova real
 `scripts/test-opencode-field.sh`. Eles cobrem ownership, conflito, idempotência,
 remoção segura, eventos, prontidão de providers, progresso e a regressão do
 loop, capability adversarial, parsing JSONL, política read-only e execução
 complexa por OpenCode com implementação e revisão preservadas no trace.
+
+O teste de métricas comprova agregação por workflow/feature, duração observada,
+saída Markdown, rejeição de ledger corrompido e ausência de mutação no arquivo
+de eventos.
 
 A regressão multiprovider offline está verde no relatório
 [`docs/reports/0009-regressao-multiprovider.md`](reports/0009-regressao-multiprovider.md).

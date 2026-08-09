@@ -571,7 +571,7 @@ function managedSources(): array
 {
     return [
         'bin/ralph-control', 'bin/ralph-trace', 'bin/ralph-monitor',
-        'bin/ralph-block', 'bin/ralph-bloco', 'bin/ralph-knowledge',
+        'bin/ralph-block', 'bin/ralph-bloco', 'bin/ralph-knowledge', 'bin/ralph-metrics',
         'bin/ralph-init', 'bin/ralph-doctor',
         'scripts/ralph.sh', 'scripts/ralph-hook.sh',
         'scripts/ralph-generate-handoff.sh', 'scripts/ralph-run-curator.sh',
@@ -830,7 +830,7 @@ function applyInstallation(string $root, array $plan): void
             'installed_at' => gmdate('Y-m-d\\TH:i:s\\Z'),
             'project' => $plan['project'],
             'orchestration' => $plan['orchestration'],
-            'components' => ['installer', 'control_plane', 'trace', 'monitor', 'loop', 'hook', 'feedback', 'provider_readiness'],
+            'components' => ['installer', 'control_plane', 'trace', 'monitor', 'metrics', 'loop', 'hook', 'feedback', 'provider_readiness'],
             'managed_files' => $managed,
         ];
         writeJson($stage.'/.ralph/install-manifest.json', $manifest);

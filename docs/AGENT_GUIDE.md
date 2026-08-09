@@ -67,6 +67,7 @@ O agente nunca deve:
 | curadoria de entrega | confirmar os cinco gates e o handoff | não é curadoria de memória |
 | `ralph-trace` | registrar delegações e identidade de provider | não aprova nem libera |
 | `ralph-monitor` | mostrar saúde, processo, progresso e último feedback | não faz retry, recovery ou avanço |
+| `ralph-metrics` | agregar o ledger em JSON/Markdown | não muta eventos, estados, gates ou custo/token |
 | hook | observar eventos e emitir fatos | não muda estado global |
 | orquestrador externo | exibir andamento e encaminhar decisões ao controlador | não interpreta feedback como aprovação |
 | adapter de provider | normalizar runner, modelo e sessão | não grava ledger nem estado de produto |
@@ -455,6 +456,17 @@ bin/ralph-monitor \
   --workflow wf_exemplo_20260807_001 \
   --interval 30
 ```
+
+Para uma visão histórica compacta, use `bin/ralph-metrics`:
+
+```bash
+bin/ralph-metrics --workflow wf_exemplo_20260807_001 --format markdown
+bin/ralph-metrics --feature FEATURE-123 --format json
+```
+
+O comando lê `.git/ralph-control/events.jsonl`, agrega contagens e durações e
+escreve apenas em stdout. Ele não corrige ledger, não muda estados, não
+autoriza gates e não mede custos ou tokens.
 
 Para uma retomada pontual do controlador, use:
 

@@ -32,7 +32,7 @@ pelo próprio OpenCode e do teste de campo em projeto real.
 - [x] validar handoff e conhecimento não bloqueante, com curadoria idempotente e recuperação seletiva;
 - [x] sincronizar `VERSION`, guia de agentes, `STATUS` e changelog da candidata `v0.5.0`;
 - [x] automatizar regressão portátil em CI sem credenciais ou geração real;
-- [ ] publicar métricas operacionais somente leitura.
+- [x] publicar métricas operacionais somente leitura, sem custo/token e sem mutação.
 
 O desenho detalhado, os riscos e os critérios estão em
 [`architecture/control-plane-hardening-plan.md`](architecture/control-plane-hardening-plan.md).

@@ -67,6 +67,7 @@ RALPH_METHOD_SOURCE="$SOURCE" "$SOURCE/bin/ralph-init" apply --project "$PROJECT
 assert_file "$PROJECT/.ralph/install-manifest.json"
 assert_file "$PROJECT/bin/ralph-control"
 assert_file "$PROJECT/bin/ralph-init"
+assert_file "$PROJECT/bin/ralph-metrics"
 assert_file "$PROJECT/adapters/opencode/runner.sh"
 assert_file "$PROJECT/scripts/ralph.sh"
 assert_file "$PROJECT/.ralph/codex.env"
