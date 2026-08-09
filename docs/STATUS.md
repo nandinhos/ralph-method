@@ -85,7 +85,7 @@ está disponível, `auto` mantém o plano em `needs_review` sem materializar
 Os checks portáteis verdes são `scripts/check-shell.sh`,
 `scripts/test-installation.sh`, `scripts/test-feedback.sh`,
 `scripts/test-provider-readiness.sh`, `scripts/test-multiprovider.sh`,
-`scripts/test-ralph-method.sh` e
+`scripts/test-ralph-method.sh`, `scripts/test-ralph-knowledge.sh` e
 `scripts/test-ralph.sh`, além de `scripts/test-opencode-policy.sh`,
 `scripts/test-opencode-adapter.sh`, `scripts/test-opencode-adversarial.sh` e da prova real
 `scripts/test-opencode-field.sh`. Eles cobrem ownership, conflito, idempotência,
@@ -109,6 +109,12 @@ orçamento artificial da primeira tentativa. O teste de campo complexo OpenCode
 foi repetido no commit candidato com `opencode/deepseek-v4-flash-free` e
 terminou verde em 136s, com `FEATURE_CHECK_OK`, trace, processo contido e
 revisão read-only.
+
+O hardening adicionou uma prova específica de handoff e memória em
+[`scripts/test-ralph-knowledge.sh`](../scripts/test-ralph-knowledge.sh): a
+feature avança antes da curadoria, a lição é publicada com ID `LES-YYYY-NNNN`,
+a segunda curadoria é idempotente e a recuperação consulta somente lições
+validadas do projeto-alvo. Conhecimento permanece `non_blocking`.
 
 A reprodução independente foi comprovada a partir de um `git archive` limpo:
 o bundle foi instalado duas vezes em um projeto Git fixture fora do

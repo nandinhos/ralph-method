@@ -2614,7 +2614,7 @@ function recordGate(array $arguments): void
     if (! in_array($gate, $allowed, true) || ! in_array($status, ['passed', 'rejected'], true)) {
         fail('gate ou status inválido');
     }
-    withLock(function () use ($arguments, $featureKey, $lease, $gate, $status): void {
+    withLock(function () use ($arguments, $workflowId, $featureKey, $lease, $gate, $status): void {
         $workflow = loadWorkflowForId($workflowId);
         $projection = project($workflow, readEvents());
         $feature = featureFrom($projection, $featureKey);
@@ -2661,7 +2661,7 @@ function approveFeature(array $arguments): void
     $workflowId = required($arguments, 'workflow');
     $featureKey = required($arguments, 'feature');
     $lease = required($arguments, 'lease');
-    withLock(function () use ($arguments, $featureKey, $lease): void {
+    withLock(function () use ($arguments, $workflowId, $featureKey, $lease): void {
         $workflow = loadWorkflowForId($workflowId);
         $events = readEvents();
         $projection = project($workflow, $events);
@@ -2835,7 +2835,7 @@ function commitHandoff(array $arguments): void
     $workflowId = required($arguments, 'workflow');
     $featureKey = required($arguments, 'feature');
     $lease = required($arguments, 'lease');
-    withLock(function () use ($arguments, $featureKey, $lease): void {
+    withLock(function () use ($arguments, $workflowId, $featureKey, $lease): void {
         global $root;
         $workflow = loadWorkflowForId($workflowId);
         $events = readEvents();
@@ -3035,7 +3035,7 @@ function recoverFeature(array $arguments): void
 {
     $workflowId = required($arguments, 'workflow');
     $featureKey = required($arguments, 'feature');
-    withLock(function () use ($arguments, $featureKey): void {
+    withLock(function () use ($arguments, $workflowId, $featureKey): void {
         $workflow = loadWorkflowForId($workflowId);
         $projection = project($workflow, readEvents());
         $feature = featureFrom($projection, $featureKey);
@@ -4150,9 +4150,10 @@ function knowledge(array $arguments): void
 
 function retrieveKnowledge(array $arguments): void
 {
+    global $root;
     $query = required($arguments, 'query');
     $limit = max(1, min(10, (int) ($arguments['limit'] ?? 5)));
-    $lessonDirectory = dirname(__DIR__).'/docs/engineering/lessons';
+    $lessonDirectory = $root.'/docs/engineering/lessons';
     $terms = array_values(array_filter(preg_split('/[^a-z0-9_-]+/i', strtolower($query)) ?: [], static fn (string $term): bool => strlen($term) >= 3));
     $matches = [];
     foreach (glob($lessonDirectory.'/*.yaml') ?: [] as $path) {
