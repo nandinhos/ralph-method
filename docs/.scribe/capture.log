@@ -58,3 +58,8 @@
 2026-08-08T23:52:00-03:00 | verification | probe adversarial final passou em 61s com cinco verificações verdes, hash estável e modelo deepseek-v4-flash-free; a tentativa anterior com big-pickle expirou sem veredicto.
 2026-08-08T23:56:00-03:00 | verification | teste de campo final passou em 136s com FEATURE_CHECK_OK, trace, processo contido e cinco gates verdes.
 2026-08-08T23:58:28-03:00 | release | v0.4.0 promovida localmente de feat/opencode-engine para main por merge --ff-only; push remoto não realizado; relatório 0007.
+2026-08-09T00:12:00-03:00 | review | auditoria encontrou apenas referências históricas/documentais ao refactor-radar; bin, scripts, adapters e schemas não possuem dependência textual de runtime.
+2026-08-09T00:15:00-03:00 | decision | escopo operacional fechado em Codex, Claude CLI e OpenCode; Hermes e agy adiados sem prioridade em ADR 0007 e backlog BL-0001 a BL-0003.
+2026-08-09T00:27:00-03:00 | error | primeiro critério de reprodução exigia árvore Git totalmente limpa, mas o uninstall preserva corretamente uninstall-report.json e install.lock.
+2026-08-09T00:29:00-03:00 | fix | teste de reprodução passou a reconhecer relatório e lock como resíduos contratuais e rejeitar qualquer outro artefato.
+2026-08-09T00:35:14-03:00 | verification | bundle git archive foi instalado duas vezes em projeto independente, validado por doctor, desinstalado e deixou apenas relatório/lock previstos; scripts/test-reproducibility.sh passou.

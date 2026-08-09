@@ -9,11 +9,16 @@ está em
 [`docs/reports/0007-certificacao-e-promocao-v0-4-0.md`](reports/0007-certificacao-e-promocao-v0-4-0.md).
 
 O repositório é uma extração independente do núcleo Ralph validado no
-`refactor-radar`. A versão `0.4.0` mantém a instalação local reversível,
-doctor, ownership por hash e canal de feedback para o orquestrador externo, e
-adiciona o guia operacional versionado para agentes de IA e a prontidão
-condicional de providers e certifica sessões reais de OpenCode e Hermes sem
-confundir prontidão da CLI com disponibilidade do runner do Ralph.
+`refactor-radar`: essa é a origem histórica, não uma dependência de runtime.
+Não há importação de código, banco, credencial ou módulo do produto-alvo. A
+versão `0.4.0` mantém a instalação local reversível, doctor, ownership por hash
+e canal de feedback para o orquestrador externo, e adiciona o guia operacional
+versionado para agentes de IA.
+
+O escopo operacional está fechado em três harnesses: Codex e Claude CLI pelos
+runners nativos do loop, e OpenCode pelo adapter executável certificado em
+campo. Hermes e agy permanecem somente na detecção passiva compatível e estão
+registrados em [`docs/backlog.md`](backlog.md) com prioridade nenhuma.
 
 ## Componentes extraídos
 
@@ -30,6 +35,7 @@ confundir prontidão da CLI com disponibilidade do runner do Ralph.
 | Feedback | `schemas/feedback-event.schema.json` | contrato JSONL/stdout/callback |
 | Prontidão de provider | `schemas/provider-readiness.schema.json` | autenticação, diagnóstico seguro e elegibilidade do adapter |
 | Adapter OpenCode | `adapters/opencode/` | preflight, execução JSONL, parser fail-closed e resultado normalizado |
+| Runners Codex/Claude | `scripts/ralph.sh` | integração nativa de execução e revisão do loop |
 | Resultado de runner | `schemas/runner-result.schema.json` | contrato sanitizado de sessão, modelo, terminal e fallback |
 | Política read-only OpenCode | `adapters/opencode/policy.php`, `scripts/opencode-readonly-proof.sh` | fingerprint, prova externa e bloqueio fail-closed da revisão |
 | Guia de agentes | `docs/AGENT_GUIDE.md` | operação, comunicação e ciclo de vida |
@@ -48,16 +54,17 @@ verificado por `scripts/check-doc-sync.sh`. A verificação de providers é
 passiva por padrão; `--verify-providers` executa somente probes seguros não
 generativos.
 
-## Providers
+## Providers e harnesses
 
 O loop herdado do `bc-harness` possui execução Codex e Claude. Nesta versão,
 provider pode ser certificado como `functional` quando `auth_status` é
 `authenticated` e `health_status` é `healthy`. `adapter_enabled` exige também
-`runner_supported=true`. OpenCode é certificado com `auth list` + `models`;
-Hermes identifica e verifica o provider selecionado; agy permanece
-`unsupported` até existir diagnóstico seguro validado. Nenhum probe inicia
-geração. Quando nenhum runner está disponível, `auto` mantém o plano em
-`needs_review` sem materializar `codex` ou outro executor fictício.
+`runner_supported=true`. OpenCode é certificado com `auth list` + `models`,
+JSONL, política read-only e teste de campo. Hermes e agy podem ser detectados
+de modo seguro, mas não possuem adapter de execução nesta linha e não entram
+na seleção como fallback. Nenhum probe inicia geração. Quando nenhum runner
+está disponível, `auto` mantém o plano em `needs_review` sem materializar
+`codex` ou outro executor fictício.
 
 ## Validação
 
@@ -78,6 +85,14 @@ orçamento artificial da primeira tentativa. O teste de campo complexo OpenCode
 foi repetido no commit candidato com `opencode/deepseek-v4-flash-free` e
 terminou verde em 136s, com `FEATURE_CHECK_OK`, trace, processo contido e
 revisão read-only.
+
+A reprodução independente foi comprovada a partir de um `git archive` limpo:
+o bundle foi instalado duas vezes em um projeto Git fixture fora do
+`refactor-radar`, validado pelo doctor, desinstalado por ownership e deixou o
+projeto original limpo. O comando reproduzível é
+`bash scripts/test-reproducibility.sh`.
+O relatório da auditoria está em
+[`docs/reports/0008-auditoria-de-acoplamento-e-reproducibilidade.md`](reports/0008-auditoria-de-acoplamento-e-reproducibilidade.md).
 
 O adversarial do adapter OpenCode foi maturado com um probe direto da CLI real:
 `ralph-review` retornou `ADVERSARIAL_VERDICT: PASS` em 38s, com uma sessão,

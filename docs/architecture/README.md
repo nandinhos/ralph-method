@@ -12,6 +12,9 @@ O Ralph Method é um framework local instalado dentro de um projeto-alvo. O
   agnóstico e plano da engine OpenCode.
 - [opencode-validation-promotion-plan.md](opencode-validation-promotion-plan.md)
   — plano de validação, debug sistemático e promoção controlada.
+- [../backlog.md](../backlog.md) — itens adiados sem prioridade;
+- [../adr/0007-escopo-fechado-de-harnesses.md](../adr/0007-escopo-fechado-de-harnesses.md)
+  — decisão de escopo entre Codex, Claude CLI, OpenCode, Hermes e agy.
 - [../reports/0001-prova-real-opencode.md](../reports/0001-prova-real-opencode.md)
   — evidência da primeira prova real isolada.
 

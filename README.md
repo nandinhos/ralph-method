@@ -12,7 +12,8 @@ gates comprovam e o controlador decide.
 - systematic debugging read-only;
 - handoff e documentos numerados;
 - `ralph-trace` para a árvore de delegação entre executores;
-- seam para Codex, Claude, OpenCode, Hermes e agy;
+- integração controlada com Codex, Claude CLI e OpenCode;
+- readiness passiva compatível com Hermes e agy, sem adapter de execução nesta versão;
 - instalação exclusiva por projeto, sem estado global do produto;
 - desinstalação reversível por ownership e hashes;
 - feedback JSONL/stdout/callback para o orquestrador externo.
@@ -55,6 +56,13 @@ runner do Ralph para aquele provider.
 ao hash instalado quando recebe `--apply`. Arquivos modificados, histórico,
 workflow, handoffs e relatórios são preservados.
 
+Para comprovar a reprodução a partir de um bundle limpo e de um projeto Git
+independente, execute:
+
+```bash
+bash scripts/test-reproducibility.sh
+```
+
 ## Feedback para o orquestrador
 
 O loop publica eventos operacionais em
@@ -67,10 +75,12 @@ exclusiva do `ralph-control`.
 
 O caminho padrão é `native_codex`. O modo `auto` consulta todos os providers
 certificados, mas seleciona somente um runner com `adapter_enabled=true`, em
-ordem determinística e sem fallback silencioso. Nesta versão, Codex e Claude
-possuem runner; OpenCode e Hermes podem ser certificados como CLIs prontas,
-mas ainda aguardam seus adapters de execução. Ausência de telemetria não vira
-erro de gate.
+ordem determinística e sem fallback silencioso. A versão `0.4.0` fecha o
+escopo em três harnesses: Codex e Claude CLI usam os runners nativos do loop;
+OpenCode usa o adapter executável em `adapters/opencode/`, certificado com
+JSONL, política read-only e teste de campo. Hermes e agy podem aparecer na
+detecção passiva, mas ficam no backlog com prioridade nenhuma e não habilitam
+execução.
 
 O `ralph-trace` diferencia identidade `exact`, `declared`, `observed`,
 `partial` e `unavailable`. Um provider que não expõe modelo efetivo não pode
@@ -81,12 +91,17 @@ opt-in.
 
 ## Estado
 
-A versão atual em desenvolvimento é `0.3.1`, extraída do núcleo validado do
-`refactor-radar` no commit `7ab25f8`. A instalação reversível e o canal de
-feedback estão incluídos, assim como o guia operacional sincronizado para
-agentes de IA. A certificação segura de OpenCode e Hermes está incluída; seus
-adapters de execução continuam sendo incremento posterior, sempre acompanhado
-de fixtures offline e regressão.
+A versão atual é `0.4.0`. O método nasceu da extração do núcleo validado no
+`refactor-radar`, mas não possui dependência de runtime, importação de código,
+banco ou credencial desse produto. O bundle pode ser instalado em qualquer
+checkout Git compatível, conforme a prova em
+[`scripts/test-reproducibility.sh`](scripts/test-reproducibility.sh). A
+instalação reversível, o canal de feedback e o guia operacional sincronizado
+para agentes de IA fazem parte da release.
+
+O fechamento de escopo e as decisões de adiamento estão em
+[`docs/adr/0007-escopo-fechado-de-harnesses.md`](docs/adr/0007-escopo-fechado-de-harnesses.md)
+e [`docs/backlog.md`](docs/backlog.md).
 
 Consulte [docs/STATUS.md](docs/STATUS.md), [docs/architecture/README.md](docs/architecture/README.md),
 [docs/AGENT_GUIDE.md](docs/AGENT_GUIDE.md) e [docs/roadmap.md](docs/roadmap.md).

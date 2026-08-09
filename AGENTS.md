@@ -38,6 +38,7 @@ bash scripts/test-feedback.sh
 bash scripts/test-provider-readiness.sh
 bash scripts/test-ralph-method.sh
 bash scripts/test-ralph.sh
+bash scripts/test-reproducibility.sh
 ```
 
 Uma alteração do contrato de eventos, instalação ou fases exige teste de

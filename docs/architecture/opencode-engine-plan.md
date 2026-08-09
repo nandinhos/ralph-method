@@ -3,13 +3,13 @@
 ## Status
 
 Implementação concluída na branch `feat/opencode-engine`, com validação de
-campo local pelo próprio OpenCode. A promoção para `main` continua bloqueada
-até a regressão final, a revisão adversarial, a sincronização documental e a
-revisão explícita da branch.
+campo local pelo próprio OpenCode. A engine foi promovida localmente para
+`main` na versão `0.4.0` após regressão final, revisão adversarial bounded e
+sincronização documental; a evidência está no relatório `0007`.
 
-Este documento descreve o contrato e o plano de implementação. A engine está
-disponível nesta branch; a promoção para `main` continua condicionada aos
-gates e revisões descritos ao final.
+Este documento descreve o contrato e o plano de implementação já executado.
+Os gates e revisões descritos ao final permanecem como critérios de evolução
+para novas versões, não como bloqueio da release `0.4.0`.
 
 ## Objetivo
 

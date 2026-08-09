@@ -6,6 +6,10 @@
 - fonte_do_metodo: `VERSION`
 - contrato_de_feedback: `schemas/feedback-event.schema.json`
 
+Escopo da versão: Codex e Claude CLI operam pelos runners nativos do loop;
+OpenCode opera pelo adapter executável certificado em campo. Hermes e agy são
+somente detecção passiva nesta linha e estão no backlog com prioridade nenhuma.
+
 Este documento é o manual operacional para qualquer agente de IA, provider,
 subagente ou orquestrador que instalar, executar, revisar, recuperar,
 atualizar ou remover o Ralph Method de um projeto.

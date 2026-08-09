@@ -24,14 +24,19 @@ pelo próprio OpenCode e do teste de campo em projeto real.
 O desenho detalhado, os riscos e os critérios estão em
 [`architecture/opencode-engine-plan.md`](architecture/opencode-engine-plan.md).
 
+O escopo ativo termina nos três harnesses Codex, Claude CLI e OpenCode. Hermes
+e agy não são prioridades desta linha; seus itens estão formalmente adiados em
+[`backlog.md`](backlog.md), com prioridade nenhuma.
+
 - [x] prova exploratória real em fixture isolado, com output esperado e check;
 - [x] prova complexa real com oráculo externo, hashes protegidos, trace e relatório `0002`;
 - [x] prova complexa com revisão read-only real, fingerprint de política e duas delegações no trace; relatório `0003`;
 - [x] teste de campo real com OpenCode, feature Laravel, cinco gates, handoff e continuidade automática; relatório `0004`;
 - [x] certificação adversarial repetível do adapter OpenCode, incluindo prova das duas fontes da política (`--policy-proof` e `RALPH_OPENCODE_VERIFY_POLICY_PROOF`); relatório `0006`;
 - [x] certificação final e promoção local da `v0.4.0`, incluindo timeout mitigado, revisão bounded, probe adversarial e campo real; relatório `0007`.
+- [x] auditar desacoplamento, instalação reversível e reprodução em bundle Git independente; relatório `0008`.
 
-## 0.3.1 — certificação de sessões CLI
+## 0.3.1 — certificação de sessões CLI (base concluída)
 
 - [x] reconhecer inventário de credenciais e catálogo de modelos do OpenCode;
 - [x] identificar automaticamente o provider selecionado pelo Hermes;
@@ -39,7 +44,9 @@ O desenho detalhado, os riscos e os critérios estão em
 - [x] publicar providers funcionais e runners disponíveis no dry-run;
 - [x] selecionar runners em ordem determinística, sem fallback silencioso;
 - [x] fixtures offline de OpenCode e Hermes com bloqueio de geração;
-- [ ] adapter de execução Hermes; o adapter OpenCode foi entregue na v0.4.0.
+- [x] adapter de execução OpenCode entregue na v0.4.0;
+- [ ] adapter de execução Hermes — adiado para `BL-0001`, prioridade nenhuma;
+- [ ] adapter de execução agy — adiado para `BL-0002`, prioridade nenhuma.
 
 ## 0.1.0 — extração do núcleo
 
@@ -65,8 +72,8 @@ O desenho detalhado, os riscos e os critérios estão em
 - [x] autenticação e diagnóstico seguro explícitos;
 - [x] bloqueio de adapter não funcional;
 - [x] fixture offline de provider funcional, não autenticado e unsupported;
-- [ ] contrato de adapter Codex;
-- [ ] fixture e adapter Claude;
+- [x] runner nativo Codex e fixture do loop;
+- [x] runner nativo Claude CLI e fixture do loop;
 - [x] adapter de execução OpenCode (entregue na v0.4.0);
-- [ ] Hermes/agy como delegações filhas;
+- [ ] Hermes/agy como delegações filhas — backlog sem prioridade;
 - [ ] regressão de execução multiprovider.

@@ -13,6 +13,7 @@
 | memória curada | `docs/engineering/` | projeto-alvo |
 | manifesto de instalação | `.ralph/install-manifest.json` | `ralph-init` |
 | relatório de remoção | `.ralph/uninstall-report.json` | `ralph-init` |
+| lock de instalação | `.ralph/install.lock` | `ralph-init`, preservado para coordenação local |
 | feedback do loop | `.git/ralph-control/feedback/events.jsonl` | `ralph.sh` |
 | perfis de execução | `.ralph/codex.env`, `.ralph/claude.env` | instalador/usuário |
 

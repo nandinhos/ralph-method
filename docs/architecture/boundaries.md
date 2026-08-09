@@ -26,7 +26,7 @@ O `bc-harness` pode distribuir o instalador, mas não é necessário em runtime.
 Depois de instalado, o projeto-alvo possui cópia própria do método e pode
 desinstalá-la sem apagar suas evidências.
 
-## Seam de providers
+## Seam de harnesses e providers
 
 O contrato comum é um fato sanitizado de delegação entregue ao
 `ralph-trace record`. A implementação inicial pode usar somente Codex; cada
@@ -40,9 +40,10 @@ tem timeout e não publica a saída bruta. `functional` certifica a CLI;
 `adapter_enabled=true` exige também um runner implementado para ela.
 `needs_review` é preservado quando não há runner apto.
 
-| Future | Seam atual | Trigger |
+| Harness | Seam atual | Estado |
 |---|---|---|
-| Claude | adapter de saída + runner selecionável após prontidão | fixture, probe seguro e smoke CLI verdes |
-| OpenCode | adapter de saída + runner selecionável após prontidão | fixture real, política read-only, saída normalizada, prova de capability/processo e probe seguro; dono: Equipe Ralph Method |
-| Hermes/agy | delegação filha registrada no trace após diagnóstico suportado | provider instalado, backend identificado e contrato de execução definido |
+| Codex | runner nativo selecionável após prontidão | fechado e coberto pela regressão do loop |
+| Claude CLI | runner nativo selecionável após prontidão | fechado e coberto pela regressão do loop |
+| OpenCode | adapter de saída + runner selecionável após prontidão | fechado; fixture real, política read-only, saída normalizada, prova de processo e campo verde |
+| Hermes/agy | delegação filha registrada no trace após diagnóstico suportado | backlog, prioridade nenhuma |
 | instalação remota | manifesto local com hashes | necessidade de vários hosts compartilhando estado |

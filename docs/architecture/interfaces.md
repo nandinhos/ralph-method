@@ -13,6 +13,21 @@ bin/ralph-trace record|report|tree ...
 bin/ralph-monitor --workflow <id> [--interval 30]
 ```
 
+## Harnesses suportados nesta linha
+
+| Harness | Caminho técnico | Situação |
+|---|---|---|
+| Codex | runner nativo de `scripts/ralph.sh` | suportado e coberto pelo loop |
+| Claude CLI | runner nativo de `scripts/ralph.sh` | suportado e coberto pelo loop |
+| OpenCode | `adapters/opencode/runner.sh` + parser/policy | adapter executável certificado |
+| Hermes | readiness passiva | backlog, prioridade nenhuma |
+| agy | readiness passiva quando detectável | backlog, prioridade nenhuma |
+
+Codex e Claude não possuem diretórios de adapter dedicados nesta versão; o
+termo adapter é reservado tecnicamente ao normalizador OpenCode. Todos os três
+harnesses fechados compartilham trace, feedback, gates e autoridade do
+`ralph-control`.
+
 O procedimento operacional completo para agentes está em
 [`../AGENT_GUIDE.md`](../AGENT_GUIDE.md). Ele é parte do contrato versionado e
 deve ser atualizado junto com `VERSION`.
