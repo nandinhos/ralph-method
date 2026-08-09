@@ -26,6 +26,10 @@ reduzia a confiabilidade do ledger como fonte de auditoria.
 
 - `bin/ralph-control` adquiriu um lock exclusivo por
   `sha256(workflow_id|feature_key)` durante todo o bloco controlado;
+- o `workflow_id` da linha de comando passou a ser comparado ao workflow
+  carregado antes de qualquer execução ou transição;
+- `start`, `finish` e `reconcile` passaram a disputar o mesmo lock, impedindo
+  o encerramento externo enquanto o bloco está ativo;
 - a segunda execução falha de forma determinística com exit code `12`, antes
   de iniciar provider, comando ou nova transição;
 - o estado e o lease são revalidados depois da aquisição do lock de execução;
@@ -33,6 +37,9 @@ reduzia a confiabilidade do ledger como fonte de auditoria.
   chamadas já protegidas;
 - o lock de execução é local em `.git/ralph-control/executions/`, não é
   versionado e é liberado pelo sistema operacional se o processo morrer.
+- uma tentativa sem evento terminal não pode ser repetida com o mesmo lease:
+  `continue`/`supervise` a encaminham para `recovery_required`, e `retry`
+  gera novo fencing token.
 
 ## Evidência
 
@@ -40,6 +47,9 @@ O teste de método primeiro reproduziu a falha com duas execuções concorrentes
 a segunda terminou com exit code `0`. Após a correção, a mesma fixture passou a
 obter exit code `12`, uma única tentativa, um único comando e um único
 `block.finished`; a verificação do ledger também permaneceu verde.
+Os testes adversariais também reproduziram o bypass por `workflow_id` alternativo
+e um `finish` concorrente, ambos corrigidos; o cenário de crash confirmou que o
+filho mantém o lock e que a retomada exige recuperação explícita.
 
 Comandos de prova:
 
@@ -54,7 +64,9 @@ bash scripts/test-ralph.sh
 - não confiar apenas no lease para garantir exclusividade;
 - manter a escrita do ledger centralizada na função protegida;
 - revalidar estado e lease após qualquer espera por lock;
+- validar o workflow canônico em cada comando de transição;
 - tratar contenção como bloqueio auditável, e não como fallback silencioso;
+- não reutilizar tentativa que possui `attempt.started` sem terminal;
 - preservar testes de concorrência junto da regressão do método.
 
 ## Risco residual

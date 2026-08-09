@@ -926,14 +926,10 @@ function sanitize(mixed $value): mixed
 
 function runtimeInit(): void
 {
-    global $runtime, $eventsFile;
+    global $runtime;
     if (! is_dir($runtime) && ! mkdir($runtime, 0700, true) && ! is_dir($runtime)) {
         fail("não foi possível criar {$runtime}");
     }
-    if (! is_file($eventsFile) && file_put_contents($eventsFile, '') === false) {
-        fail("não foi possível criar {$eventsFile}");
-    }
-    @chmod($eventsFile, 0600);
 }
 
 function gateSessionPath(array $feature): string
@@ -1009,6 +1005,7 @@ function withLock(callable $callback): mixed
     $workflowLockDepth = 1;
 
     try {
+        runtimeInit();
         return $callback();
     } finally {
         $workflowLockDepth = 0;
@@ -1039,11 +1036,55 @@ function acquireExecutionLock(string $workflowId, string $featureKey): mixed
     return $handle;
 }
 
+function withExecutionLock(string $workflowId, string $featureKey, callable $callback): mixed
+{
+    $handle = acquireExecutionLock($workflowId, $featureKey);
+    try {
+        return $callback();
+    } finally {
+        if (is_resource($handle)) {
+            flock($handle, LOCK_UN);
+            fclose($handle);
+        }
+    }
+}
+
+function executionLockIsActive(string $workflowId, string $featureKey): bool
+{
+    global $runtime;
+    $directory = $runtime.DIRECTORY_SEPARATOR.'executions';
+    $path = $directory.DIRECTORY_SEPARATOR.hash('sha256', $workflowId.'|'.$featureKey).'.lock';
+    if (! is_file($path)) {
+        return false;
+    }
+    $handle = fopen($path, 'c+');
+    if ($handle === false) {
+        fail('não foi possível verificar lock da execução', 12);
+    }
+    $active = ! flock($handle, LOCK_EX | LOCK_NB);
+    if (! $active) {
+        flock($handle, LOCK_UN);
+    }
+    fclose($handle);
+
+    return $active;
+}
+
 function loadWorkflow(): array
 {
     global $workflowFile;
 
     return readJson($workflowFile);
+}
+
+function loadWorkflowForId(string $workflowId): array
+{
+    $workflow = loadWorkflow();
+    if (($workflow['workflow_id'] ?? null) !== $workflowId) {
+        fail('workflow incompatível com o checkout observado', 2);
+    }
+
+    return $workflow;
 }
 
 function validateEventShape(array $event, int $lineNumber): void
@@ -1097,6 +1138,9 @@ function readEvents(): array
 {
     global $eventsFile;
     runtimeInit();
+    if (! is_file($eventsFile)) {
+        return [];
+    }
     $lines = file($eventsFile, FILE_IGNORE_NEW_LINES);
     if ($lines === false) {
         fail('não foi possível ler o ledger');
@@ -1234,7 +1278,7 @@ function repairLedger(array $arguments): array
                 throw new RuntimeException('o prefixo recuperado ficou vazio');
             }
 
-            $projection = project(loadWorkflow(), $validEvents);
+            $projection = project(loadWorkflowForId($workflowId), $validEvents);
             $feature = featureFrom($projection, $projection['cursor']);
             $reportId = allocateDocumentId('RPT', implode(':', ['ledger-repair', $workflowId, $corruptLine, $fragmentHash]), [
                 'workflow_id' => $workflowId,
@@ -1302,6 +1346,16 @@ function appendEventUnlocked(array $payload): array
 {
     global $eventsFile, $eventTypes;
     runtimeInit();
+    if (! is_file($eventsFile)) {
+        $initialHandle = fopen($eventsFile, 'x');
+        if ($initialHandle === false && ! is_file($eventsFile)) {
+            fail("não foi possível criar {$eventsFile}");
+        }
+        if (is_resource($initialHandle)) {
+            fclose($initialHandle);
+        }
+        @chmod($eventsFile, 0600);
+    }
     $type = $payload['type'] ?? null;
     if (! is_string($type) || ! in_array($type, $eventTypes, true)) {
         fail('tipo de evento inválido');
@@ -1869,7 +1923,7 @@ function supervisorGateCommand(array $arguments, string $gate): ?string
 /** @return array<string, mixed> */
 function supervisorRunGatePipeline(array $arguments, string $workflowId, string $featureKey): array
 {
-    $projection = project(loadWorkflow(), readEvents());
+    $projection = project(loadWorkflowForId($workflowId), readEvents());
     $initialFeature = featureFrom($projection, $featureKey);
     $initialState = $initialFeature['state'] ?? null;
     $session = beginGateSession(array_merge($arguments, ['workflow' => $workflowId, 'feature' => $featureKey]));
@@ -1878,7 +1932,7 @@ function supervisorRunGatePipeline(array $arguments, string $workflowId, string 
 
     if ($initialState === 'awaiting_gates') {
         foreach (['validation', 'quality', 'runtime_evidence', 'technical_review', 'curation'] as $gate) {
-            $projection = project(loadWorkflow(), readEvents());
+            $projection = project(loadWorkflowForId($workflowId), readEvents());
             $feature = featureFrom($projection, $featureKey);
             if (($feature['gates'][$gate] ?? null) === 'passed') {
                 fwrite(STDERR, '[RALPH] gate '.$gate.': já aprovado'."\n");
@@ -1957,7 +2011,7 @@ function superviseWorkflow(array $arguments): void
     $retry = 0;
     try {
         while (true) {
-            $workflow = loadWorkflow();
+            $workflow = loadWorkflowForId($workflowId);
             $projection = project($workflow, readEvents());
             $cursor = $projection['cursor'];
             if ($cursor === null) {
@@ -2016,6 +2070,20 @@ function superviseWorkflow(array $arguments): void
                 ]));
                 $lease = $retryResult['lease_token'];
                 $feature = $retryResult['feature'];
+            } elseif (($feature['state'] ?? null) === 'running') {
+                $stale = markStaleRunningFeature($workflowId, $cursor);
+                fwrite(STDERR, supervisorFeedback(supervisorSnapshot($arguments, $workflowId, $staleAfter, $activityStaleAfter))."\n");
+                printJson([
+                    'status' => $stale['status'] ?? 'running',
+                    'workflow_id' => $workflowId,
+                    'feature_key' => $cursor,
+                    'execution_active' => $stale['execution_active'] ?? false,
+                    'reason' => ($stale['execution_active'] ?? false) === true
+                        ? 'execução controlada ainda ativa; aguardando evento terminal'
+                        : 'execução controlada sem processo ativo; recovery explícito exigido',
+                ]);
+
+                return;
             } elseif (($feature['state'] ?? null) !== 'pending') {
                 fwrite(STDERR, supervisorFeedback(supervisorSnapshot($arguments, $workflowId, $staleAfter, $activityStaleAfter))."\n");
                 printJson(['status' => $feature['state'] ?? 'unknown', 'workflow_id' => $workflowId, 'feature_key' => $cursor]);
@@ -2068,7 +2136,7 @@ function superviseWorkflow(array $arguments): void
 
                 if (! ($status['running'] ?? false)) {
                     $runExit = proc_close($run['process']);
-                    $projection = project(loadWorkflow(), readEvents());
+                    $projection = project(loadWorkflowForId($workflowId), readEvents());
                     $feature = featureFrom($projection, $cursor);
                     if (in_array($feature['state'] ?? null, ['awaiting_gates', 'debugging_required'], true)) {
                         if (($feature['state'] ?? null) === 'debugging_required' || (int) (($feature['result']['exit_code'] ?? 0)) !== 0) {
@@ -2248,7 +2316,7 @@ function claimFeature(array $arguments): void
     $workflowId = required($arguments, 'workflow');
     $featureKey = required($arguments, 'feature');
     $result = withLock(function () use ($arguments, $workflowId, $featureKey): array {
-        $workflow = loadWorkflow();
+        $workflow = loadWorkflowForId($workflowId);
         if (($workflow['workflow_id'] ?? null) !== $workflowId) {
             fail('workflow incompatível');
         }
@@ -2296,19 +2364,25 @@ function startAttempt(array $arguments): void
     $workflowId = required($arguments, 'workflow');
     $featureKey = required($arguments, 'feature');
     $lease = required($arguments, 'lease');
-    withLock(function () use ($arguments, $featureKey, $lease): void {
-        $workflow = loadWorkflow();
-        $projection = project($workflow, readEvents());
-        $feature = featureFrom($projection, $featureKey);
-        checkLease($feature, $lease);
-        if (($feature['state'] ?? null) !== 'running') {
-            fail('tentativa não está em running');
-        }
-        appendEvent(eventContext($arguments, $feature, 'attempt.started', 'Processo da feature iniciado', [
-            'pid' => (int) ($arguments['pid'] ?? getmypid()),
-            'pgid' => (int) ($arguments['pgid'] ?? 0),
-            'execution_nonce' => (string) ($arguments['execution-nonce'] ?? bin2hex(random_bytes(12))),
-        ]));
+    loadWorkflowForId($workflowId);
+    withExecutionLock($workflowId, $featureKey, function () use ($arguments, $workflowId, $featureKey, $lease): void {
+        withLock(function () use ($arguments, $workflowId, $featureKey, $lease): void {
+            $workflow = loadWorkflowForId($workflowId);
+            $projection = project($workflow, readEvents());
+            $feature = featureFrom($projection, $featureKey);
+            checkLease($feature, $lease);
+            if (($feature['state'] ?? null) !== 'running') {
+                fail('tentativa não está em running');
+            }
+            if (findEventFor(readEvents(), 'attempt.started', $featureKey, (int) $feature['attempt']) !== null) {
+                fail('tentativa já possui attempt.started; use recovery explícito para criar novo fencing', 11);
+            }
+            appendEvent(eventContext($arguments, $feature, 'attempt.started', 'Processo da feature iniciado', [
+                'pid' => (int) ($arguments['pid'] ?? getmypid()),
+                'pgid' => (int) ($arguments['pgid'] ?? 0),
+                'execution_nonce' => (string) ($arguments['execution-nonce'] ?? bin2hex(random_bytes(12))),
+            ]));
+        });
     });
     printJson(['status' => 'running', 'feature_key' => $featureKey]);
 }
@@ -2319,41 +2393,44 @@ function finishBlock(array $arguments): void
     $featureKey = required($arguments, 'feature');
     $lease = required($arguments, 'lease');
     $exitCode = (int) ($arguments['exit-code'] ?? 1);
-    withLock(function () use ($arguments, $featureKey, $lease, $exitCode): void {
-        $workflow = loadWorkflow();
-        $projection = project($workflow, readEvents());
-        $feature = featureFrom($projection, $featureKey);
-        checkLease($feature, $lease);
-        if (($feature['state'] ?? null) !== 'running') {
-            fail('bloco não está em running');
-        }
-        $events = readEvents();
-        $claim = findEventFor($events, 'feature.claimed', $featureKey, (int) $feature['attempt']);
-        if ($claim === null) {
-            fail('claim da tentativa não encontrado');
-        }
-        $repository = currentRepository();
-        $facts = [
-            'exit_code' => $exitCode,
-            'result_commit' => $repository['commit'],
-            'result_tree_hash' => $repository['tree_hash'],
-            'base_commit' => $claim['facts']['base_commit'] ?? null,
-            'base_tree_hash' => $claim['facts']['base_tree_hash'] ?? null,
-            'implementation_commit' => $arguments['implementation-commit'] ?? $repository['commit'],
-            'process_verified_terminated' => ($arguments['process-terminated'] ?? 'true') === 'true',
-        ];
-        if (! $facts['process_verified_terminated']) {
-            appendEvent(eventContext($arguments, $feature, 'recovery.required', 'Processo da tentativa não foi reconciliado', $facts));
-            fail('processo da tentativa não foi comprovadamente encerrado');
-        }
-        appendEvent(eventContext($arguments, $feature, 'block.finished', $exitCode === 0 ? 'Bloco terminou; aguardando gates' : 'Bloco terminou com falha; systematic debugging requerido', $facts));
-        if ($exitCode !== 0) {
-            appendEvent(eventContext($arguments, $feature, 'debugging.required', 'Falha do bloco encaminhada para systematic debugging', [
-                'reason' => 'block_finished_exit_code',
+    loadWorkflowForId($workflowId);
+    withExecutionLock($workflowId, $featureKey, function () use ($arguments, $workflowId, $featureKey, $lease, $exitCode): void {
+        withLock(function () use ($arguments, $workflowId, $featureKey, $lease, $exitCode): void {
+            $workflow = loadWorkflowForId($workflowId);
+            $projection = project($workflow, readEvents());
+            $feature = featureFrom($projection, $featureKey);
+            checkLease($feature, $lease);
+            if (($feature['state'] ?? null) !== 'running') {
+                fail('bloco não está em running');
+            }
+            $events = readEvents();
+            $claim = findEventFor($events, 'feature.claimed', $featureKey, (int) $feature['attempt']);
+            if ($claim === null) {
+                fail('claim da tentativa não encontrado');
+            }
+            $repository = currentRepository();
+            $facts = [
                 'exit_code' => $exitCode,
-                'artifact_refs' => $facts['artifact_refs'] ?? [],
-            ]));
-        }
+                'result_commit' => $repository['commit'],
+                'result_tree_hash' => $repository['tree_hash'],
+                'base_commit' => $claim['facts']['base_commit'] ?? null,
+                'base_tree_hash' => $claim['facts']['base_tree_hash'] ?? null,
+                'implementation_commit' => $arguments['implementation-commit'] ?? $repository['commit'],
+                'process_verified_terminated' => ($arguments['process-terminated'] ?? 'true') === 'true',
+            ];
+            if (! $facts['process_verified_terminated']) {
+                appendEvent(eventContext($arguments, $feature, 'recovery.required', 'Processo da tentativa não foi reconciliado', $facts));
+                fail('processo da tentativa não foi comprovadamente encerrado');
+            }
+            appendEvent(eventContext($arguments, $feature, 'block.finished', $exitCode === 0 ? 'Bloco terminou; aguardando gates' : 'Bloco terminou com falha; systematic debugging requerido', $facts));
+            if ($exitCode !== 0) {
+                appendEvent(eventContext($arguments, $feature, 'debugging.required', 'Falha do bloco encaminhada para systematic debugging', [
+                    'reason' => 'block_finished_exit_code',
+                    'exit_code' => $exitCode,
+                    'artifact_refs' => $facts['artifact_refs'] ?? [],
+                ]));
+            }
+        });
     });
     printJson(['status' => $exitCode === 0 ? 'awaiting_gates' : 'debugging_required', 'feature_key' => $featureKey, 'exit_code' => $exitCode]);
 }
@@ -2368,13 +2445,15 @@ function reconcileExternalBlock(array $arguments): void
     $workflowId = required($arguments, 'workflow');
     $featureKey = required($arguments, 'feature');
 
-    withLock(function () use ($arguments, $workflowId, $featureKey): void {
+    loadWorkflowForId($workflowId);
+    withExecutionLock($workflowId, $featureKey, function () use ($arguments, $workflowId, $featureKey): void {
+      withLock(function () use ($arguments, $workflowId, $featureKey): void {
         $active = activeWorkflowProcesses($workflowId);
         if ($active !== []) {
             fail('não é seguro reconciliar enquanto o workflow possui processos ativos', 12);
         }
 
-        $workflow = loadWorkflow();
+        $workflow = loadWorkflowForId($workflowId);
         $events = readEvents();
         $projection = project($workflow, $events);
         $feature = featureFrom($projection, $featureKey);
@@ -2409,6 +2488,7 @@ function reconcileExternalBlock(array $arguments): void
             'artifact_refs' => array_values(array_filter(array_map('trim', explode(',', (string) ($arguments['artifact-refs'] ?? ''))))),
         ];
         appendEvent(eventContext($arguments, $feature, 'block.finished', 'Execução externa reconciliada; aguardando gates', $facts));
+      });
     });
 
     printJson(['status' => 'awaiting_gates', 'workflow_id' => $workflowId, 'feature_key' => $featureKey]);
@@ -2421,7 +2501,7 @@ function beginGateSession(array $arguments): array
     $featureKey = required($arguments, 'feature');
 
     return withLock(function () use ($arguments, $workflowId, $featureKey): array {
-        $workflow = loadWorkflow();
+        $workflow = loadWorkflowForId($workflowId);
         $projection = project($workflow, readEvents());
         $feature = featureFrom($projection, $featureKey);
         if ($projection['cursor'] !== $featureKey) {
@@ -2535,7 +2615,7 @@ function recordGate(array $arguments): void
         fail('gate ou status inválido');
     }
     withLock(function () use ($arguments, $featureKey, $lease, $gate, $status): void {
-        $workflow = loadWorkflow();
+        $workflow = loadWorkflowForId($workflowId);
         $projection = project($workflow, readEvents());
         $feature = featureFrom($projection, $featureKey);
         checkLease($feature, $lease);
@@ -2582,7 +2662,7 @@ function approveFeature(array $arguments): void
     $featureKey = required($arguments, 'feature');
     $lease = required($arguments, 'lease');
     withLock(function () use ($arguments, $featureKey, $lease): void {
-        $workflow = loadWorkflow();
+        $workflow = loadWorkflowForId($workflowId);
         $events = readEvents();
         $projection = project($workflow, $events);
         $feature = featureFrom($projection, $featureKey);
@@ -2641,7 +2721,7 @@ function generateHandoff(array $arguments): void
     $featureKey = required($arguments, 'feature');
     $output = required($arguments, 'output');
     withLock(function () use ($arguments, $workflowId, $featureKey, $output, $root): void {
-        $workflow = loadWorkflow();
+        $workflow = loadWorkflowForId($workflowId);
         $projection = project($workflow, readEvents());
         $feature = featureFrom($projection, $featureKey);
         if (($feature['state'] ?? null) !== 'approved') {
@@ -2719,7 +2799,7 @@ function releaseFeature(array $arguments): void
     $featureKey = required($arguments, 'feature');
     $lease = required($arguments, 'lease');
     withLock(function () use ($arguments, $workflowId, $featureKey, $lease): void {
-        $workflow = loadWorkflow();
+        $workflow = loadWorkflowForId($workflowId);
         $events = readEvents();
         $projection = project($workflow, $events);
         $feature = featureFrom($projection, $featureKey);
@@ -2757,7 +2837,7 @@ function commitHandoff(array $arguments): void
     $lease = required($arguments, 'lease');
     withLock(function () use ($arguments, $featureKey, $lease): void {
         global $root;
-        $workflow = loadWorkflow();
+        $workflow = loadWorkflowForId($workflowId);
         $events = readEvents();
         $projection = project($workflow, $events);
         $feature = featureFrom($projection, $featureKey);
@@ -2809,7 +2889,7 @@ function advanceFeature(array $arguments): void
     $featureKey = required($arguments, 'feature');
     $lease = is_string($arguments['lease'] ?? null) ? $arguments['lease'] : null;
     $nextFeature = withLock(function () use ($arguments, $featureKey, $lease): ?string {
-        $workflow = loadWorkflow();
+        $workflow = loadWorkflowForId($arguments['workflow'] ?? '');
         $events = readEvents();
         foreach (array_reverse($events) as $existing) {
             if (($existing['type'] ?? null) === 'feature.advanced' && ($existing['feature_key'] ?? null) === $featureKey) {
@@ -2843,10 +2923,41 @@ function advanceFeature(array $arguments): void
     printJson(['status' => 'next_feature', 'next_feature' => $nextFeature]);
 }
 
+function markStaleRunningFeature(string $workflowId, string $featureKey): array
+{
+    if (executionLockIsActive($workflowId, $featureKey)) {
+        return ['status' => 'running', 'execution_active' => true];
+    }
+
+    return withLock(function () use ($workflowId, $featureKey): array {
+        $workflow = loadWorkflowForId($workflowId);
+        $events = readEvents();
+        $feature = featureFrom(project($workflow, $events), $featureKey);
+        if (($feature['state'] ?? null) !== 'running') {
+            return ['status' => (string) ($feature['state'] ?? 'unknown'), 'execution_active' => false];
+        }
+        $attempt = (int) $feature['attempt'];
+        if (findEventFor($events, 'attempt.started', $featureKey, $attempt) === null
+            || findEventFor($events, 'block.finished', $featureKey, $attempt) !== null) {
+            return ['status' => 'running', 'execution_active' => false];
+        }
+        appendEvent(eventContext([
+            'workflow' => $workflowId,
+            'actor' => 'ralph-control',
+            'actor-type' => 'controller',
+        ], $feature, 'recovery.required', 'Execução controlada interrompida sem evento terminal; recovery explícito exigido', [
+            'reason' => 'stale_running_attempt',
+            'attempt' => $attempt,
+        ]));
+
+        return ['status' => 'recovery_required', 'execution_active' => false, 'attempt' => $attempt];
+    });
+}
+
 function continueWorkflow(array $arguments): void
 {
     $workflowId = required($arguments, 'workflow');
-    $workflow = loadWorkflow();
+    $workflow = loadWorkflowForId($workflowId);
     $projection = project($workflow, readEvents());
     $cursor = $projection['cursor'];
     if ($cursor === null) {
@@ -2855,6 +2966,29 @@ function continueWorkflow(array $arguments): void
         return;
     }
     $feature = featureFrom($projection, $cursor);
+    if (($feature['state'] ?? null) === 'running') {
+        $stale = markStaleRunningFeature($workflowId, $cursor);
+        if (($stale['status'] ?? null) === 'recovery_required') {
+            printJson([
+                'status' => 'recovery_required',
+                'workflow_id' => $workflowId,
+                'feature_key' => $cursor,
+                'reason' => 'tentativa running sem processo ativo e sem evento terminal',
+            ]);
+
+            return;
+        }
+        if (($stale['execution_active'] ?? false) === true) {
+            printJson([
+                'status' => 'running',
+                'workflow_id' => $workflowId,
+                'feature_key' => $cursor,
+                'execution_active' => true,
+            ]);
+
+            return;
+        }
+    }
     if (($feature['state'] ?? null) === 'released') {
         $self = escapeshellarg(PHP_BINARY).' '.escapeshellarg(__FILE__);
         $exit = 0;
@@ -2862,7 +2996,7 @@ function continueWorkflow(array $arguments): void
         if ($exit !== 0) {
             fail($output, $exit);
         }
-        $projection = project(loadWorkflow(), readEvents());
+        $projection = project(loadWorkflowForId($workflowId), readEvents());
         $cursor = $projection['cursor'];
         if ($cursor === null) {
             printJson(['status' => 'complete', 'workflow_id' => $workflowId]);
@@ -2902,7 +3036,7 @@ function recoverFeature(array $arguments): void
     $workflowId = required($arguments, 'workflow');
     $featureKey = required($arguments, 'feature');
     withLock(function () use ($arguments, $featureKey): void {
-        $workflow = loadWorkflow();
+        $workflow = loadWorkflowForId($workflowId);
         $projection = project($workflow, readEvents());
         $feature = featureFrom($projection, $featureKey);
         if (! in_array($feature['state'] ?? null, ['recovery_required', 'blocked'], true)) {
@@ -2922,8 +3056,8 @@ function beginFailedRetry(array $arguments): array
     $workflowId = required($arguments, 'workflow');
     $featureKey = required($arguments, 'feature');
 
-    return withLock(function () use ($arguments, $featureKey): array {
-        $workflow = loadWorkflow();
+    return withLock(function () use ($arguments, $workflowId, $featureKey): array {
+        $workflow = loadWorkflowForId($workflowId);
         $events = readEvents();
         $projection = project($workflow, $events);
         $feature = featureFrom($projection, $featureKey);
@@ -3105,8 +3239,8 @@ function runSystematicDebug(array $arguments): array
     $featureKey = required($arguments, 'feature');
     $command = $arguments['command'] ?? $arguments['debug-command'] ?? getenv('RALPH_DEBUG_COMMAND') ?: null;
     if (! is_string($command) || trim($command) === '') {
-        withLock(function () use ($arguments, $featureKey): void {
-            $projection = project(loadWorkflow(), readEvents());
+        withLock(function () use ($arguments, $workflowId, $featureKey): void {
+            $projection = project(loadWorkflowForId($workflowId), readEvents());
             $feature = featureFrom($projection, $featureKey);
             if (($feature['state'] ?? null) === 'debugging_required') {
                 appendEvent(eventContext($arguments, $feature, 'debugging.required', 'Feature aguarda comando de systematic debugging', [
@@ -3119,7 +3253,7 @@ function runSystematicDebug(array $arguments): array
     }
 
     $context = withLock(function () use ($arguments, $workflowId, $featureKey, $command): array {
-        $workflow = loadWorkflow();
+        $workflow = loadWorkflowForId($workflowId);
         $projection = project($workflow, readEvents());
         $feature = featureFrom($projection, $featureKey);
         if (! in_array($feature['state'] ?? null, ['debugging_required', 'recovery_required'], true)) {
@@ -3208,8 +3342,8 @@ function runSystematicDebug(array $arguments): array
         @chmod(substr($reportPath, 0, -5).'.md', 0600);
     }
 
-    withLock(function () use ($arguments, $featureKey, $artifactRef, $report, $errors, $reportPath, $commandResult, $documentId): void {
-        $projection = project(loadWorkflow(), readEvents());
+    withLock(function () use ($arguments, $workflowId, $featureKey, $artifactRef, $report, $errors, $reportPath, $commandResult, $documentId): void {
+        $projection = project(loadWorkflowForId($workflowId), readEvents());
         $feature = featureFrom($projection, $featureKey);
         if ($errors !== [] || ! is_array($report)) {
             appendEvent(eventContext($arguments, $feature, 'debugging.rejected', 'Systematic debugging rejeitado por falta de evidência verificável', [
@@ -3351,12 +3485,13 @@ function runControlled(array $arguments): void
     $verificationCommand = null;
     $verificationProof = getenv('RALPH_OPENCODE_VERIFY_POLICY_PROOF');
     $verificationAgent = getenv('RALPH_OPENCODE_VERIFY_AGENT');
+    loadWorkflowForId($workflowId);
     if (! is_string($command) || trim($command) === '') {
         $ralph = configuredRalph($arguments);
         $testCommand = is_string($arguments['test-cmd'] ?? null) && trim((string) $arguments['test-cmd']) !== ''
             ? (string) $arguments['test-cmd']
             : 'bin/check';
-        $workflow = loadWorkflow();
+        $workflow = loadWorkflowForId($workflowId);
         $projection = project($workflow, readEvents());
         $feature = featureFrom($projection, $featureKey);
         $input = singleFeatureInput($workflow, $feature, (int) $feature['attempt'] + 1);
@@ -3386,7 +3521,7 @@ function runControlled(array $arguments): void
         $lease = $claim['lease_token'];
     }
 
-    $workflow = loadWorkflow();
+    $workflow = loadWorkflowForId($workflowId);
     $projection = project($workflow, readEvents());
     $feature = featureFrom($projection, $featureKey);
     checkLease($feature, $lease);
@@ -3394,13 +3529,37 @@ function runControlled(array $arguments): void
         fail('run exige feature em running; use claim antes de executar');
     }
     $executionLock = acquireExecutionLock($workflowId, $featureKey);
-    $feature = withLock(function () use ($featureKey, $lease): array {
-        $workflow = loadWorkflow();
-        $projection = project($workflow, readEvents());
+    $executionLockReleased = false;
+    $releaseExecutionLock = static function () use (&$executionLock, &$executionLockReleased): void {
+        if ($executionLockReleased || ! is_resource($executionLock)) {
+            return;
+        }
+        flock($executionLock, LOCK_UN);
+        fclose($executionLock);
+        $executionLockReleased = true;
+    };
+    register_shutdown_function($releaseExecutionLock);
+    $feature = withLock(function () use ($featureKey, $lease, $workflowId): array {
+        $workflow = loadWorkflowForId($workflowId);
+        $events = readEvents();
+        $projection = project($workflow, $events);
         $lockedFeature = featureFrom($projection, $featureKey);
         checkLease($lockedFeature, $lease);
         if (($lockedFeature['state'] ?? null) !== 'running') {
             fail('execução não pode iniciar; a feature deixou de estar em running');
+        }
+        $attempt = (int) $lockedFeature['attempt'];
+        if (findEventFor($events, 'attempt.started', $featureKey, $attempt) !== null
+            && findEventFor($events, 'block.finished', $featureKey, $attempt) === null) {
+            appendEvent(eventContext([
+                'workflow' => $workflowId,
+                'actor' => 'ralph-control',
+                'actor-type' => 'controller',
+            ], $lockedFeature, 'recovery.required', 'Tentativa anterior iniciou e não possui término; recuperação explícita exigida', [
+                'reason' => 'controller_crash_or_missing_terminal_event',
+                'attempt' => $attempt,
+            ]));
+            fail('tentativa anterior não possui evento terminal; execute continue/supervise e faça recovery explícito', 11);
         }
 
         return $lockedFeature;
@@ -3573,7 +3732,7 @@ function runControlled(array $arguments): void
         }
     }
 
-    $workflow = loadWorkflow();
+    $workflow = loadWorkflowForId($workflowId);
     $projection = project($workflow, readEvents());
     $feature = featureFrom($projection, $featureKey);
     checkLease($feature, $lease);
@@ -3637,7 +3796,7 @@ function runControlled(array $arguments): void
             'artifact_refs' => $facts['artifact_refs'],
         ]));
     }
-    fclose($executionLock);
+    $releaseExecutionLock();
     printJson(['status' => $exitCode === 0 ? 'awaiting_gates' : 'debugging_required', 'feature_key' => $featureKey, 'exit_code' => $exitCode, 'artifacts' => [$prefix.'.stdout.log', $prefix.'.stderr.log']]);
 }
 
@@ -3727,10 +3886,7 @@ function traceDelegation(array $arguments): void
         'reason' => $optional($arguments, 'reason'),
     ];
     withLock(function () use ($arguments, $workflowId, $featureKey, $lease, $runner, $eventType, $facts, $idempotencyKey): void {
-        $workflow = loadWorkflow();
-        if (($workflow['workflow_id'] ?? null) !== $workflowId) {
-            fail('workflow incompatível com o checkout observado', 2);
-        }
+        $workflow = loadWorkflowForId($workflowId);
         $projection = project($workflow, readEvents());
         $feature = featureFrom($projection, $featureKey);
         checkLease($feature, $lease);
@@ -3756,10 +3912,7 @@ function traceReport(array $arguments): void
     if (! in_array($format, ['terminal', 'json'], true)) {
         fail('formato de trace inválido; use terminal ou json', 2);
     }
-    $workflow = loadWorkflow();
-    if (($workflow['workflow_id'] ?? null) !== $workflowId) {
-        fail('workflow incompatível com o checkout observado', 2);
-    }
+    $workflow = loadWorkflowForId($workflowId);
     $projection = project($workflow, readEvents());
     $features = array_values(array_filter($projection['features'], static function (array $feature) use ($featureFilter): bool {
         return ($featureFilter === null || ($feature['feature_key'] ?? null) === $featureFilter) && ($feature['delegations'] ?? []) !== [];
@@ -3936,7 +4089,7 @@ function knowledge(array $arguments): void
         default => fail('ação de conhecimento inválida; use candidate, curated, rejected, review-required ou skipped', 2),
     };
     $result = withLock(function () use ($arguments, $workflowId, $featureKey, $type, $action, $root): array {
-        $workflow = loadWorkflow();
+        $workflow = loadWorkflowForId($workflowId);
         $projection = project($workflow, readEvents());
         $feature = featureFrom($projection, $featureKey);
         if (! in_array($feature['state'], ['released', 'approved'], true)) {
@@ -4057,7 +4210,7 @@ function documentIdCommand(array $arguments): void
     $scope = required($arguments, 'scope');
     $attempt = (int) ($arguments['attempt'] ?? 0);
     if ($attempt < 1) {
-        $projection = project(loadWorkflow(), readEvents());
+        $projection = project(loadWorkflowForId($workflowId), readEvents());
         $attempt = (int) featureFrom($projection, $featureKey)['attempt'];
     }
     $allocationKey = implode(':', ['report', $kind, $workflowId, $featureKey, $attempt, $scope]);

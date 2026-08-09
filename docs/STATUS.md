@@ -12,6 +12,10 @@ protege o ledger com `workflow.lock` e comprova a rejeição de duas execuções
 simultâneas no teste de método. A promoção desta evolução ainda não ocorreu.
 O incidente e a correção estão documentados em
 [`docs/incidents/0008-concorrencia-no-bloco-controlado.md`](incidents/0008-concorrencia-no-bloco-controlado.md).
+Na revisão adversarial, o checkpoint encontrou e corrigiu o bypass por
+`workflow_id` alternativo, o `finish` concorrente e o replay de uma tentativa
+sem evento terminal após crash. O contrato executável dessa evolução está em
+[`docs/architecture/control-plane-hardening-plan.md`](architecture/control-plane-hardening-plan.md).
 
 O repositório é uma extração independente do núcleo Ralph validado no
 `refactor-radar`: essa é a origem histórica, não uma dependência de runtime.

@@ -102,6 +102,26 @@ REPORT_JSON="$report_output" REPORT_FILE="$report_file" php -r '
   }
 '
 
+parallel_trace_pids=()
+for i in $(seq 1 24); do
+  (cd "$TMP" && control trace --workflow wf_test --feature FEATURE-001 --lease "$lease" \
+    --event started --execution-id "exec_parallel_$i" --runner codex --role implementation \
+    --identity-status unavailable --identity-source runtime_not_exposed > "$TMP/trace-$i.log" 2>&1) &
+  parallel_trace_pids+=("$!")
+done
+for pid in "${parallel_trace_pids[@]}"; do
+  wait "$pid" || fail "trace concorrente falhou (pid=$pid)"
+done
+(cd "$TMP" && control verify) >/dev/null
+EVENTS_FILE="$TMP/.git/ralph-control/events.jsonl" php -r '
+  $count = 0;
+  foreach (file(getenv("EVENTS_FILE"), FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $line) {
+      $event = json_decode($line, true, 512, JSON_THROW_ON_ERROR);
+      $count += ($event["type"] ?? null) === "delegation.started" && str_starts_with((string) ($event["facts"]["execution_id"] ?? ""), "exec_parallel_") ? 1 : 0;
+  }
+  exit($count === 24 ? 0 : 1);
+'
+
 invalid_exit=0
 invalid_output="$(cd "$TMP" && control trace --workflow wf_test --feature FEATURE-001 --lease "$lease" \
   --event completed --execution-id exec_invalid --runner agy --role review \
@@ -134,7 +154,23 @@ concurrency_lease="$(json_field "$concurrency_claim" lease_token)"
 set +e
 (cd "$concurrency_tmp" && control run --workflow wf_concurrency --feature FEATURE-001 --lease "$concurrency_lease" --command 'sleep 3' > "$TMP/concurrency-first.log" 2>&1) &
 concurrency_first_pid=$!
-sleep 1
+for _ in $(seq 1 50); do
+  if rg -q '"type":"command.started"' "$concurrency_tmp/.git/ralph-control/events.jsonl" 2>/dev/null; then
+    break
+  fi
+  sleep 0.1
+done
+rg -q '"type":"command.started"' "$concurrency_tmp/.git/ralph-control/events.jsonl" || fail 'primeira execução adquiriu lock e iniciou comando'
+
+alias_exit=0
+alias_output="$(cd "$concurrency_tmp" && control run --workflow wf_alias --feature FEATURE-001 --lease "$concurrency_lease" --command 'sleep 1' 2>&1)" || alias_exit=$?
+assert_eq '2' "$alias_exit" 'workflow divergente não contorna exclusividade'
+printf '%s' "$alias_output" | grep -q 'workflow incompatível' || fail 'mensagem do workflow divergente no run'
+
+finish_exit=0
+finish_output="$(cd "$concurrency_tmp" && control finish --workflow wf_concurrency --feature FEATURE-001 --lease "$concurrency_lease" --exit-code 0 2>&1)" || finish_exit=$?
+assert_eq '12' "$finish_exit" 'finish concorrente foi rejeitado durante run'
+printf '%s' "$finish_output" | grep -q 'execução ativa' || fail 'mensagem do finish concorrente'
 concurrency_second_output="$(cd "$concurrency_tmp" && control run --workflow wf_concurrency --feature FEATURE-001 --lease "$concurrency_lease" --command 'sleep 1' 2>&1)"
 concurrency_second_exit=$?
 wait "$concurrency_first_pid"
@@ -153,6 +189,57 @@ EVENTS_FILE="$concurrency_tmp/.git/ralph-control/events.jsonl" php -r '
   }
   exit(($counts["attempt.started"] ?? 0) === 1 && ($counts["command.started"] ?? 0) === 1 && ($counts["block.finished"] ?? 0) === 1 ? 0 : 1);
 '
+
+crash_tmp="$TMP/crash-fixture"
+mkdir -p "$crash_tmp"
+git -C "$crash_tmp" init -q
+git -C "$crash_tmp" config user.email ralph-method@example.invalid
+git -C "$crash_tmp" config user.name 'Ralph Method Crash Test'
+printf '%s\n' '# Crash' > "$crash_tmp/README.md"
+printf '%s\n' '# Plano' > "$crash_tmp/plan.md"
+printf '%s\n' '{"schema_version":"1.0.0","workflow_id":"wf_crash","plan_file":"plan.md","knowledge_policy":{"mode":"non_blocking"},"features":[{"feature_key":"FEATURE-001","title":"Recuperação explícita","position":1}]}' > "$crash_tmp/workflow.json"
+git -C "$crash_tmp" add README.md plan.md workflow.json
+git -C "$crash_tmp" commit -qm base
+(cd "$crash_tmp" && control init --workflow wf_crash --manifest workflow.json >/dev/null)
+crash_claim="$(cd "$crash_tmp" && control claim --workflow wf_crash --feature FEATURE-001 --actor crash-test)"
+crash_lease="$(json_field "$crash_claim" lease_token)"
+(cd "$crash_tmp" && exec php "$ROOT/bin/ralph-control" run --workflow wf_crash --feature FEATURE-001 --lease "$crash_lease" --command 'sleep 5' > "$TMP/crash-first.log" 2>&1) &
+crash_pid=$!
+for _ in $(seq 1 50); do
+  if rg -q '"type":"command.started"' "$crash_tmp/.git/ralph-control/events.jsonl" 2>/dev/null; then
+    break
+  fi
+  sleep 0.1
+done
+rg -q '"type":"command.started"' "$crash_tmp/.git/ralph-control/events.jsonl" || fail 'crash fixture iniciou comando'
+kill -KILL "$crash_pid" 2>/dev/null || true
+set +e
+wait "$crash_pid"
+crash_exit=$?
+set -e
+[ "$crash_exit" -ne 0 ] || fail 'controlador crash terminou com exit zero'
+
+crash_active_exit=0
+crash_active_output="$(cd "$crash_tmp" && control run --workflow wf_crash --feature FEATURE-001 --lease "$crash_lease" --command 'true' 2>&1)" || crash_active_exit=$?
+assert_eq '12' "$crash_active_exit" 'replay foi rejeitado enquanto filho do crash estava vivo'
+printf '%s' "$crash_active_output" | grep -q 'execução ativa' || fail 'mensagem do replay durante crash'
+
+stale_output=''
+stale_status=''
+for _ in $(seq 1 70); do
+  stale_output="$(cd "$crash_tmp" && control continue --workflow wf_crash 2>&1)"
+  stale_status="$(printf '%s' "$stale_output" | php -r '$value = json_decode(stream_get_contents(STDIN), true); echo $value["status"] ?? "";')"
+  if [ "$stale_status" = 'recovery_required' ]; then
+    break
+  fi
+  sleep 0.1
+done
+assert_eq 'recovery_required' "$stale_status" 'crash exige recovery explícito após o filho terminar'
+printf '%s' "$stale_output" | grep -q 'FEATURE-001' || fail 'recovery informa a feature interrompida'
+
+retry_output="$(cd "$crash_tmp" && control retry --workflow wf_crash --feature FEATURE-001 --reason 'reteste após crash' 2>&1)"
+retry_lease="$(json_field "$retry_output" lease_token)"
+(cd "$crash_tmp" && control run --workflow wf_crash --feature FEATURE-001 --lease "$retry_lease" --command 'true' >/dev/null)
 
 mkdir -p "$TMP/.phases/logs"
 cat > "$TMP/.phases/logs/historical-feature-002.result.json" <<'JSON'
@@ -246,5 +333,14 @@ assert_eq '0' "$supervise_exit" 'supervisor terminou com recovery explícito'
 printf '%s' "$supervise_output" | grep -q '"status": "debugging_required"' || fail 'supervisor não encaminhou a falha para systematic debugging'
 grep -q -- '--engine opencode' "$TMP/supervisor-args.log" || fail 'supervisor não propagou engine opencode ao Ralph configurado'
 grep -q -- '--no-verify' "$TMP/supervisor-args.log" || fail 'execução OpenCode supervisionada não separou implementação da revisão'
+
+printf '%s' '{"evento":"incompleto"' >> "$TMP/.git/ralph-control/events.jsonl"
+repair_output="$(cd "$TMP" && control repair-ledger --workflow wf_test)"
+assert_eq 'recovery_required' "$(json_field "$repair_output" status)" 'repair-ledger recuperou corrupção terminal'
+repair_report="$(json_field "$repair_output" report_id)"
+printf '%s' "$repair_report" | grep -Eq '^RPT-[0-9]{4}-[0-9]{4}$' || fail 'repair-ledger gerou relatório numerado'
+repair_backup="$(json_field "$repair_output" backup_path)"
+[ -f "$repair_backup" ] || fail 'repair-ledger preservou backup do ledger'
+(cd "$TMP" && control verify) >/dev/null
 
 printf 'OK: Ralph Method smoke passou.\n'

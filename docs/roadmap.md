@@ -27,12 +27,15 @@ pelo próprio OpenCode e do teste de campo em projeto real.
 - [x] rejeitar a segunda execução antes de iniciar provider ou processo;
 - [x] proteger `appendEvent()` com `workflow.lock` e posse reentrante;
 - [x] validar o ledger após a execução concorrente focal;
-- [ ] ampliar os testes para crash, fencing, recuperação e concorrência de eventos;
+- [x] cobrir crash, fencing, recuperação, workflow divergente, transição concorrente e append de eventos;
+- [ ] cobrir `repair-ledger`, restauração após falha intermediária e inicialização concorrente do runtime;
 - [ ] validar handoff e conhecimento não bloqueante;
 - [ ] automatizar regressão portátil em CI;
 - [ ] publicar métricas operacionais somente leitura.
 
 O desenho detalhado, os riscos e os critérios estão em
+[`architecture/control-plane-hardening-plan.md`](architecture/control-plane-hardening-plan.md).
+O plano histórico da engine OpenCode permanece em
 [`architecture/opencode-engine-plan.md`](architecture/opencode-engine-plan.md).
 
 O escopo ativo termina nos três harnesses Codex, Claude CLI e OpenCode. Hermes
