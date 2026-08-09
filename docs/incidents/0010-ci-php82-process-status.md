@@ -20,7 +20,7 @@ correção foi isolada na branch `fix/ci-portable-path` para pré-teste.
 
 ## Causa raiz
 
-Foram encontradas duas incompatibilidades independentes:
+Foram encontradas três incompatibilidades de portabilidade:
 
 1. Os fixtures sobrescreviam o `PATH` com `fake_bin:/usr/bin:/bin`. Em
    runners que instalam PHP pelo toolcache, isso podia ocultar o PHP efetivo.
@@ -28,6 +28,8 @@ Foram encontradas duas incompatibilidades independentes:
    `proc_close()` retornar `-1`, mesmo quando o processo terminou com exit code
    `0` ou `1`. O `ralph-init` e o `ralph-control` usavam o valor de
    `proc_close()` como autoridade do resultado.
+3. O runner não possuía `rg`, mas `test-ralph-method.sh` o chamava diretamente
+   para aguardar eventos de processo.
 
 ## Correção aplicada
 
@@ -38,6 +40,8 @@ Foram encontradas duas incompatibilidades independentes:
 - `bin/ralph-init` preserva o `exitcode` observado antes de fechar o processo;
 - `bin/ralph-control` aplica a mesma regra em debugging read-only, execução
   controlada e supervisão;
+- `test-ralph-method.sh` usa `rg` quando disponível e `grep -Eq` como fallback
+  portátil;
 - o fechamento continua ocorrendo para liberar recursos, mas não substitui
   um exit code válido já observado.
 

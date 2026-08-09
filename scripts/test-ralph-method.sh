@@ -18,6 +18,14 @@ fail() {
   exit 1
 }
 
+search_file() {
+  if command -v rg >/dev/null 2>&1; then
+    rg -q "$1" "$2"
+  else
+    grep -Eq "$1" "$2"
+  fi
+}
+
 assert_eq() {
   local expected="$1"
   local actual="$2"
@@ -155,12 +163,12 @@ set +e
 (cd "$concurrency_tmp" && control run --workflow wf_concurrency --feature FEATURE-001 --lease "$concurrency_lease" --command 'sleep 3' > "$TMP/concurrency-first.log" 2>&1) &
 concurrency_first_pid=$!
 for _ in $(seq 1 50); do
-  if rg -q '"type":"command.started"' "$concurrency_tmp/.git/ralph-control/events.jsonl" 2>/dev/null; then
+  if search_file '"type":"command.started"' "$concurrency_tmp/.git/ralph-control/events.jsonl" 2>/dev/null; then
     break
   fi
   sleep 0.1
 done
-rg -q '"type":"command.started"' "$concurrency_tmp/.git/ralph-control/events.jsonl" || fail 'primeira execução adquiriu lock e iniciou comando'
+search_file '"type":"command.started"' "$concurrency_tmp/.git/ralph-control/events.jsonl" || fail 'primeira execução adquiriu lock e iniciou comando'
 
 alias_exit=0
 alias_output="$(cd "$concurrency_tmp" && control run --workflow wf_alias --feature FEATURE-001 --lease "$concurrency_lease" --command 'sleep 1' 2>&1)" || alias_exit=$?
@@ -206,12 +214,12 @@ crash_lease="$(json_field "$crash_claim" lease_token)"
 (cd "$crash_tmp" && exec php "$ROOT/bin/ralph-control" run --workflow wf_crash --feature FEATURE-001 --lease "$crash_lease" --command 'sleep 5' > "$TMP/crash-first.log" 2>&1) &
 crash_pid=$!
 for _ in $(seq 1 50); do
-  if rg -q '"type":"command.started"' "$crash_tmp/.git/ralph-control/events.jsonl" 2>/dev/null; then
+  if search_file '"type":"command.started"' "$crash_tmp/.git/ralph-control/events.jsonl" 2>/dev/null; then
     break
   fi
   sleep 0.1
 done
-rg -q '"type":"command.started"' "$crash_tmp/.git/ralph-control/events.jsonl" || fail 'crash fixture iniciou comando'
+search_file '"type":"command.started"' "$crash_tmp/.git/ralph-control/events.jsonl" || fail 'crash fixture iniciou comando'
 kill -KILL "$crash_pid" 2>/dev/null || true
 set +e
 wait "$crash_pid"
