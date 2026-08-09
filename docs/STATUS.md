@@ -114,6 +114,9 @@ o workflow não usa credenciais nem executa geração real de provider.
 O reparo do ledger também preserva corrupção intermediária sem truncamento
 silencioso, com prefixo/sufixo forenses e recovery explícito; a prova está em
 [`docs/reports/0013-reparo-intermediario-ledger-v0-5-0.md`](reports/0013-reparo-intermediario-ledger-v0-5-0.md).
+Após a correção de encoding, a regressão adversarial e o teste de campo real do
+OpenCode terminaram verdes no relatório
+[`docs/reports/0014-regressao-final-v0-5-0.md`](reports/0014-regressao-final-v0-5-0.md).
 Ela prova que a seleção `auto` escolhe somente providers funcionais com
 `runner_supported=true`, mantém a ordem Codex → Claude CLI → OpenCode, não
 faz fallback silencioso, bloqueia `apply` explícito não autenticado e mantém

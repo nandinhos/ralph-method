@@ -468,6 +468,11 @@ O comando lê `.git/ralph-control/events.jsonl`, agrega contagens e durações e
 escreve apenas em stdout. Ele não corrige ledger, não muda estados, não
 autoriza gates e não mede custos ou tokens.
 
+Textos provenientes de runners são sanitizados para UTF-8 antes de entrarem
+em eventos ou resultados JSON. Bytes inválidos são removidos de forma
+determinística; isso evita que uma mensagem binária do provider derrube o
+encerramento do bloco ou corrompa a saída estruturada.
+
 Para uma retomada pontual do controlador, use:
 
 ```bash

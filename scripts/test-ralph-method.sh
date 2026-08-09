@@ -367,4 +367,20 @@ middle_verify_exit=$?
 set -e
 [ "$middle_verify_exit" -ne 0 ] || fail 'ledger intermediário corrompido foi tratado como íntegro'
 
+utf_tmp="${TMP}-utf8"
+mkdir -p "$utf_tmp"
+git -C "$utf_tmp" init -q
+git -C "$utf_tmp" config user.email ralph-method@example.invalid
+git -C "$utf_tmp" config user.name 'Ralph Method UTF-8 Test'
+printf '%s\n' '# UTF-8' > "$utf_tmp/README.md"
+printf '%s\n' '{"schema_version":"1.0.0","workflow_id":"wf_utf8","plan_file":"plan.md","knowledge_policy":{"mode":"non_blocking"},"features":[{"feature_key":"FEATURE-UTF8","title":"Saída inválida","position":1}]}' > "$utf_tmp/workflow.json"
+printf '%s\n' '# Plano' > "$utf_tmp/plan.md"
+git -C "$utf_tmp" add .
+git -C "$utf_tmp" commit -qm base
+(cd "$utf_tmp" && control init --workflow wf_utf8 --manifest workflow.json >/dev/null)
+utf_claim="$(cd "$utf_tmp" && control claim --workflow wf_utf8 --feature FEATURE-UTF8 --actor utf8-test)"
+utf_lease="$(json_field "$utf_claim" lease_token)"
+(cd "$utf_tmp" && control run --workflow wf_utf8 --feature FEATURE-UTF8 --lease "$utf_lease" --command "printf '\\377'" >/dev/null)
+(cd "$utf_tmp" && control verify) >/dev/null
+
 printf 'OK: Ralph Method smoke passou.\n'

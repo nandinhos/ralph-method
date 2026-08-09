@@ -28,8 +28,18 @@ function clean(?string $value): ?string
     }
     $value = preg_replace('/\s+/', ' ', trim($value)) ?? '';
     $value = preg_replace('/(?:token|api[_-]?key|secret|password|authorization|bearer)\s*[:=]\s*\S+/i', '[redacted]', $value) ?? $value;
+    if (@preg_match('//u', $value) !== 1) {
+        $converted = function_exists('iconv') ? @iconv('UTF-8', 'UTF-8//IGNORE', $value) : false;
+        $value = is_string($converted) ? $converted : '';
+    }
 
-    return $value === '' ? null : substr($value, 0, 240);
+    $value = substr($value, 0, 240);
+    if (@preg_match('//u', $value) !== 1) {
+        $converted = function_exists('iconv') ? @iconv('UTF-8', 'UTF-8//IGNORE', $value) : false;
+        $value = is_string($converted) ? $converted : '';
+    }
+
+    return $value === '' ? null : $value;
 }
 
 $arguments = array_slice($argv, 1);

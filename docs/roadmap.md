@@ -33,6 +33,8 @@ pelo próprio OpenCode e do teste de campo em projeto real.
 - [x] sincronizar `VERSION`, guia de agentes, `STATUS` e changelog da candidata `v0.5.0`;
 - [x] automatizar regressão portátil em CI sem credenciais ou geração real;
 - [x] publicar métricas operacionais somente leitura, sem custo/token e sem mutação.
+- [x] repetir regressão adversarial e teste de campo OpenCode após o hardening;
+- [x] corrigir e comprovar sanitização de UTF-8 em previews e resultados de runner.
 
 O desenho detalhado, os riscos e os critérios estão em
 [`architecture/control-plane-hardening-plan.md`](architecture/control-plane-hardening-plan.md).

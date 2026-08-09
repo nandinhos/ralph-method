@@ -111,6 +111,9 @@ controlador.
 Os detalhes textuais são reduzidos e têm padrões óbvios de token, senha e API
 key redigidos antes da publicação. O evento não carrega prompt, resposta,
 credencial ou saída integral do comando.
+Bytes inválidos para UTF-8 também são normalizados antes da serialização; uma
+falha de encoding não pode transformar o encerramento do provider em um
+evento JSON inválido.
 
 `bin/ralph-monitor` continua sendo somente leitura. Além do snapshot do
 workflow, ele mostra o último evento do JSONL do loop e permite detectar

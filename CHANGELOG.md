@@ -47,6 +47,9 @@ anotada e promoção documentada.
 - `repair-ledger` passou a preservar e separar prefixo/sufixo quando a
   corrupção ocorre no meio do arquivo, gerando relatório numerado e exigindo
   restauração manual sem tocar no ledger original.
+- previews de processo e resultados do parser passaram a normalizar bytes
+  inválidos para UTF-8 antes da serialização JSON; o cenário foi reproduzido
+  em teste e validado novamente no campo real OpenCode.
 
 ### Estado da publicação
 

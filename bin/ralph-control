@@ -907,7 +907,8 @@ function sanitize(mixed $value): mixed
     if (is_array($value)) {
         $result = [];
         foreach ($value as $key => $item) {
-            $result[$key] = sanitize($item);
+            $safeKey = is_string($key) ? sanitizeUtf8($key) : $key;
+            $result[$safeKey] = sanitize($item);
         }
 
         return $result;
@@ -916,6 +917,8 @@ function sanitize(mixed $value): mixed
     if (! is_string($value)) {
         return $value;
     }
+
+    $value = sanitizeUtf8($value);
 
     $patterns = [
         '/-----BEGIN [A-Z ]*PRIVATE KEY-----/i',
@@ -932,6 +935,22 @@ function sanitize(mixed $value): mixed
     }
 
     return preg_replace('/\r\n?/', "\n", $value) ?? $value;
+}
+
+function sanitizeUtf8(string $value): string
+{
+    if (@preg_match('//u', $value) === 1) {
+        return $value;
+    }
+    if (! function_exists('iconv')) {
+        fail('conteúdo textual não está em UTF-8 e iconv não está disponível');
+    }
+    $converted = @iconv('UTF-8', 'UTF-8//IGNORE', $value);
+    if (! is_string($converted)) {
+        fail('não foi possível sanitizar conteúdo textual inválido');
+    }
+
+    return $converted;
 }
 
 function runtimeInit(): void
