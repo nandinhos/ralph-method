@@ -29,7 +29,9 @@ Comece pelo [README do projeto](../README.md) e depois consulte:
 2. [AGENT_GUIDE.md](AGENT_GUIDE.md) para a instalação e operação;
 3. [architecture/interfaces.md](architecture/interfaces.md) para o contrato
    agnóstico de harness;
-4. [reports/0009-regressao-multiprovider.md](reports/0009-regressao-multiprovider.md)
+4. [architecture/README.md](architecture/README.md) para a matriz de cada
+   componente, função e limite;
+5. [reports/0009-regressao-multiprovider.md](reports/0009-regressao-multiprovider.md)
    para a prova dos três harnesses ativos.
 
 ## Para agentes de IA

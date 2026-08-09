@@ -40,6 +40,11 @@ registrados em [`docs/backlog.md`](backlog.md) com prioridade nenhuma.
 | Política read-only OpenCode | `adapters/opencode/policy.php`, `scripts/opencode-readonly-proof.sh` | fingerprint, prova externa e bloqueio fail-closed da revisão |
 | Guia de agentes | `docs/AGENT_GUIDE.md` | operação, comunicação e ciclo de vida |
 
+A matriz completa de componentes, responsabilidades e limites está em
+[`docs/architecture/README.md`](architecture/README.md). Ela é a referência
+para abstrair o Ralph Method para outro projeto ou harness sem misturar
+autoridade do controlador, execução do runner, observabilidade e documentação.
+
 ## Entrega concluída nesta fase
 
 `ralph-init plan/apply/uninstall`, `ralph-doctor`, manifesto de instalação,
