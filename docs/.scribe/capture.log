@@ -63,3 +63,6 @@
 2026-08-09T00:27:00-03:00 | error | primeiro critério de reprodução exigia árvore Git totalmente limpa, mas o uninstall preserva corretamente uninstall-report.json e install.lock.
 2026-08-09T00:29:00-03:00 | fix | teste de reprodução passou a reconhecer relatório e lock como resíduos contratuais e rejeitar qualquer outro artefato.
 2026-08-09T00:35:14-03:00 | verification | bundle git archive foi instalado duas vezes em projeto independente, validado por doctor, desinstalado e deixou apenas relatório/lock previstos; scripts/test-reproducibility.sh passou.
+2026-08-09T00:42:00-03:00 | review | revisão adversarial final encontrou que o teste de reprodução passaria a localizar a própria string histórica após ser commitado e que o plano OpenCode ainda dizia promoção bloqueada em duas seções.
+2026-08-09T00:46:00-03:00 | fix | auditoria de desacoplamento passou a varrer somente runtime; Fases F/H e critérios do plano OpenCode foram atualizados para o estado promovido da v0.4.0.
+2026-08-09T00:55:00-03:00 | verification | segunda revisão adversarial bounded passou com FINAL_SCOPE_REVIEW_VERDICT=PASS, uma sessão, três step_finish, oito leituras e nenhum finding.

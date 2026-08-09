@@ -674,7 +674,7 @@ como `implementation`, com `execution_mode` explícito e chave idempotente por
 
 ### Fase F — regressão automatizada
 
-**Status: concluída na branch; promoção ainda bloqueada pelo teste em projeto real.**
+**Status: concluída na release `0.4.0`; regressão e teste de campo aprovados.**
 
 - fixtures de sucesso, erro, timeout, processo interrompido e saída inválida;
 - teste de capability ausente para gates e transições;
@@ -692,7 +692,7 @@ campo em projeto real permanece separado.
 
 ### Fase G — prova pelo próprio OpenCode
 
-**Status: concluída na branch em fixture descartável; não substitui o teste de campo real.**
+**Status: concluída em fixture descartável; complementada pelo teste de campo real.**
 
 Executar uma feature complexa em um repositório fixture descartável:
 
@@ -715,8 +715,10 @@ pode mudar legitimamente entre a prova e a revisão.
 
 ### Fase H — teste de campo em projeto real
 
-O candidato inicial é o `refactor-radar`, usando uma branch ou worktree
-descartável e uma feature pequena, reversível e previamente delimitada.
+**Status: concluída; evidência em `docs/reports/0004-teste-campo-opencode-cinco-gates.md`.**
+
+O teste foi executado no `refactor-radar` usando uma worktree descartável e uma
+feature pequena, reversível e previamente delimitada.
 
 Checklist obrigatório:
 
@@ -736,10 +738,11 @@ Checklist obrigatório:
 14. uninstall testado somente na cópia de campo;
 15. nenhuma alteração na `main` do Ralph Method.
 
-Esse teste será uma etapa posterior de execução, não parte do dry-run de
-instalação.
+Esse teste foi separado do dry-run de instalação: o dry-run continua sem
+geração, enquanto o relatório de campo registra a execução real e os cinco
+gates.
 
-## Critérios de aceite da branch
+## Critérios de aceite da release
 
 ### Funcionais
 

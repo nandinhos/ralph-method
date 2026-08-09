@@ -14,6 +14,14 @@ histórica ou documental: origem da extração, ADRs, relatórios do teste de ca
 e planejamento. Nenhum arquivo em `bin/`, `scripts/`, `adapters/` ou `schemas/`
 contém essa dependência textual ou importa código do produto.
 
+Uma primeira revisão adversarial encontrou dois problemas no material ainda não
+commitado: o teste poderia localizar a própria string histórica depois de ser
+incluído no bundle, e duas seções do plano OpenCode ainda descreviam a promoção
+como bloqueada. O teste passou a auditar somente arquivos de runtime, o plano
+foi sincronizado com a release promovida e a segunda revisão bounded retornou
+`FINAL_SCOPE_REVIEW_VERDICT: PASS` com oito leituras, três `step_finish` e uma
+sessão.
+
 ## Matriz de harnesses
 
 | Harness | Forma técnica | Resultado |
