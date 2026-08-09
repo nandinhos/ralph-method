@@ -2,14 +2,20 @@
 
 ## Estado atual
 
-A versão `0.4.0` foi promovida para `main` e está sincronizada com
-`origin/main` no commit `6dd9b29`. A certificação completa está em
-[`docs/reports/0007-certificacao-e-promocao-v0-4-0.md`](reports/0007-certificacao-e-promocao-v0-4-0.md).
+A versão `0.4.0` foi a primeira promoção para `main`. A versão atual `0.6.0`
+foi promovida para `main` no commit `5d579b5`, recebeu a tag anotada `v0.6.0`
+e está sincronizada com `origin/main`. A comprovação está em
+[`docs/reports/0016-promocao-v0-6-0.md`](reports/0016-promocao-v0-6-0.md).
 
-A branch `feat/ralph-hardening` iniciou a evolução de segurança da v0.5.0 e
-agora contém a evolução de memória da v0.6.0. A versão candidata atual é `0.6.0`;
-ela ainda não foi promovida para
-`main`, tagueada ou publicada em `origin`.
+A branch `feat/ralph-hardening` concentrou a evolução de segurança da v0.5.0
+e a evolução de memória da v0.6.0; essas mudanças agora fazem parte de
+`main`.
+
+A primeira execução remota do CI após a promoção falhou no teste de prontidão
+de providers por incompatibilidades de `PATH` e de `proc_close()` no PHP 8.2.
+O hotfix está isolado em `fix/ci-portable-path`; a promoção da correção e a
+certificação remota da release permanecem pendentes. O postmortem está em
+[`docs/incidents/0010-ci-php82-process-status.md`](incidents/0010-ci-php82-process-status.md).
 
 A primeira entrega adiciona exclusividade por feature durante o bloco controlado,
 protege o ledger com `workflow.lock` e comprova a rejeição de duas execuções
@@ -18,7 +24,9 @@ O handoff e a memória de engenharia são uma camada não bloqueante: a entrega
 pode continuar enquanto a curadoria aguarda revisão, sem perder o candidato
 rastreável. A v0.6.0 adiciona cache episódico sanitizado, decisão explícita de
 retenção, taxonomia de categoria/tema/stack/domínio/fingerprint e índices
-macro/subíndices derivados.
+macro/subíndices derivados. A promoção desta evolução foi concluída após a
+regressão portátil final, sem revisão adversarial independente aprovada — a
+última tentativa excedeu o timeout e foi encerrada sem veredicto.
 O incidente e a correção estão documentados em
 [`docs/incidents/0008-concorrencia-no-bloco-controlado.md`](incidents/0008-concorrencia-no-bloco-controlado.md).
 Na revisão adversarial, o checkpoint encontrou e corrigiu o bypass por

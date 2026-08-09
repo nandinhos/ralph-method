@@ -123,8 +123,12 @@ printf '%s\n' \
   'esac' > "$fake_bin/opencode"
 chmod +x "$fake_bin/opencode"
 
+php_bin="$(command -v php || true)"
+[ -n "$php_bin" ] || fail 'PHP não está disponível no PATH do teste'
+php_runtime_path="$(dirname "$php_bin"):/usr/bin:/bin"
+
 common_env=(
-  "PATH=$fake_bin:/usr/bin:/bin"
+  "PATH=$fake_bin:$php_runtime_path"
   "RALPH_METHOD_SOURCE=$ROOT"
   "RALPH_HERMES_PROVIDER="
   "FAKE_GENERATION_LOG=$generation_log"

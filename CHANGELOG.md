@@ -5,7 +5,7 @@ português do Brasil. A versão no arquivo `VERSION` identifica o bundle em
 desenvolvimento; uma versão só é considerada publicada após commit, tag
 anotada e promoção documentada.
 
-## 0.6.0 — não publicada
+## 0.6.0 — publicada em 2026-08-09
 
 ### Memória episódica e retenção
 
@@ -23,8 +23,10 @@ anotada e promoção documentada.
 
 ### Estado da publicação
 
-Esta entrega está em `feat/ralph-hardening` para regressão controlada. A
-promoção para `main`, tag e push permanecem pendentes de validação final.
+Esta entrega foi promovida para `main` no commit `5d579b5`, recebeu a tag
+anotada `v0.6.0` e está sincronizada com `origin/main`. A comprovação da
+promoção está em
+[`docs/reports/0016-promocao-v0-6-0.md`](docs/reports/0016-promocao-v0-6-0.md).
 
 ## 0.5.0 — não publicada
 

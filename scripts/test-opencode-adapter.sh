@@ -51,7 +51,12 @@ esac
 EOF
 chmod +x "$TMP/bin/opencode"
 
-preflight_output="$(PATH="$TMP/bin:/usr/bin:/bin" RALPH_OPENCODE_MODEL=fixture/model \
+php_bin="$(command -v php || true)"
+[ -n "$php_bin" ] || fail 'PHP não está disponível no PATH do teste'
+php_runtime_path="$(dirname "$php_bin"):/usr/bin:/bin"
+fixture_path="$TMP/bin:$php_runtime_path"
+
+preflight_output="$(PATH="$fixture_path" RALPH_OPENCODE_MODEL=fixture/model \
   "$ROOT/adapters/opencode/runner.sh" preflight --model fixture/model)"
 PREFLIGHT_JSON="$preflight_output" php -r '
   $value = json_decode(getenv("PREFLIGHT_JSON"), true, 512, JSON_THROW_ON_ERROR);
@@ -60,7 +65,7 @@ PREFLIGHT_JSON="$preflight_output" php -r '
   }
 '
 
-PATH="$TMP/bin:/usr/bin:/bin" RALPH_OPENCODE_MODEL=fixture/model \
+PATH="$fixture_path" RALPH_OPENCODE_MODEL=fixture/model \
   RALPH_OPENCODE_VERIFY_POLICY_PROOF=/tmp/proof-secret \
   RALPH_OPENCODE_VERIFY_AGENT=ralph-review \
   RALPH_TEST_ENV_LEAK_FILE="$TMP/env-leak" \
@@ -135,7 +140,7 @@ PY
 [ ! -e "$TMP/env-leak" ] || fail 'prova read-only vazou para a implementação'
 
 verify_exit=0
-PATH="$TMP/bin:/usr/bin:/bin" RALPH_OPENCODE_MODEL=fixture/model \
+PATH="$fixture_path" RALPH_OPENCODE_MODEL=fixture/model \
   "$ROOT/adapters/opencode/runner.sh" run \
     --repo-root "$TMP/repo" \
     --prompt-file "$TMP/prompt.md" \
@@ -147,7 +152,7 @@ PATH="$TMP/bin:/usr/bin:/bin" RALPH_OPENCODE_MODEL=fixture/model \
 [ "$verify_exit" -eq 2 ] || fail 'modo verify sem agente read-only foi aceito'
 
 divergent_exit=0
-divergent_output="$(PATH="$TMP/bin:/usr/bin:/bin" RALPH_OPENCODE_MODEL=fixture/model \
+divergent_output="$(PATH="$fixture_path" RALPH_OPENCODE_MODEL=fixture/model \
   RALPH_OPENCODE_VERIFY_AGENT=ralph-review \
   "$ROOT/adapters/opencode/runner.sh" run \
     --repo-root "$TMP/repo" \

@@ -78,3 +78,5 @@
 2026-08-09T16:49:13-03:00 | review | A revisão adversarial posterior aprovou a correção dos dois bloqueios: workflow divergente exit 2, finish concorrente exit 12, execução única e ledger íntegro.
 2026-08-09T19:02:15-03:00 | decision | memória episódica fica separada da continuidade e usa retenção explícita não bloqueante
 2026-08-09T19:02:15-03:00 | decision | taxonomia estruturada gera índice macro e subíndices por categoria e tema antes da busca semântica
+2026-08-09T19:59:49-03:00 | error | CI remoto 31339614180 falhou no provider-readiness após a promoção; investigação reproduziu PATH não portátil e proc_close sem exitcode no PHP 8.2
+2026-08-09T19:59:49-03:00 | fix | hotfix fix/ci-portable-path preserva o runtime PHP nos fixtures e usa o exitcode observado antes de proc_close no init/control
