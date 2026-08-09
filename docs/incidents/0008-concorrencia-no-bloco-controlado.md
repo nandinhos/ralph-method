@@ -72,9 +72,10 @@ bash scripts/test-ralph.sh
 ## Risco residual
 
 Crash recovery, fencing após expiração de lease, reparo de ledger truncado e
-concorrência entre workflows distintos ainda são etapas posteriores do
-hardening v0.5.0. Esta correção impede a duplicidade focal por feature, mas não
-é apresentada como conclusão de toda a máquina de recuperação.
+corrupção intermediária estão cobertos pela regressão portátil. Na corrupção
+intermediária, o controlador preserva backup, prefixo e sufixo forenses sem
+truncamento automático e exige restauração manual auditável. Concorrência entre
+workflows distintos continua fora do escopo do lock local.
 
 ## Rastreabilidade
 

@@ -343,4 +343,28 @@ repair_backup="$(json_field "$repair_output" backup_path)"
 [ -f "$repair_backup" ] || fail 'repair-ledger preservou backup do ledger'
 (cd "$TMP" && control verify) >/dev/null
 
+middle_tmp="${TMP}-middle"
+cp -a "$TMP" "$middle_tmp"
+middle_events="$middle_tmp/.git/ralph-control/events.jsonl"
+awk 'NR == 3 { print "{\"evento\":\"corrupcao-intermediaria\"" } { print }' "$middle_events" > "$middle_events.tmp"
+mv "$middle_events.tmp" "$middle_events"
+middle_before="$(sha256sum "$middle_events")"
+middle_output="$(cd "$middle_tmp" && control repair-ledger --workflow wf_test)"
+assert_eq 'recovery_required' "$(json_field "$middle_output" status)" 'repair-ledger sinalizou corrupção intermediária'
+middle_report="$(json_field "$middle_output" report_id)"
+printf '%s' "$middle_report" | grep -Eq '^RPT-[0-9]{4}-[0-9]{4}$' || fail 'corrupção intermediária gerou relatório numerado'
+middle_backup="$(json_field "$middle_output" backup_path)"
+middle_prefix="$(json_field "$middle_output" prefix_path)"
+middle_suffix="$(json_field "$middle_output" suffix_path)"
+[ -f "$middle_backup" ] || fail 'corrupção intermediária preservou backup original'
+[ -f "$middle_prefix" ] || fail 'corrupção intermediária preservou prefixo íntegro'
+[ -f "$middle_suffix" ] || fail 'corrupção intermediária preservou sufixo forense'
+middle_after="$(sha256sum "$middle_events")"
+[ "$middle_before" = "$middle_after" ] || fail 'reparo intermediário alterou o ledger original'
+set +e
+(cd "$middle_tmp" && control verify) >/dev/null 2>&1
+middle_verify_exit=$?
+set -e
+[ "$middle_verify_exit" -ne 0 ] || fail 'ledger intermediário corrompido foi tratado como íntegro'
+
 printf 'OK: Ralph Method smoke passou.\n'

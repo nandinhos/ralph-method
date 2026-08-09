@@ -28,7 +28,7 @@ pelo próprio OpenCode e do teste de campo em projeto real.
 - [x] proteger `appendEvent()` com `workflow.lock` e posse reentrante;
 - [x] validar o ledger após a execução concorrente focal;
 - [x] cobrir crash, fencing, recuperação, workflow divergente, transição concorrente e append de eventos;
-- [ ] cobrir `repair-ledger`, restauração após falha intermediária e inicialização concorrente do runtime;
+- [x] cobrir `repair-ledger`, restauração após falha intermediária e inicialização concorrente do runtime;
 - [x] validar handoff e conhecimento não bloqueante, com curadoria idempotente e recuperação seletiva;
 - [x] sincronizar `VERSION`, guia de agentes, `STATUS` e changelog da candidata `v0.5.0`;
 - [x] automatizar regressão portátil em CI sem credenciais ou geração real;

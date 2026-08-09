@@ -129,6 +129,16 @@ function writeJson(string $path, array $value): void
     }
 }
 
+function writeRawAtomic(string $path, string $content): void
+{
+    $temporary = $path.'.tmp.'.bin2hex(random_bytes(6));
+    if (file_put_contents($temporary, $content, LOCK_EX) === false || ! rename($temporary, $path)) {
+        @unlink($temporary);
+        fail("não foi possível escrever atomicamente: {$path}");
+    }
+    @chmod($path, 0600);
+}
+
 /** @return array{schema_version: string, documents: list<array<string, mixed>>} */
 function readDocumentIndex(): array
 {
@@ -1218,7 +1228,7 @@ function activeWorkflowProcesses(string $workflowId): array
     return $processes;
 }
 
-/** @return array{status:string,workflow_id:string,feature_key:string,report_id:string,backup_path:string,valid_events:int,corrupt_line:int} */
+/** @return array{status:string,workflow_id:string,feature_key:?string,report_id:string,backup_path:string,valid_events:int,corrupt_line:int} */
 function repairLedger(array $arguments): array
 {
     global $eventsFile, $runtime;
@@ -1254,14 +1264,67 @@ function repairLedger(array $arguments): array
         if ($corruptLine === null) {
             fail('não há evento parcial no final do ledger');
         }
-        if ($corruptLine !== count($parts)) {
-            fail('corrupção encontrada no meio do ledger; recuperação automática recusada', 13);
-        }
         $fragment = (string) ($parts[$corruptLine - 1] ?? '');
         $validRaw = implode('', $validLines);
         $ledgerHash = hashValue($raw);
         $fragmentHash = hashValue($fragment);
         $backupPath = $runtime.'/events.corrupt.'.gmdate('Ymd\THis\Z').'.'.substr(hash('sha256', $raw), 0, 12).'.jsonl';
+        if ($corruptLine !== count($parts)) {
+            $prefixPath = $runtime.'/events.prefix.'.substr($fragmentHash, 7, 12).'.jsonl';
+            $suffixPath = $runtime.'/events.suffix.'.substr($fragmentHash, 7, 12).'.jsonl';
+            $suffixRaw = implode('', array_slice($parts, $corruptLine - 1));
+            if (! copy($eventsFile, $backupPath)) {
+                fail('não foi possível preservar o ledger original', 12);
+            }
+            @chmod($backupPath, 0600);
+            try {
+                writeRawAtomic($prefixPath, $validRaw);
+                writeRawAtomic($suffixPath, $suffixRaw);
+                $reportId = allocateDocumentId('RPT', implode(':', ['ledger-middle-corruption', $workflowId, $corruptLine, $fragmentHash]), [
+                    'workflow_id' => $workflowId,
+                    'scope' => 'ledger-repair',
+                ]);
+                $reportPath = $runtime.'/reports/'.$reportId.'.json';
+                if (! is_dir(dirname($reportPath)) && ! mkdir(dirname($reportPath), 0700, true) && ! is_dir(dirname($reportPath))) {
+                    throw new RuntimeException('não foi possível criar o relatório de recuperação');
+                }
+                writeJson($reportPath, [
+                    'document_id' => $reportId,
+                    'workflow_id' => $workflowId,
+                    'feature_key' => null,
+                    'attempt' => null,
+                    'reason' => 'corrupção encontrada no meio do ledger; restauração automática recusada',
+                    'corrupt_line' => $corruptLine,
+                    'valid_events' => count($validLines),
+                    'ledger_hash_before_recovery' => $ledgerHash,
+                    'fragment_hash' => $fragmentHash,
+                    'backup_path' => $backupPath,
+                    'prefix_path' => $prefixPath,
+                    'suffix_path' => $suffixPath,
+                    'original_preserved' => true,
+                    'requires_manual_restore' => true,
+                ]);
+                @chmod($reportPath, 0600);
+            } catch (Throwable $exception) {
+                @unlink($prefixPath);
+                @unlink($suffixPath);
+                fail('recuperação intermediária falhou sem tocar no ledger original: '.$exception->getMessage(), 13);
+            }
+
+            return [
+                'status' => 'recovery_required',
+                'workflow_id' => $workflowId,
+                'feature_key' => null,
+                'report_id' => $reportId,
+                'backup_path' => $backupPath,
+                'prefix_path' => $prefixPath,
+                'suffix_path' => $suffixPath,
+                'valid_events' => count($validLines),
+                'corrupt_line' => $corruptLine,
+                'original_preserved' => true,
+                'requires_manual_restore' => true,
+            ];
+        }
         $temporaryPath = $eventsFile.'.recovery.'.bin2hex(random_bytes(6));
         if (! copy($eventsFile, $backupPath)) {
             fail('não foi possível preservar o ledger original', 12);

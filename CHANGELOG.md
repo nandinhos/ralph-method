@@ -44,6 +44,9 @@ anotada e promoção documentada.
   para contagens e durações do ledger, sem telemetria de custo/token.
 - a CI portátil foi reexecutada contra o bundle commitado com as métricas
   instaláveis e permaneceu verde.
+- `repair-ledger` passou a preservar e separar prefixo/sufixo quando a
+  corrupção ocorre no meio do arquivo, gerando relatório numerado e exigindo
+  restauração manual sem tocar no ledger original.
 
 ### Estado da publicação
 

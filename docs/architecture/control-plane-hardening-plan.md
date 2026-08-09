@@ -17,7 +17,7 @@ de um teste que reproduza a pane ou a corrida que ela pretende impedir.
 |---|---|---|---|
 | 0A | Exclusividade por `workflow_id + feature_key` | segunda execução, alias de workflow e transição concorrente bloqueados | concluída no checkpoint `bfc426a`, correções adversariais em andamento |
 | 0B | Crash, fencing e retomada segura | controlador morto não permite replay; `continue` encaminha a `recovery_required`; `retry` cria novo fencing token | concluída nesta branch, aguardando regressão final |
-| 0C | Integridade do ledger | append concorrente serializado; inicialização atômica; repair de corrupção terminal preservado | parcial; ampliar cobertura de restauração intermediária |
+| 0C | Integridade do ledger | append concorrente serializado; terminal restaurado; corrupção intermediária preservada e dividida com relatório | concluída nesta branch |
 | 1 | Handoff e conhecimento não bloqueante | entrega liberada sem curadoria; curadoria idempotente; lição validada e recuperação seletiva | concluída nesta branch |
 | 2 | Documentação e release | STATUS, ADR, incidentes, changelog, versão e tags coerentes | concluída nesta branch; publicação ainda pendente |
 | 3 | CI portátil | checks oficiais reproduzidos em ambiente limpo a cada alteração | concluída nesta branch |
@@ -50,7 +50,9 @@ de um teste que reproduza a pane ou a corrida que ela pretende impedir.
 - retry com lease anterior rejeitado e novo fencing aceito;
 - append concorrente e cadeia de hash íntegra;
 - criação concorrente de ledger sem truncamento;
-- repair de corrupção somente no final, com backup e relatório.
+- repair de truncamento no final, com backup, relatório e evento de recovery;
+- corrupção no meio preservada sem truncamento silencioso, com prefixo/sufixo
+  forenses, relatório e exigência de restauração manual.
 
 ## Evidência da Fase 2
 
