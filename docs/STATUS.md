@@ -145,6 +145,9 @@ candidato pode ser descartado sem publicar lição e a recuperação consulta
 somente lições validadas do projeto-alvo por filtros taxonômicos. Conhecimento
 permanece `non_blocking`.
 
+O relatório da implementação está em
+[`docs/reports/0015-memoria-episodica-taxonomia-v0-6-0.md`](reports/0015-memoria-episodica-taxonomia-v0-6-0.md).
+
 A reprodução independente foi comprovada a partir de um `git archive` limpo:
 o bundle foi instalado duas vezes em um projeto Git fixture fora do
 `refactor-radar`, validado pelo doctor, desinstalado por ownership e deixou o
