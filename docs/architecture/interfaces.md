@@ -12,6 +12,9 @@ bin/ralph-control <command> ...
 bin/ralph-trace record|report|tree ...
 bin/ralph-monitor --workflow <id> [--interval 30]
 bin/ralph-metrics [--workflow <id>] [--feature <key>] [--format json|markdown]
+bin/ralph-knowledge candidates
+bin/ralph-knowledge retrieve --query <texto> [--category <id>] [--topic <id>] [--stack <id>] [--domain <id>] [--limit N]
+bin/ralph-control knowledge curated|rejected|review-required|skipped --workflow <id> --feature <key>
 ```
 
 ## Harnesses suportados nesta linha
@@ -124,6 +127,26 @@ JSON ou Markdown, aceita filtros por workflow/feature e calcula contagens de
 eventos, comandos, gates, recuperações, conhecimento e durações observadas.
 Não grava arquivo por padrão e não deve ser interpretado como métrica de
 custo, consumo de tokens ou autorização de continuidade.
+
+## Memória episódica e taxonomia
+
+Depois de `feature.released`, o controlador materializa um candidato
+sanitizado em `.ralph/knowledge-candidates/<CUR-...>.json`. Esse cache não é
+fonte de conhecimento e pode ser persistido, rejeitado, enviado para revisão
+ou descartado por ação explícita. Todas as decisões continuam no ledger e não
+bloqueiam `feature.advanced`.
+
+Uma lição persistida possui os campos estruturados:
+
+```text
+category, topics[], stack[], domain[], fingerprints[]
+```
+
+`docs/engineering/INDEX.md` agrega as categorias e temas; os subíndices em
+`docs/engineering/categories/` e `docs/engineering/topics/` são projeções
+regeneráveis. `retrieve` aceita os mesmos filtros antes da pontuação lexical e
+retorna somente documentos com `status: validated`, respeitando limite de
+lições e de contexto.
 
 ## Prontidão de provider
 

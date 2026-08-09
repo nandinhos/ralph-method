@@ -30,6 +30,7 @@ $workflowLockHandle = null;
 $workflowLockDepth = 0;
 
 const RALPH_DOCUMENT_SCHEMA_VERSION = '1.0.0';
+const RALPH_KNOWLEDGE_SCHEMA_VERSION = '1.0.0';
 
 $documentKinds = [
     'RPT' => 'relatório operacional',
@@ -157,6 +158,140 @@ function readDocumentIndex(): array
         'schema_version' => RALPH_DOCUMENT_SCHEMA_VERSION,
         'documents' => array_values(array_filter($index['documents'], static fn (mixed $document): bool => is_array($document))),
     ];
+}
+
+function knowledgeCandidatesDirectory(): string
+{
+    global $root;
+
+    return $root.DIRECTORY_SEPARATOR.'.ralph'.DIRECTORY_SEPARATOR.'knowledge-candidates';
+}
+
+function knowledgeCandidatePath(string $curationId): string
+{
+    if (preg_match('/^CUR-[0-9]{4}-[0-9]{4}$/', $curationId) !== 1) {
+        fail('curation_id inválido');
+    }
+
+    return knowledgeCandidatesDirectory().DIRECTORY_SEPARATOR.$curationId.'.json';
+}
+
+function taxonomySlug(string $value): string
+{
+    $value = strtolower(trim(sanitizeUtf8($value)));
+    if (function_exists('iconv')) {
+        $transliterated = @iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $value);
+        if (is_string($transliterated) && $transliterated !== '') {
+            $value = strtolower($transliterated);
+        }
+    }
+    $value = preg_replace('/[^a-z0-9]+/', '-', $value) ?? '';
+    $value = trim($value, '-');
+    if ($value === '') {
+        fail('valor de taxonomia vazio ou inválido');
+    }
+
+    return $value;
+}
+
+/** @return list<string> */
+function taxonomyValues(mixed $value): array
+{
+    if (is_string($value)) {
+        $value = preg_split('/\s*,\s*/', $value, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+    }
+    if (! is_array($value)) {
+        return [];
+    }
+
+    $normalized = [];
+    foreach ($value as $item) {
+        if (! is_string($item) || trim($item) === '') {
+            continue;
+        }
+        $normalized[taxonomySlug($item)] = true;
+    }
+
+    $values = array_keys($normalized);
+    sort($values, SORT_STRING);
+
+    return array_values($values);
+}
+
+/** @param list<string> $values */
+function taxonomyYamlList(string $label, array $values): string
+{
+    if ($values === []) {
+        return "  {$label}: []\n";
+    }
+
+    $yaml = "  {$label}:\n";
+    foreach ($values as $value) {
+        $yaml .= "    - {$value}\n";
+    }
+
+    return $yaml;
+}
+
+/** @param array<string, mixed> $candidate */
+function writeKnowledgeCandidate(array $candidate): void
+{
+    $directory = knowledgeCandidatesDirectory();
+    if (! is_dir($directory) && ! mkdir($directory, 0700, true) && ! is_dir($directory)) {
+        fail('não foi possível criar o cache de candidatos de conhecimento');
+    }
+    writeJson(knowledgeCandidatePath((string) $candidate['curation_id']), $candidate);
+}
+
+/** @return array<string, mixed>|null */
+function readKnowledgeCandidate(string $curationId): ?array
+{
+    $path = knowledgeCandidatePath($curationId);
+    if (! is_file($path)) {
+        return null;
+    }
+
+    $candidate = readJson($path);
+    if (($candidate['schema_version'] ?? null) !== RALPH_KNOWLEDGE_SCHEMA_VERSION
+        || ($candidate['curation_id'] ?? null) !== $curationId
+        || ! in_array($candidate['status'] ?? null, ['pending', 'persisted', 'rejected', 'skipped', 'review_required'], true)
+        || ! in_array($candidate['retention'] ?? null, ['ask', 'persist', 'discard'], true)
+        || ! is_array($candidate['source'] ?? null)
+        || ! is_string($candidate['source']['release_event_id'] ?? null)
+        || ! is_string($candidate['source']['handoff_path'] ?? null)) {
+        fail('candidato de conhecimento inválido: '.$curationId);
+    }
+
+    return $candidate;
+}
+
+/** @param array<string, mixed> $changes */
+function updateKnowledgeCandidate(string $curationId, array $changes): ?array
+{
+    $candidate = readKnowledgeCandidate($curationId);
+    if ($candidate === null) {
+        return null;
+    }
+    $candidate = array_merge($candidate, $changes, ['updated_at' => gmdate('Y-m-d\TH:i:s\Z')]);
+    writeKnowledgeCandidate($candidate);
+
+    return $candidate;
+}
+
+/** @return list<array<string, mixed>> */
+function knowledgeCandidateEntries(): array
+{
+    $entries = [];
+    foreach (glob(knowledgeCandidatesDirectory().DIRECTORY_SEPARATOR.'CUR-*.json') ?: [] as $path) {
+        $candidate = readJson($path);
+        if (($candidate['schema_version'] ?? null) !== RALPH_KNOWLEDGE_SCHEMA_VERSION) {
+            fail('candidato de conhecimento inválido: '.$path);
+        }
+        $entries[] = $candidate;
+    }
+    usort($entries, static fn (array $left, array $right): int => strcmp((string) ($left['curation_id'] ?? ''), (string) ($right['curation_id'] ?? '')));
+
+    return $entries;
 }
 
 /** @return list<string> */
@@ -2903,10 +3038,24 @@ function releaseFeature(array $arguments): void
             'handoff_commit' => $handoffCommit['facts']['commit'] ?? null,
             'knowledge_policy' => $workflow['knowledge_policy']['mode'] ?? 'non_blocking',
         ]));
-        appendEvent(eventContext($arguments, $feature, 'knowledge.candidate_created', 'Curadoria de conhecimento agendada sem bloquear a entrega', [
+        $candidateEvent = appendEvent(eventContext($arguments, $feature, 'knowledge.candidate_created', 'Curadoria de conhecimento agendada sem bloquear a entrega', [
             'policy' => 'non_blocking',
             'curation_id' => $curationId,
         ]));
+        writeKnowledgeCandidate([
+            'schema_version' => RALPH_KNOWLEDGE_SCHEMA_VERSION,
+            'curation_id' => $curationId,
+            'workflow_id' => $workflowId,
+            'feature_key' => $featureKey,
+            'attempt' => (int) $feature['attempt'],
+            'status' => 'pending',
+            'retention' => 'ask',
+            'source' => [
+                'release_event_id' => $candidateEvent['event_id'],
+                'handoff_path' => '.ralph/handoffs/'.$featureKey,
+            ],
+            'created_at' => gmdate('Y-m-d\TH:i:s\Z'),
+        ]);
         clearGateSession($feature);
     });
     printJson(['status' => 'released', 'feature_key' => $featureKey, 'knowledge' => 'pending_non_blocking']);
@@ -4085,6 +4234,7 @@ function engineeringDocumentEntries(): array
             preg_match('/^title:\s*"?(.*?)"?$/m', $yaml, $titleMatch);
             preg_match('/^status:\s*([^\s]+)$/m', $yaml, $statusMatch);
             preg_match('/^curation_id:\s*([^\s]+)$/m', $yaml, $curationMatch);
+            preg_match('/^  category:\s*([^\s]+)$/m', $yaml, $categoryMatch);
             $id = trim($idMatch[1] ?? basename($yamlPath, '.yaml'));
             $entries[$id] = [
                 'id' => $id,
@@ -4094,6 +4244,11 @@ function engineeringDocumentEntries(): array
                 'path' => ltrim(str_replace($root, '', $yamlPath), DIRECTORY_SEPARATOR),
                 'markdown_path' => ltrim(str_replace($root, '', $path.DIRECTORY_SEPARATOR.basename($yamlPath, '.yaml').'.md'), DIRECTORY_SEPARATOR),
                 'curation_id' => trim($curationMatch[1] ?? ''),
+                'category' => trim($categoryMatch[1] ?? 'engineering'),
+                'topics' => yamlTaxonomyList($yaml, 'topics'),
+                'stack' => yamlTaxonomyList($yaml, 'stack'),
+                'domain' => yamlTaxonomyList($yaml, 'domain'),
+                'fingerprints' => yamlTaxonomyList($yaml, 'fingerprints'),
                 'content_hash' => fileHash($yamlPath),
             ];
         }
@@ -4114,6 +4269,11 @@ function engineeringDocumentEntries(): array
                 'path' => ltrim(str_replace($root, '', $markdownPath), DIRECTORY_SEPARATOR),
                 'markdown_path' => ltrim(str_replace($root, '', $markdownPath), DIRECTORY_SEPARATOR),
                 'curation_id' => '',
+                'category' => 'legacy',
+                'topics' => [],
+                'stack' => [],
+                'domain' => [],
+                'fingerprints' => [],
                 'content_hash' => fileHash($markdownPath),
             ];
         }
@@ -4122,6 +4282,36 @@ function engineeringDocumentEntries(): array
     usort($entries, static fn (array $left, array $right): int => strcmp((string) $left['id'], (string) $right['id']));
 
     return $entries;
+}
+
+/** @return list<string> */
+function yamlTaxonomyList(string $yaml, string $label): array
+{
+    if (preg_match('/^  '.preg_quote($label, '/').': \[([^\]]*)\]$/m', $yaml, $inlineMatch) === 1) {
+        return taxonomyValues($inlineMatch[1]);
+    }
+    if (preg_match('/^  '.preg_quote($label, '/').':\n((?:    - [^\n]+\n?)+)/m', $yaml, $listMatch) !== 1) {
+        return [];
+    }
+
+    preg_match_all('/^    - (.+)$/m', $listMatch[1], $items);
+
+    return taxonomyValues($items[1] ?? []);
+}
+
+function generatedEngineeringIndexPath(string $directory, string $slug): string
+{
+    return $directory.DIRECTORY_SEPARATOR.$slug.'.md';
+}
+
+function clearGeneratedEngineeringIndexes(string $directory): void
+{
+    foreach (glob($directory.DIRECTORY_SEPARATOR.'*.md') ?: [] as $path) {
+        $content = (string) file_get_contents($path);
+        if (str_starts_with($content, '<!-- Índice gerado pelo ralph-control. -->')) {
+            @unlink($path);
+        }
+    }
 }
 
 function rebuildEngineeringIndex(): void
@@ -4133,30 +4323,99 @@ function rebuildEngineeringIndex(): void
         fail('não foi possível criar docs/engineering');
     }
     $entries = engineeringDocumentEntries();
+    $categoryDirectory = $directory.DIRECTORY_SEPARATOR.'categories';
+    $topicDirectory = $directory.DIRECTORY_SEPARATOR.'topics';
+    foreach ([$categoryDirectory, $topicDirectory] as $indexDirectory) {
+        if (! is_dir($indexDirectory) && ! mkdir($indexDirectory, 0775, true) && ! is_dir($indexDirectory)) {
+            fail('não foi possível criar índice derivado de engenharia');
+        }
+        clearGeneratedEngineeringIndexes($indexDirectory);
+    }
+    $categories = [];
+    $topics = [];
+    foreach ($entries as $entry) {
+        $category = taxonomySlug((string) ($entry['category'] ?? 'engineering'));
+        $categories[$category][] = $entry;
+        foreach (($entry['topics'] ?? []) as $topic) {
+            $topics[$topic][] = $entry;
+        }
+    }
+    ksort($categories, SORT_STRING);
+    ksort($topics, SORT_STRING);
     writeJson($directory.DIRECTORY_SEPARATOR.'index.json', [
         'schema_version' => RALPH_DOCUMENT_SCHEMA_VERSION,
         'documents' => $entries,
+        'categories' => array_map(static fn (array $items): array => array_values(array_map(static fn (array $entry): string => (string) $entry['id'], $items)), $categories),
+        'topics' => array_map(static fn (array $items): array => array_values(array_map(static fn (array $entry): string => (string) $entry['id'], $items)), $topics),
     ]);
-    $markdown = "# Índice de engenharia\n\n"
+    $markdown = "<!-- Índice gerado pelo ralph-control. -->\n# Índice de engenharia\n\n"
         ."Índice gerado pelo `ralph-control`; IDs canônicos seguem `TIPO-ANO-SEQUÊNCIA` com sequência de quatro dígitos.\n\n"
-        ."| ID | Tipo | Status | Documento | Curadoria |\n"
-        ."|---|---|---|---|---|\n";
+        ."## Categorias\n\n| Categoria | Documentos | Subíndice |\n"
+        ."|---|---:|---|\n";
+    foreach ($categories as $category => $items) {
+        $markdown .= '| `'.$category.'` | '.count($items).' | `docs/engineering/categories/'.$category.'.md` |\n';
+    }
+    $markdown .= "\n## Temas\n\n| Tema | Documentos | Subíndice |\n|---|---:|---|\n";
+    foreach ($topics as $topic => $items) {
+        $markdown .= '| `'.$topic.'` | '.count($items).' | `docs/engineering/topics/'.$topic.'.md` |\n';
+    }
+    $markdown .= "\n## Documentos\n\n| ID | Tipo | Status | Categoria | Temas | Documento | Curadoria |\n"
+        ."|---|---|---|---|---|---|---|\n";
     foreach ($entries as $entry) {
         $markdown .= '| `'.str_replace('|', '\\|', (string) $entry['id']).'`'
             .'| '.str_replace('|', '\\|', (string) $entry['kind'])
             .'| '.str_replace('|', '\\|', (string) $entry['status'])
+            .'| `'.str_replace('|', '\\|', (string) ($entry['category'] ?? 'engineering')).'`'
+            .'| `'.str_replace('|', '\\|', implode(', ', $entry['topics'] ?? [])).'`'
             .'| `'.str_replace('|', '\\|', (string) $entry['path']).'`'
             .'| `'.str_replace('|', '\\|', (string) ($entry['curation_id'] ?? ''))."` |\n";
     }
     file_put_contents($directory.DIRECTORY_SEPARATOR.'INDEX.md', $markdown, LOCK_EX);
+
+    $subindex = static function (string $title, array $items): string {
+        $content = "<!-- Índice gerado pelo ralph-control. -->\n# {$title}\n\n"
+            ."| ID | Tipo | Status | Documento | Curadoria |\n|---|---|---|---|---|\n";
+        foreach ($items as $entry) {
+            $content .= '| `'.str_replace('|', '\\|', (string) $entry['id']).'`'
+                .'| '.str_replace('|', '\\|', (string) $entry['kind'])
+                .'| '.str_replace('|', '\\|', (string) $entry['status'])
+                .'| `'.str_replace('|', '\\|', (string) $entry['path']).'`'
+                .'| `'.str_replace('|', '\\|', (string) ($entry['curation_id'] ?? ''))."` |\n";
+        }
+
+        return $content;
+    };
+    foreach ($categories as $category => $items) {
+        file_put_contents(generatedEngineeringIndexPath($categoryDirectory, $category), $subindex('Categoria: '.$category, $items), LOCK_EX);
+    }
+    foreach ($topics as $topic => $items) {
+        file_put_contents(generatedEngineeringIndexPath($topicDirectory, $topic), $subindex('Tema: '.$topic, $items), LOCK_EX);
+    }
 }
 
 function knowledge(array $arguments): void
 {
-    global $root;
     $action = $arguments['_'][1] ?? '';
     if ($action === 'retrieve') {
         retrieveKnowledge($arguments);
+
+        return;
+    }
+    if ($action === 'candidates') {
+        printJson([
+            'retention' => 'manual',
+            'blocking' => false,
+            'candidates' => array_map(static fn (array $candidate): array => [
+                'curation_id' => $candidate['curation_id'] ?? null,
+                'workflow_id' => $candidate['workflow_id'] ?? null,
+                'feature_key' => $candidate['feature_key'] ?? null,
+                'attempt' => $candidate['attempt'] ?? null,
+                'status' => $candidate['status'] ?? null,
+                'retention' => $candidate['retention'] ?? null,
+                'source' => $candidate['source'] ?? [],
+                'decision' => $candidate['decision'] ?? null,
+            ], knowledgeCandidateEntries()),
+        ]);
 
         return;
     }
@@ -4170,21 +4429,49 @@ function knowledge(array $arguments): void
         'skipped' => 'knowledge.skipped',
         default => fail('ação de conhecimento inválida; use candidate, curated, rejected, review-required ou skipped', 2),
     };
-    $result = withLock(function () use ($arguments, $workflowId, $featureKey, $type, $action, $root): array {
+    $result = withLock(function () use ($arguments, $workflowId, $featureKey, $type, $action): array {
+        global $root;
         $workflow = loadWorkflowForId($workflowId);
-        $projection = project($workflow, readEvents());
+        $events = readEvents();
+        $projection = project($workflow, $events);
         $feature = featureFrom($projection, $featureKey);
         if (! in_array($feature['state'], ['released', 'approved'], true)) {
             fail('conhecimento só pode ser registrado após release');
         }
         $attempt = (int) $feature['attempt'];
-        $curationId = allocateDocumentId('CUR', "curation:{$workflowId}:{$featureKey}:{$attempt}:{$action}", [
+        foreach (['knowledge.curated', 'knowledge.rejected', 'knowledge.review_required', 'knowledge.skipped'] as $decisionType) {
+            if ($decisionType !== $type && findEventFor($events, $decisionType, $featureKey, $attempt) !== null) {
+                fail('a decisão de retenção da feature já foi registrada', 3);
+            }
+        }
+        $existing = findEventFor($events, $type, $featureKey, $attempt);
+        if ($existing !== null) {
+            $facts = is_array($existing['facts'] ?? null) ? $existing['facts'] : [];
+
+            return [
+                'lesson_id' => $facts['lesson_id'] ?? null,
+                'curation_id' => $facts['curation_id'] ?? null,
+                'index_path' => $facts['index_path'] ?? null,
+                'idempotent' => true,
+            ];
+        }
+        $candidateEvent = findEventFor($events, 'knowledge.candidate_created', $featureKey, $attempt);
+        $candidateFacts = is_array($candidateEvent['facts'] ?? null) ? $candidateEvent['facts'] : [];
+        $candidateCurationId = $candidateFacts['curation_id'] ?? null;
+        $curationId = is_string($candidateCurationId) && $candidateCurationId !== ''
+            ? $candidateCurationId
+            : allocateDocumentId('CUR', "candidate:{$workflowId}:{$featureKey}:{$attempt}", [
             'workflow_id' => $workflowId,
             'feature_key' => $featureKey,
             'attempt' => $attempt,
-        ]);
+            ]);
         $lessonId = $arguments['lesson'] ?? null;
         $indexPath = null;
+        $category = taxonomySlug((string) ($arguments['category'] ?? 'engineering'));
+        $topics = taxonomyValues($arguments['topics'] ?? []);
+        $stack = taxonomyValues($arguments['stack'] ?? []);
+        $domain = taxonomyValues($arguments['domain'] ?? []);
+        $fingerprints = taxonomyValues($arguments['fingerprints'] ?? []);
         if ($action === 'curated') {
             $lessonId = is_string($lessonId) && $lessonId !== ''
                 ? $lessonId
@@ -4202,30 +4489,67 @@ function knowledge(array $arguments): void
             }
             $title = (string) ($arguments['title'] ?? 'Lição curada sem título');
             $summary = (string) ($arguments['summary'] ?? '');
-            $category = (string) ($arguments['category'] ?? 'engineering');
             $rootCause = (string) ($arguments['root-cause'] ?? 'not-specified');
             $commit = (string) ($arguments['commit'] ?? ($feature['result']['implementation_commit'] ?? ''));
             $test = (string) ($arguments['test'] ?? '');
-            $yaml = sanitize("schema_version: \"1.0.0\"\nid: {$lessonId}\ntitle: \"".str_replace('"', '\\"', $title)."\"\nstatus: validated\ncuration_id: {$curationId}\ndocument_id: {$lessonId}\ndocument_kind: lesson\nindex_ref: docs/engineering/INDEX.md\n\nsource:\n  workflow_id: {$workflowId}\n  feature_key: {$featureKey}\n\nclassification:\n  category: {$category}\n  root_cause: {$rootCause}\n\ndecision:\n  summary: \"".str_replace('"', '\\"', $summary)."\"\n\nevidence:\n  commit: {$commit}\n  tests:\n    - {$test}\n\napplicability:\n  applies_when:\n    - O contexto técnico corresponde à causa raiz registrada.\n  does_not_apply_when:\n    - A evidência não puder ser reproduzida.\n");
+            $yaml = sanitize("schema_version: \"1.0.0\"\nid: {$lessonId}\ntitle: \"".str_replace('"', '\\"', $title)."\"\nstatus: validated\ncuration_id: {$curationId}\ndocument_id: {$lessonId}\ndocument_kind: lesson\nindex_ref: docs/engineering/INDEX.md\n\nsource:\n  workflow_id: {$workflowId}\n  feature_key: {$featureKey}\n\nclassification:\n  category: {$category}\n".taxonomyYamlList('topics', $topics).taxonomyYamlList('stack', $stack).taxonomyYamlList('domain', $domain).taxonomyYamlList('fingerprints', $fingerprints)."  root_cause: {$rootCause}\n\ndecision:\n  summary: \"".str_replace('"', '\\"', $summary)."\"\n\nevidence:\n  commit: {$commit}\n  tests:\n    - {$test}\n\napplicability:\n  applies_when:\n    - O contexto técnico corresponde à causa raiz registrada.\n  does_not_apply_when:\n    - A evidência não puder ser reproduzida.\n");
             $yamlPath = $lessonDirectory.'/'.$lessonId.'.yaml';
             $markdownPath = $lessonDirectory.'/'.$lessonId.'.md';
             if (is_file($yamlPath) && (string) file_get_contents($yamlPath) !== $yaml) {
                 fail('lição existente com o mesmo ID possui conteúdo diferente');
             }
             file_put_contents($yamlPath, $yaml, LOCK_EX);
-            file_put_contents($markdownPath, "# {$lessonId} — {$title}\n\n- Curadoria: {$curationId}\n- Índice: `docs/engineering/INDEX.md`\n\n## Contexto\n\n{$summary}\n\n## Causa raiz\n\n`{$rootCause}`\n\n## Correção validada\n\nCommit `{$commit}`; teste `{$test}`.\n\n## Origem\n\nWorkflow `{$workflowId}`, feature `{$featureKey}`.\n", LOCK_EX);
+            file_put_contents($markdownPath, "# {$lessonId} — {$title}\n\n- Curadoria: {$curationId}\n- Índice macro: `docs/engineering/INDEX.md`\n- Categoria: `{$category}`\n- Temas: `".implode(', ', $topics)."`\n\n## Contexto\n\n{$summary}\n\n## Causa raiz\n\n`{$rootCause}`\n\n## Correção validada\n\nCommit `{$commit}`; teste `{$test}`.\n\n## Aplicabilidade\n\nUse quando o contexto corresponder à categoria, aos temas e à causa raiz registrados.\n\n## Origem\n\nWorkflow `{$workflowId}`, feature `{$featureKey}`.\n", LOCK_EX);
             rebuildEngineeringIndex();
             $indexPath = 'docs/engineering/INDEX.md';
         }
-        appendEvent(eventContext($arguments, $feature, $type, 'Resultado da curadoria de conhecimento', [
+        if ($action === 'candidate') {
+            $candidateEvent = appendEvent(eventContext($arguments, $feature, $type, 'Candidato de conhecimento materializado para decisão de retenção', [
+                'policy' => 'non_blocking',
+                'curation_id' => $curationId,
+            ]));
+            writeKnowledgeCandidate([
+                'schema_version' => RALPH_KNOWLEDGE_SCHEMA_VERSION,
+                'curation_id' => $curationId,
+                'workflow_id' => $workflowId,
+                'feature_key' => $featureKey,
+                'attempt' => $attempt,
+                'status' => 'pending',
+                'retention' => 'ask',
+                'source' => [
+                    'release_event_id' => $candidateEvent['event_id'],
+                    'handoff_path' => '.ralph/handoffs/'.$featureKey,
+                ],
+                'created_at' => gmdate('Y-m-d\TH:i:s\Z'),
+            ]);
+
+            return ['lesson_id' => null, 'curation_id' => $curationId, 'index_path' => null];
+        }
+        $retention = $action === 'curated' ? 'persist' : ($action === 'review-required' ? 'ask' : 'discard');
+        $candidateStatus = $action === 'curated' ? 'persisted' : ($action === 'review-required' ? 'review_required' : $action);
+        updateKnowledgeCandidate($curationId, [
+            'status' => $candidateStatus,
+            'retention' => $retention,
+            'decision' => array_filter([
+                'reason' => $arguments['reason'] ?? null,
+                'lesson_id' => $lessonId,
+            ], static fn (mixed $value): bool => $value !== null && $value !== ''),
+        ]);
+        appendEvent(eventContext($arguments, $feature, $type, 'Resultado da decisão sobre memória de engenharia', [
             'reason' => $arguments['reason'] ?? null,
             'lesson_id' => $lessonId,
             'curation_id' => $curationId,
             'index_path' => $indexPath,
             'status' => $action,
+            'retention' => $retention,
+            'category' => $category,
+            'topics' => $topics,
+            'stack' => $stack,
+            'domain' => $domain,
+            'fingerprints' => $fingerprints,
         ]));
 
-        return ['lesson_id' => $lessonId, 'curation_id' => $curationId, 'index_path' => $indexPath];
+        return ['lesson_id' => $lessonId, 'curation_id' => $curationId, 'index_path' => $indexPath, 'idempotent' => false];
     });
     printJson(['knowledge' => $action, 'blocking' => false] + $result);
 }
@@ -4235,12 +4559,30 @@ function retrieveKnowledge(array $arguments): void
     global $root;
     $query = required($arguments, 'query');
     $limit = max(1, min(10, (int) ($arguments['limit'] ?? 5)));
+    $categoryFilter = isset($arguments['category']) ? taxonomySlug((string) $arguments['category']) : null;
+    $topicFilters = taxonomyValues($arguments['topic'] ?? []);
+    $stackFilters = taxonomyValues($arguments['stack'] ?? []);
+    $domainFilters = taxonomyValues($arguments['domain'] ?? []);
+    $fingerprintFilters = taxonomyValues($arguments['fingerprint'] ?? []);
     $lessonDirectory = $root.'/docs/engineering/lessons';
     $terms = array_values(array_filter(preg_split('/[^a-z0-9_-]+/i', strtolower($query)) ?: [], static fn (string $term): bool => strlen($term) >= 3));
     $matches = [];
     foreach (glob($lessonDirectory.'/*.yaml') ?: [] as $path) {
         $content = (string) file_get_contents($path);
         if (! preg_match('/^status:\s*validated\s*$/m', $content)) {
+            continue;
+        }
+        preg_match('/^  category:\s*([^\s]+)$/m', $content, $categoryMatch);
+        $category = taxonomySlug($categoryMatch[1] ?? 'engineering');
+        $topics = yamlTaxonomyList($content, 'topics');
+        $stack = yamlTaxonomyList($content, 'stack');
+        $domain = yamlTaxonomyList($content, 'domain');
+        $fingerprints = yamlTaxonomyList($content, 'fingerprints');
+        if (($categoryFilter !== null && $category !== $categoryFilter)
+            || ($topicFilters !== [] && array_intersect($topicFilters, $topics) === [])
+            || ($stackFilters !== [] && array_intersect($stackFilters, $stack) === [])
+            || ($domainFilters !== [] && array_intersect($domainFilters, $domain) === [])
+            || ($fingerprintFilters !== [] && array_intersect($fingerprintFilters, $fingerprints) === [])) {
             continue;
         }
         $score = 0;
@@ -4257,11 +4599,16 @@ function retrieveKnowledge(array $arguments): void
             'lesson_id' => trim($idMatch[1] ?? basename($path, '.yaml')),
             'title' => trim($titleMatch[1] ?? ''),
             'score' => $score,
+            'category' => $category,
+            'topics' => $topics,
+            'stack' => $stack,
+            'domain' => $domain,
+            'fingerprints' => $fingerprints,
             'content_hash' => fileHash($path),
             'content' => $content,
         ];
     }
-    usort($matches, static fn (array $left, array $right): int => $right['score'] <=> $left['score']);
+    usort($matches, static fn (array $left, array $right): int => ($right['score'] <=> $left['score']) ?: strcmp((string) $left['lesson_id'], (string) $right['lesson_id']));
     $selected = array_slice($matches, 0, $limit);
     $context = '';
     foreach ($selected as $match) {
@@ -4279,6 +4626,11 @@ function retrieveKnowledge(array $arguments): void
             'lesson_id' => $match['lesson_id'],
             'title' => $match['title'],
             'score' => $match['score'],
+            'category' => $match['category'],
+            'topics' => $match['topics'],
+            'stack' => $match['stack'],
+            'domain' => $match['domain'],
+            'fingerprints' => $match['fingerprints'],
             'content_hash' => $match['content_hash'],
         ], $selected),
         'context' => $context,

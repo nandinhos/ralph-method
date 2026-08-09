@@ -52,7 +52,8 @@ Ralph for instalado em outro projeto ou receber outro harness.
 | Runtime evidence | `scripts/ralph-run-runtime-evidence.sh` | Reunir prova de funcionamento | Executa a evidência configurada, como smoke test ou browser; não transforma ausência de prova em sucesso. |
 | Gate independente | `scripts/ralph-run-independent-gate.sh` | Rodar revisão técnica read-only | Isola a verificação do implementador e registra falhas; não modifica o produto para fazer o gate passar. |
 | Curadoria | `scripts/ralph-run-curator.sh` | Curar conhecimento pós-entrega | Converte evidência validada em memória reutilizável; não substitui a curadoria dos cinco gates. |
-| Conhecimento | `bin/ralph-knowledge` | Consultar e publicar memória | Mantém lições sanitizadas, rastreáveis e aplicáveis; não recebe eventos brutos como se fossem conhecimento. |
+| Conhecimento | `bin/ralph-knowledge` | Consultar, classificar e publicar memória | Mantém candidatos episódicos, lições sanitizadas, taxonomia e retenção explícita; não recebe eventos brutos como se fossem conhecimento. |
+| Índices de memória | `docs/engineering/INDEX.md`, `categories/`, `topics/` | Navegar por categoria e tema | Projeções regeneráveis; não substituem os documentos individuais nem o ledger. |
 
 ### Integração com harnesses e providers
 

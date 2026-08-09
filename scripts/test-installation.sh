@@ -68,6 +68,7 @@ assert_file "$project/scripts/opencode-readonly-proof.sh"
 assert_file "$project/.opencode/agents/ralph-review.md"
 assert_file "$project/schemas/runner-result.schema.json"
 assert_file "$project/schemas/readonly-policy-proof.schema.json"
+assert_file "$project/schemas/knowledge-candidate.schema.json"
 assert_file "$project/.ralph/opencode.env"
 assert_file "$project/schemas/provider-readiness.schema.json"
 
@@ -159,6 +160,7 @@ scripts/ralph-run-quality.sh
 scripts/ralph-run-runtime-evidence.sh
 schemas/feedback-event.schema.json
 schemas/provider-readiness.schema.json
+schemas/knowledge-candidate.schema.json
 adapters/README.md
 EOF
 rm "$broken_source/scripts/ralph-hook.sh"

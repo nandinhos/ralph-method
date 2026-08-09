@@ -1,7 +1,7 @@
 # Guia operacional para agentes de IA — Ralph Method
 
 - guide_version: 1.1.0
-- method_version: 0.5.0
+- method_version: 0.6.0
 - status: ativo
 - fonte_do_metodo: `VERSION`
 - contrato_de_feedback: `schemas/feedback-event.schema.json`
@@ -522,7 +522,81 @@ O handoff deve registrar o que ocorreu, erros encontrados, correções, arquivos
 commit, evidência antes/depois, comprovação e risco residual. Nunca copie
 prompts completos ou segredos para o handoff.
 
-## 7. Falha, pane ou interrupção
+## 7. Memória episódica, retenção e índices
+
+A memória de engenharia é uma camada pós-entrega e não substitui os cinco
+gates. Depois de `feature.released`, o controlador cria um candidato local em
+`.ralph/knowledge-candidates/` e registra `knowledge.candidate_created`. Esse
+manifesto é um cache sanitizado da execução: contém somente workflow, feature,
+tentativa, handoff e decisão de retenção; não contém prompts, respostas,
+credenciais ou eventos brutos.
+
+Liste os candidatos antes de decidir o que deve permanecer:
+
+```bash
+bin/ralph-knowledge candidates
+```
+
+As ações de decisão são explícitas e não bloqueiam a fila:
+
+```bash
+bin/ralph-control knowledge curated \
+  --workflow wf_exemplo_20260807_001 \
+  --feature FEATURE-001 \
+  --title "Saída externa precisa ser normalizada" \
+  --summary "Normalizar bytes antes do ledger evita falha de serialização." \
+  --category providers \
+  --topics utf8,jsonl \
+  --stack php,bash \
+  --domain orchestration \
+  --fingerprints invalid-provider-output \
+  --root-cause invalid-external-output \
+  --commit abc123 \
+  --test scripts/test-ralph-method.sh
+```
+
+Use `knowledge rejected --reason "..."` quando o candidato não tiver
+aprendizado reutilizável, `knowledge skipped` quando a curadoria for dispensada
+e `knowledge review-required` quando a decisão exigir análise posterior. Essas
+ações preservam o fato no ledger, mas não publicam uma lição. Uma decisão de
+retenção já registrada não pode ser substituída por outra decisão conflitante.
+
+Uma lição curada recebe ID `LES-YYYY-NNNN` e é gravada em
+`docs/engineering/lessons/`. O Ralph também mantém projeções hierárquicas:
+
+```text
+docs/engineering/
+├── INDEX.md
+├── categories/<categoria>.md
+├── topics/<tema>.md
+└── lessons/<lição>.yaml + <lição>.md
+```
+
+`INDEX.md` é o índice macro. Os arquivos de `categories/` e `topics/` são
+subíndices gerados e podem ser reconstruídos com:
+
+```bash
+bin/ralph-control document-index
+```
+
+Consulte somente conhecimento validado, aplicando filtros estruturados antes
+de entregar contexto ao agente:
+
+```bash
+bin/ralph-knowledge retrieve \
+  --query "provider jsonl utf8" \
+  --category providers \
+  --topic utf8 \
+  --stack php \
+  --limit 3
+```
+
+A política de continuidade continua sendo `knowledge_policy.mode:
+non_blocking`. Isso é diferente da retenção: liberar a feature e decidir se
+uma lição deve ser persistida são decisões separadas. Descartar um candidato
+não apaga evidências, handoff ou eventos operacionais.
+
+## 8. Falha, pane ou interrupção
 
 Ao detectar uma pane:
 
@@ -550,7 +624,7 @@ Ao detectar uma pane:
 Uma queda de energia ou encerramento do terminal não autoriza avanço silencioso.
 O estado incompleto deve ser reconciliado pelo controlador.
 
-## 8. Atualização do Ralph Method
+## 9. Atualização do Ralph Method
 
 Antes de atualizar:
 
@@ -587,7 +661,7 @@ bash scripts/test-ralph.sh
 bash scripts/test-reproducibility.sh
 ```
 
-## 9. Desinstalação segura
+## 10. Desinstalação segura
 
 Primeiro gere o plano, sem alterar o projeto:
 
@@ -621,7 +695,7 @@ O relatório fica em `.ralph/uninstall-report.json`. Se um arquivo foi
 modificado, o agente deve entregar a decisão ao usuário; nunca removê-lo por
 conveniência.
 
-## 10. Checklist de encerramento do agente
+## 11. Checklist de encerramento do agente
 
 Antes de declarar uma feature ou etapa concluída, confirme:
 

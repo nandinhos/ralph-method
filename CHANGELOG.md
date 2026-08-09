@@ -5,6 +5,27 @@ português do Brasil. A versão no arquivo `VERSION` identifica o bundle em
 desenvolvimento; uma versão só é considerada publicada após commit, tag
 anotada e promoção documentada.
 
+## 0.6.0 — não publicada
+
+### Memória episódica e retenção
+
+- materializado um candidato sanitizado em
+  `.ralph/knowledge-candidates/` após `feature.released`;
+- adicionadas ações explícitas para persistir, rejeitar, revisar ou descartar
+  uma memória sem bloquear a fila de features;
+- impedidas decisões de retenção conflitantes para a mesma tentativa;
+- adicionada taxonomia estruturada de categoria, temas, stack, domínio e
+  fingerprints;
+- gerados índice macro e subíndices por categoria e tema;
+- adicionados filtros taxonômicos à recuperação seletiva;
+- incluído contrato `schemas/knowledge-candidate.schema.json` e prova de
+  instalação do novo artefato.
+
+### Estado da publicação
+
+Esta entrega está em `feat/ralph-hardening` para regressão controlada. A
+promoção para `main`, tag e push permanecem pendentes de validação final.
+
 ## 0.5.0 — não publicada
 
 ### Control plane

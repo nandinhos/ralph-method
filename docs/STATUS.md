@@ -6,16 +6,19 @@ A versão `0.4.0` foi promovida para `main` e está sincronizada com
 `origin/main` no commit `6dd9b29`. A certificação completa está em
 [`docs/reports/0007-certificacao-e-promocao-v0-4-0.md`](reports/0007-certificacao-e-promocao-v0-4-0.md).
 
-A branch `feat/ralph-hardening` iniciou a evolução de segurança da v0.5.0.
-A versão candidata desta branch é `0.5.0`; ela ainda não foi promovida para
+A branch `feat/ralph-hardening` iniciou a evolução de segurança da v0.5.0 e
+agora contém a evolução de memória da v0.6.0. A versão candidata atual é `0.6.0`;
+ela ainda não foi promovida para
 `main`, tagueada ou publicada em `origin`.
 
 A primeira entrega adiciona exclusividade por feature durante o bloco controlado,
 protege o ledger com `workflow.lock` e comprova a rejeição de duas execuções
 simultâneas no teste de método. A promoção desta evolução ainda não ocorreu.
-O handoff e a memória de engenharia foram adicionados como camada
-não bloqueante: a entrega pode continuar enquanto a curadoria aguarda revisão,
-sem perder o candidato rastreável.
+O handoff e a memória de engenharia são uma camada não bloqueante: a entrega
+pode continuar enquanto a curadoria aguarda revisão, sem perder o candidato
+rastreável. A v0.6.0 adiciona cache episódico sanitizado, decisão explícita de
+retenção, taxonomia de categoria/tema/stack/domínio/fingerprint e índices
+macro/subíndices derivados.
 O incidente e a correção estão documentados em
 [`docs/incidents/0008-concorrencia-no-bloco-controlado.md`](incidents/0008-concorrencia-no-bloco-controlado.md).
 Na revisão adversarial, o checkpoint encontrou e corrigiu o bypass por
@@ -26,9 +29,9 @@ sem evento terminal após crash. O contrato executável dessa evolução está e
 O repositório é uma extração independente do núcleo Ralph validado no
 `refactor-radar`: essa é a origem histórica, não uma dependência de runtime.
 Não há importação de código, banco, credencial ou módulo do produto-alvo. A
-versão `0.4.0` mantém a instalação local reversível, doctor, ownership por hash
-e canal de feedback para o orquestrador externo, e adiciona o guia operacional
-versionado para agentes de IA.
+A base `0.4.0` mantém a instalação local reversível, doctor, ownership por hash
+e canal de feedback para o orquestrador externo; as evoluções `0.5.0` e `0.6.0`
+adicionam hardening do control plane e memória de engenharia versionada.
 
 O escopo operacional está fechado em três harnesses: Codex e Claude CLI pelos
 runners nativos do loop, e OpenCode pelo adapter executável certificado em
@@ -46,6 +49,8 @@ registrados em [`docs/backlog.md`](backlog.md) com prioridade nenhuma.
 | Bloco | `bin/ralph-block`, `bin/ralph-bloco` | uma feature por execução |
 | Loop | `scripts/ralph.sh` | sessões por fase e gates externos |
 | Hook | `scripts/ralph-hook.sh` | observabilidade best-effort |
+| Conhecimento | `bin/ralph-knowledge`, `.ralph/knowledge-candidates/` | cache episódico, retenção explícita, taxonomia e recuperação seletiva |
+| Índices de memória | `docs/engineering/INDEX.md`, `categories/`, `topics/` | índice macro e subíndices derivados por categoria e tema |
 | Instalação | `bin/ralph-init` | plan/apply/uninstall com manifesto |
 | Doctor | `bin/ralph-doctor` | drift e integridade da instalação |
 | Feedback | `schemas/feedback-event.schema.json` | contrato JSONL/stdout/callback |
@@ -135,8 +140,10 @@ revisão read-only.
 O hardening adicionou uma prova específica de handoff e memória em
 [`scripts/test-ralph-knowledge.sh`](../scripts/test-ralph-knowledge.sh): a
 feature avança antes da curadoria, a lição é publicada com ID `LES-YYYY-NNNN`,
-a segunda curadoria é idempotente e a recuperação consulta somente lições
-validadas do projeto-alvo. Conhecimento permanece `non_blocking`.
+a segunda curadoria é idempotente, a decisão conflitante é rejeitada, o
+candidato pode ser descartado sem publicar lição e a recuperação consulta
+somente lições validadas do projeto-alvo por filtros taxonômicos. Conhecimento
+permanece `non_blocking`.
 
 A reprodução independente foi comprovada a partir de um `git archive` limpo:
 o bundle foi instalado duas vezes em um projeto Git fixture fora do

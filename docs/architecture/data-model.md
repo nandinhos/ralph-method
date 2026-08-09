@@ -11,6 +11,7 @@
 | eventos e locks | `.git/ralph-control/` | `ralph-control` |
 | exclusividade de execução | `.git/ralph-control/executions/<sha256>.lock` | `ralph-control`, mantido durante o bloco |
 | handoffs | `.ralph/handoffs/` | controlador e projeto |
+| candidatos de memória | `.ralph/knowledge-candidates/` | controlador e curador; cache sanitizado e descartável |
 | memória curada | `docs/engineering/` | projeto-alvo |
 | manifesto de instalação | `.ralph/install-manifest.json` | `ralph-init` |
 | relatório de remoção | `.ralph/uninstall-report.json` | `ralph-init` |
@@ -44,3 +45,14 @@
   reescreve ou repara eventos e não mede custo/token;
 - o uninstall respeita hashes e preserva qualquer arquivo que o usuário tenha
   alterado depois da instalação.
+- candidatos de memória não são conhecimento validado: contêm apenas origem,
+  status e decisão de retenção; a publicação exige a ação explícita `curated`;
+- `docs/engineering/INDEX.md` é o índice macro e `categories/` e `topics/` são
+  projeções regeneráveis, não fontes independentes de verdade;
+- taxonomia de lição usa `category`, `topics`, `stack`, `domain` e
+  `fingerprints`; filtros estruturados reduzem o conjunto antes da recuperação
+  lexical e do limite de contexto;
+- `knowledge_policy.mode` controla continuidade e permanece `non_blocking`;
+  retenção (`persist`, `discard` ou revisão) é uma decisão separada;
+- rejeitar ou descartar uma memória não apaga o handoff, as evidências ou os
+  eventos do ledger.

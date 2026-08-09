@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ralph-method.local/schemas/knowledge-candidate.schema.json",
+  "title": "Candidato a memória de engenharia do Ralph",
+  "description": "Manifesto local, sanitizado e descartável de conhecimento aguardando decisão de retenção.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "curation_id",
+    "workflow_id",
+    "feature_key",
+    "attempt",
+    "status",
+    "retention",
+    "source",
+    "created_at"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "curation_id": {"type": "string", "pattern": "^CUR-[0-9]{4}-[0-9]{4}$"},
+    "workflow_id": {"type": "string", "pattern": "^wf_[A-Za-z0-9_-]+$"},
+    "feature_key": {"type": "string", "minLength": 1, "maxLength": 160},
+    "attempt": {"type": "integer", "minimum": 1},
+    "status": {"enum": ["pending", "persisted", "rejected", "skipped", "review_required"]},
+    "retention": {"enum": ["ask", "persist", "discard"]},
+    "source": {
+      "type": "object",
+      "required": ["release_event_id", "handoff_path"],
+      "properties": {
+        "release_event_id": {"type": "string", "pattern": "^evt_[A-Za-z0-9_-]+$"},
+        "handoff_path": {"type": "string", "minLength": 1, "maxLength": 500}
+      },
+      "additionalProperties": false
+    },
+    "decision": {
+      "type": "object",
+      "properties": {
+        "reason": {"type": "string", "maxLength": 1000},
+        "lesson_id": {"type": "string", "pattern": "^LES-[0-9]{4}-[0-9]{4}$"}
+      },
+      "additionalProperties": false
+    },
+    "created_at": {"type": "string", "format": "date-time"},
+    "updated_at": {"type": "string", "format": "date-time"}
+  },
+  "additionalProperties": false
+}

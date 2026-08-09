@@ -45,6 +45,21 @@ O escopo ativo termina nos três harnesses Codex, Claude CLI e OpenCode. Hermes
 e agy não são prioridades desta linha; seus itens estão formalmente adiados em
 [`backlog.md`](backlog.md), com prioridade nenhuma.
 
+## Próxima evolução — memória episódica e taxonomia (`v0.6.0`)
+
+- [x] materializar candidato sanitizado em `.ralph/knowledge-candidates/`;
+- [x] separar retenção explícita de continuidade não bloqueante;
+- [x] persistir lições com categoria, temas, stack, domínio e fingerprints;
+- [x] gerar índice macro e subíndices derivados por categoria e tema;
+- [x] filtrar recuperação por taxonomia antes do limite de contexto;
+- [x] comprovar curadoria idempotente, descarte e decisão conflitante;
+- [ ] integrar busca semântica ou hub externo de memória;
+- [ ] projetar grafo de relações entre feature, incidente, commit, teste e lição.
+
+A integração semântica e o grafo permanecem deliberadamente adiados até que
+volume, recorrência ou necessidade de compartilhamento entre projetos forneçam
+um gatilho mensurável.
+
 - [x] prova exploratória real em fixture isolado, com output esperado e check;
 - [x] prova complexa real com oráculo externo, hashes protegidos, trace e relatório `0002`;
 - [x] prova complexa com revisão read-only real, fingerprint de política e duas delegações no trace; relatório `0003`;
