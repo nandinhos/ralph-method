@@ -18,6 +18,10 @@ gates comprovam e o controlador decide.
 - desinstalação reversível por ownership e hashes;
 - feedback JSONL/stdout/callback para o orquestrador externo.
 
+A evolução em desenvolvimento está registrada no
+[CHANGELOG](CHANGELOG.md); a versão em `VERSION` e o estado de promoção estão
+em [`docs/STATUS.md`](docs/STATUS.md).
+
 ## Estrutura
 
 ```text

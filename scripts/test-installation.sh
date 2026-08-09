@@ -7,6 +7,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/ralph-method-install.XXXXXX")"
+EXPECTED_VERSION="$(tr -d '[:space:]' < "$ROOT/VERSION")"
 
 cleanup() {
   rm -rf "$TMP"
@@ -42,10 +43,10 @@ project="$TMP/projeto"
 new_project "$project"
 
 init_output="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" plan --project "$project")"
-INIT_JSON="$init_output" php -r '
+INIT_JSON="$init_output" EXPECTED_VERSION="$EXPECTED_VERSION" php -r '
     $plan = json_decode(getenv("INIT_JSON"), true, 512, JSON_THROW_ON_ERROR);
     $actions = array_column($plan["files"] ?? [], "action");
-    if (($plan["method_version"] ?? null) !== "0.4.0" || ! in_array("create", $actions, true)) {
+    if (($plan["method_version"] ?? null) !== getenv("EXPECTED_VERSION") || ! in_array("create", $actions, true)) {
         exit(1);
     }
 '

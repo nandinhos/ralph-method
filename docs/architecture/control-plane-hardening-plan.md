@@ -19,7 +19,7 @@ de um teste que reproduza a pane ou a corrida que ela pretende impedir.
 | 0B | Crash, fencing e retomada segura | controlador morto não permite replay; `continue` encaminha a `recovery_required`; `retry` cria novo fencing token | concluída nesta branch, aguardando regressão final |
 | 0C | Integridade do ledger | append concorrente serializado; inicialização atômica; repair de corrupção terminal preservado | parcial; ampliar cobertura de restauração intermediária |
 | 1 | Handoff e conhecimento não bloqueante | entrega liberada sem curadoria; curadoria idempotente; lição validada e recuperação seletiva | concluída nesta branch |
-| 2 | Documentação e release | STATUS, ADR, incidentes, changelog, versão e tags coerentes | pendente |
+| 2 | Documentação e release | STATUS, ADR, incidentes, changelog, versão e tags coerentes | concluída nesta branch; publicação ainda pendente |
 | 3 | CI portátil | checks oficiais reproduzidos em ambiente limpo a cada alteração | pendente |
 | 4 | Métricas read-only | agregados históricos sem mutar ledger ou estado | pendente |
 | 5 | DX e escala opcional | diff preview, exemplos e extensões só se houver benefício comprovado | pendente |
@@ -51,6 +51,15 @@ de um teste que reproduza a pane ou a corrida que ela pretende impedir.
 - append concorrente e cadeia de hash íntegra;
 - criação concorrente de ledger sem truncamento;
 - repair de corrupção somente no final, com backup e relatório.
+
+## Evidência da Fase 2
+
+A higiene de release foi fechada sem tag ou push prematuro: `VERSION`, guia do
+agente, instalador, changelog e `STATUS` apontam para `0.5.0`; o changelog
+declara a entrega como não publicada. Os testes de instalação e reprodução
+leem a versão do bundle que estão validando, evitando que um checkout sujo
+produza um resultado enganoso. O relatório numerado da fase é
+[`../reports/0010-release-candidata-v0-5-0.md`](../reports/0010-release-candidata-v0-5-0.md).
 
 ## Limites deliberados
 

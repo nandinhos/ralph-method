@@ -9,6 +9,8 @@ que mantêm o núcleo seguro e reproduzível.
 ```text
 STATUS.md
   → o que está funcionando agora
+../CHANGELOG.md
+  → histórico de versões e mudanças verificáveis
 architecture/
   → como os componentes se relacionam
 AGENT_GUIDE.md

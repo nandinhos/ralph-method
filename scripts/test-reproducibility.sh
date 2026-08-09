@@ -33,6 +33,7 @@ mkdir -p "$SOURCE" "$PROJECT"
 # A instalação deve funcionar a partir de um bundle Git limpo, sem o checkout
 # de desenvolvimento e sem depender de outro projeto.
 git -C "$ROOT" archive --format=tar HEAD | tar -x -C "$SOURCE"
+EXPECTED_VERSION="$(tr -d '[:space:]' < "$SOURCE/VERSION")"
 
 # Excluímos testes/checkers: eles podem citar o projeto de origem como parte
 # da própria asserção histórica. A fronteira auditada é o runtime instalado.
@@ -56,9 +57,9 @@ git -C "$PROJECT" add README.md
 git -C "$PROJECT" commit -qm base
 
 plan="$(RALPH_METHOD_SOURCE="$SOURCE" "$SOURCE/bin/ralph-init" plan --project "$PROJECT" --provider auto)"
-PLAN_JSON="$plan" php -r '
+PLAN_JSON="$plan" EXPECTED_VERSION="$EXPECTED_VERSION" php -r '
     $plan = json_decode(getenv("PLAN_JSON"), true, 512, JSON_THROW_ON_ERROR);
-    exit(($plan["method_version"] ?? null) === "0.4.0" && ($plan["project"]["root"] ?? null) !== null ? 0 : 1);
+    exit(($plan["method_version"] ?? null) === getenv("EXPECTED_VERSION") && ($plan["project"]["root"] ?? null) !== null ? 0 : 1);
 '
 
 RALPH_METHOD_SOURCE="$SOURCE" "$SOURCE/bin/ralph-init" apply --project "$PROJECT" --provider auto >/dev/null
