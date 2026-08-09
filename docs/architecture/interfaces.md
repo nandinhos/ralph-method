@@ -28,6 +28,38 @@ termo adapter é reservado tecnicamente ao normalizador OpenCode. Todos os três
 harnesses fechados compartilham trace, feedback, gates e autoridade do
 `ralph-control`.
 
+## Fluxo agnóstico de identificação e configuração
+
+O usuário e o agente não precisam conhecer detalhes de cada CLI para operar o
+framework. O contrato de integração é o mesmo; somente o runner selecionado e
+seus campos específicos mudam:
+
+```text
+plan --provider auto --verify-providers
+→ detection.providers
+→ selection.selected_provider
+→ orchestration.mode/primary_runner
+→ apply
+→ doctor
+```
+
+| Campo decisivo | Significado | Regra de uso |
+|---|---|---|
+| `status=functional` | autenticação e diagnóstico seguro passaram | ainda não basta sozinho |
+| `runner_supported=true` | há execução compatível nesta versão | necessário para habilitar |
+| `adapter_enabled=true` | provider apto para execução | única condição de elegibilidade |
+| `selection.selected_provider` | provider escolhido pelo plano | não substituir por inferência textual |
+| `orchestration.mode=needs_review` | nenhum executor autorizado | bloquear até decisão/correção |
+| `fallback_policy=none` | não trocar executor silenciosamente | registrar qualquer fallback explicitamente |
+
+O instalador gera perfis locais para os três harnesses fechados. Codex e
+Claude CLI apontam para o runner nativo do loop; OpenCode aponta para seu
+adapter e exige modelo/agente/prova read-only quando houver revisão. Hermes e
+agy podem ser detectados, mas não atravessam a fronteira de execução.
+
+O cenário completo, incluindo a prova dos três runners, está em
+[`reports/0009-regressao-multiprovider.md`](../reports/0009-regressao-multiprovider.md).
+
 O procedimento operacional completo para agentes está em
 [`../AGENT_GUIDE.md`](../AGENT_GUIDE.md). Ele é parte do contrato versionado e
 deve ser atualizado junto com `VERSION`.

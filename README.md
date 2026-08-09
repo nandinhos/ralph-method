@@ -33,13 +33,52 @@ docs/                   fonte de verdade do framework
 docs/AGENT_GUIDE.md     guia operacional para agentes de IA
 ```
 
+## Como entender o framework
+
+O Ralph Method separa quatro responsabilidades. O projeto-alvo fornece as
+features, critérios e comando de qualidade; o instalador identifica o harness
+disponível; o runner executa uma feature por vez; e o `ralph-control` decide se
+os gates permitem continuar.
+
+```text
+projeto-alvo
+  → plan (detectar stack, harness e conflitos)
+  → verify (probes seguros, somente quando solicitado)
+  → apply (instalação local e idempotente)
+  → workflow (uma feature por bloco)
+  → gates + handoff + trace
+  → próxima feature ou recuperação explícita
+```
+
+O usuário não precisa conhecer a implementação interna do provider. A
+abstração está no contrato `runner`, `model`, `session`, `feedback` e
+`ralph-control`; os detalhes específicos ficam atrás do runner nativo ou do
+adapter correspondente.
+
+## Identificação e configuração do harness
+
+| Harness identificado | Execução configurada | O que o agente deve conferir |
+|---|---|---|
+| Codex | runner nativo do `scripts/ralph.sh` | `functional` e `adapter_enabled=true` |
+| Claude CLI | runner nativo do `scripts/ralph.sh` | `functional` e `adapter_enabled=true` |
+| OpenCode | adapter em `adapters/opencode/` | modelo, agente e prova read-only antes da revisão |
+| Hermes ou agy | somente readiness passiva nesta versão | não iniciar execução; consultar backlog |
+
+O caminho recomendado é sempre `--provider auto --verify-providers`: o plano
+identifica os executáveis, certifica somente sessões autenticadas por probes
+não generativos e escolhe um único runner elegível. Se nenhum estiver apto, o
+plano retorna `needs_review`; não há fallback silencioso. O procedimento
+completo para o agente de IA está em
+[`docs/AGENT_GUIDE.md`](docs/AGENT_GUIDE.md), especialmente na seção de
+configuração após a identificação do harness.
+
 ## Instalação por projeto
 
 O instalador pode ser exposto pelo `bc-harness` e é executado em duas fases:
 
 ```bash
 ralph-init plan --project /caminho/do/projeto
-ralph-init apply --project /caminho/do/projeto --provider auto
+ralph-init apply --project /caminho/do/projeto --provider auto --verify-providers
 ralph-doctor --project /caminho/do/projeto
 ralph-init uninstall --project /caminho/do/projeto
 ralph-init uninstall --project /caminho/do/projeto --apply
@@ -48,10 +87,11 @@ ralph-init uninstall --project /caminho/do/projeto --apply
 `plan` é somente leitura. `apply` cria uma instalação local e idempotente. A
 detecção padrão registra somente fatos como arquivos presentes, versões de CLI,
 comando de teste e capacidade declarada; não consulta autenticação, não copia
-tokens nem credenciais. Para certificar as sessões autenticadas, execute o
-probe seguro explicitamente com `--verify-providers`. O status `functional`
-certifica a CLI; `adapter_enabled` só fica verdadeiro quando também existe
-runner do Ralph para aquele provider.
+tokens nem credenciais. O exemplo usa `--verify-providers` para que a aplicação
+seja feita somente depois da certificação segura; esse probe não conversa com
+o modelo nem consome tokens. O status `functional` certifica a CLI;
+`adapter_enabled` só fica verdadeiro quando também existe runner do Ralph para
+aquele provider.
 `uninstall` primeiro mostra um plano e só remove arquivos que continuam iguais
 ao hash instalado quando recebe `--apply`. Arquivos modificados, histórico,
 workflow, handoffs e relatórios são preservados.
@@ -103,5 +143,5 @@ O fechamento de escopo e as decisões de adiamento estão em
 [`docs/adr/0007-escopo-fechado-de-harnesses.md`](docs/adr/0007-escopo-fechado-de-harnesses.md)
 e [`docs/backlog.md`](docs/backlog.md).
 
-Consulte [docs/STATUS.md](docs/STATUS.md), [docs/architecture/README.md](docs/architecture/README.md),
+Consulte [docs/README.md](docs/README.md), [docs/STATUS.md](docs/STATUS.md), [docs/architecture/README.md](docs/architecture/README.md),
 [docs/AGENT_GUIDE.md](docs/AGENT_GUIDE.md) e [docs/roadmap.md](docs/roadmap.md).

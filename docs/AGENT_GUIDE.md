@@ -1,6 +1,6 @@
 # Guia operacional para agentes de IA — Ralph Method
 
-- guide_version: 1.0.0
+- guide_version: 1.1.0
 - method_version: 0.4.0
 - status: ativo
 - fonte_do_metodo: `VERSION`
@@ -259,6 +259,61 @@ diagnóstico seguro registrado. Quando não houver runner apto, o plano deixa
 `selection.selected_provider` e `orchestration.primary_runner` como `null`; não
 materializa um executor fantasma.
 
+### 3.5 Configuração após a identificação do harness
+
+Depois de executar `plan --provider auto --verify-providers`, o agente deve
+seguir uma decisão determinística. Não escolha um provider pela preferência do
+modelo ou por uma mensagem textual do CLI; use os campos do plano.
+
+| Resultado do plano | Configuração correta | Próxima ação |
+|---|---|---|
+| `selected_provider=codex` e `adapter_enabled=true` | runner nativo Codex; perfil `.ralph/codex.env` | aplicar e executar pelo loop |
+| `selected_provider=claude` e `adapter_enabled=true` | runner nativo Claude CLI; perfil `.ralph/claude.env` | aplicar e executar pelo loop |
+| `selected_provider=opencode` e `adapter_enabled=true` | adapter OpenCode; preencher modelo/agente e prova read-only | aplicar, configurar e validar antes da revisão |
+| `selected_provider=null` ou `mode=needs_review` | nenhum executor autorizado | não executar; corrigir prontidão ou solicitar decisão |
+| Hermes ou agy detectado sem adapter | readiness apenas | não promover; registrar ou consultar backlog |
+
+O procedimento padrão é:
+
+```bash
+PLAN_JSON="$($METHOD_ROOT/bin/ralph-init plan \
+  --project "$PROJECT_ROOT" \
+  --provider auto \
+  --verify-providers)"
+
+RALPH_METHOD_SOURCE="$METHOD_ROOT" \
+  "$METHOD_ROOT/bin/ralph-init" apply \
+  --project "$PROJECT_ROOT" \
+  --provider auto \
+  --verify-providers
+
+"$PROJECT_ROOT/bin/ralph-doctor" --project "$PROJECT_ROOT"
+```
+
+O agente deve interromper se o JSON indicar `conflict`, `needs_review`,
+`adapter_enabled=false`, working tree inconsistente ou ausência de comando de
+qualidade. A variável `PLAN_JSON` é apenas um exemplo de captura local; não
+salve credenciais ou a saída integral em prompt, ledger ou documentação.
+
+#### Configuração específica por harness
+
+- **Codex:** use o perfil gerado `.ralph/codex.env`. O loop nativo mantém a
+  execução e a revisão dentro do contrato do `ralph-control`; registre no
+  `ralph-trace` o modelo somente quando o runtime o comprovar.
+- **Claude CLI:** use `.ralph/claude.env`. O princípio é o mesmo do Codex:
+  runner nativo, uma feature por bloco, gates no controlador e identidade
+  marcada como `declared`, `observed` ou `exact` conforme a evidência.
+- **OpenCode:** use `.ralph/opencode.env`, preencha
+  `RALPH_OPENCODE_MODEL`, `RALPH_OPENCODE_AGENT` e, para technical review,
+  gere `RALPH_OPENCODE_VERIFY_POLICY_PROOF` fora da raiz mutável. A ausência
+  da prova ou do agente read-only bloqueia a chamada.
+- **Hermes/agy:** não configure execução nesta versão. A presença da CLI não
+  implica adapter; o agente deve manter `needs_review` ou seguir o backlog.
+
+Após o `apply`, confira `.ralph/method.json`, `.ralph/providers.json` e o
+manifesto de ownership. Esses arquivos descrevem a instalação local; não são
+autorização para ignorar o workflow, os gates ou o lease.
+
 ## 4. Instalação em um projeto-alvo
 
 Defina o caminho do checkout do Ralph Method e o caminho do projeto. O projeto
@@ -501,8 +556,11 @@ bash scripts/check-shell.sh
 bash scripts/check-doc-sync.sh
 bash scripts/test-installation.sh
 bash scripts/test-feedback.sh
+bash scripts/test-provider-readiness.sh
+bash scripts/test-multiprovider.sh
 bash scripts/test-ralph-method.sh
 bash scripts/test-ralph.sh
+bash scripts/test-reproducibility.sh
 ```
 
 ## 9. Desinstalação segura
