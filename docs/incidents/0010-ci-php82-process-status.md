@@ -20,7 +20,7 @@ correção foi isolada na branch `fix/ci-portable-path` para pré-teste.
 
 ## Causa raiz
 
-Foram encontradas três incompatibilidades de portabilidade:
+Foram encontradas quatro incompatibilidades de portabilidade:
 
 1. Os fixtures sobrescreviam o `PATH` com `fake_bin:/usr/bin:/bin`. Em
    runners que instalam PHP pelo toolcache, isso podia ocultar o PHP efetivo.
@@ -30,6 +30,9 @@ Foram encontradas três incompatibilidades de portabilidade:
    `proc_close()` como autoridade do resultado.
 3. O runner não possuía `rg`, mas `test-ralph-method.sh` o chamava diretamente
    para aguardar eventos de processo.
+4. O runner possuía o binário `unshare`, mas não permitia criar namespaces de
+   usuário. A seleção do controlador verificava apenas a existência do
+   executável e iniciava um processo que terminava antes do esperado.
 
 ## Correção aplicada
 
@@ -42,6 +45,8 @@ Foram encontradas três incompatibilidades de portabilidade:
   controlada e supervisão;
 - `test-ralph-method.sh` usa `rg` quando disponível e `grep -Eq` como fallback
   portátil;
+- `bin/ralph-control` sonda a capacidade real de `unshare` e usa
+  `process_group_observed` quando o namespace não é permitido;
 - o fechamento continua ocorrendo para liberar recursos, mas não substitui
   um exit code válido já observado.
 

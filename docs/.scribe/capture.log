@@ -82,3 +82,5 @@
 2026-08-09T19:59:49-03:00 | fix | hotfix fix/ci-portable-path preserva o runtime PHP nos fixtures e usa o exitcode observado antes de proc_close no init/control
 2026-08-09T20:04:00-03:00 | error | pré-teste remoto 31340885389 revelou que o runner não possui rg e test-ralph-method dependia dele diretamente
 2026-08-09T20:04:00-03:00 | fix | test-ralph-method passou a usar rg quando disponível e grep -Eq como fallback portátil
+2026-08-09T20:09:00-03:00 | error | pré-teste remoto 31341071541 revelou unshare presente mas indisponível no runner; a execução concorrente terminou antes do gate e recebeu exit 1
+2026-08-09T20:09:00-03:00 | fix | ralph-control passou a sondar a capacidade real de unshare e recuar para process_group_observed quando o namespace é proibido

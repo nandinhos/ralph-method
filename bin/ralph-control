@@ -466,6 +466,23 @@ function closeProcess(mixed $process, ?int $knownExitCode = null): int
     return $knownExitCode !== null && $knownExitCode >= 0 ? $knownExitCode : $closeExit;
 }
 
+function processNamespaceAvailable(): bool
+{
+    static $available = null;
+    if ($available !== null) {
+        return $available;
+    }
+    if (getenv('RALPH_PROCESS_NAMESPACE') === '0' || ! is_executable('/usr/bin/unshare')) {
+        return $available = false;
+    }
+
+    $output = [];
+    $exitCode = 1;
+    exec('/usr/bin/unshare --user --map-root-user --pid --fork --mount-proc -- /bin/true 2>/dev/null', $output, $exitCode);
+
+    return $available = $exitCode === 0;
+}
+
 function relayFeedbackChunk(string &$buffer, string $chunk): void
 {
     $buffer .= $chunk;
@@ -512,7 +529,7 @@ function captureChunk($handle, string $chunk, int &$bytes, int $limit, string &$
 
 function controlledProcessCommand(string $command): array
 {
-    $namespace = getenv('RALPH_PROCESS_NAMESPACE') !== '0' && is_executable('/usr/bin/unshare');
+    $namespace = processNamespaceAvailable();
     if ($namespace) {
         return [
             'command' => ['setsid', 'unshare', '--user', '--map-root-user', '--pid', '--fork', '--mount-proc', '--', '/bin/sh', '-c', $command],
