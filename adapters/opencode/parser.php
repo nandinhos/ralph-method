@@ -109,8 +109,19 @@ if ($eventBytes > $maxEventBytes || ! is_file($eventsPath)) {
                 break;
             }
             $events[] = $decoded;
-            $sessionId ??= isset($decoded['sessionID']) && is_string($decoded['sessionID']) ? $decoded['sessionID'] : null;
-            $sessionId ??= isset($decoded['session_id']) && is_string($decoded['session_id']) ? $decoded['session_id'] : null;
+            $eventSessionId = isset($decoded['sessionID']) && is_string($decoded['sessionID'])
+                ? $decoded['sessionID']
+                : null;
+            $eventSessionId ??= isset($decoded['session_id']) && is_string($decoded['session_id'])
+                ? $decoded['session_id']
+                : null;
+            if ($eventSessionId !== null) {
+                if ($sessionId !== null && $sessionId !== $eventSessionId) {
+                    $malformed = 'saída JSONL contém mais de uma sessão';
+                    break;
+                }
+                $sessionId ??= $eventSessionId;
+            }
             $type = isset($decoded['type']) && is_string($decoded['type']) ? $decoded['type'] : null;
             if ($type === 'step_finish') {
                 $terminalEvent = $type;

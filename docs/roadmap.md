@@ -17,7 +17,8 @@ real pelo próprio OpenCode e de um teste de campo em projeto real.
 - [x] executar fixtures negativas e regressão completa;
 - [x] provar uma sessão real em fixture descartável;
 - [x] realizar teste de campo em worktree isolada de projeto real, com os cinco gates e handoff;
-- [ ] revisar adversarialmente e preparar promoção para `main`.
+- [x] maturar completamente o adversarial do adapter OpenCode: revisão independente bounded, contrato de timeout, saída estruturada e repetição sem timeout; relatório `0006`;
+- [ ] revisar adversarialmente a branch completa e preparar promoção para `main`.
 
 O desenho detalhado, os riscos e os critérios estão em
 [`architecture/opencode-engine-plan.md`](architecture/opencode-engine-plan.md).
@@ -26,6 +27,7 @@ O desenho detalhado, os riscos e os critérios estão em
 - [x] prova complexa real com oráculo externo, hashes protegidos, trace e relatório `0002`;
 - [x] prova complexa com revisão read-only real, fingerprint de política e duas delegações no trace; relatório `0003`;
 - [x] teste de campo real com OpenCode, feature Laravel, cinco gates, handoff e continuidade automática; relatório `0004`;
+- [x] certificação adversarial repetível do adapter OpenCode, incluindo prova das duas fontes da política (`--policy-proof` e `RALPH_OPENCODE_VERIFY_POLICY_PROOF`); relatório `0006`;
 
 ## 0.3.1 — certificação de sessões CLI
 

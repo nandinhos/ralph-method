@@ -126,6 +126,10 @@ run_engine() {
   if [ "$mode" = verify ]; then
     local verify_agent="${RALPH_OPENCODE_VERIFY_AGENT:-$agent}"
     [ -n "$verify_agent" ] || die 'modo verify exige RALPH_OPENCODE_VERIFY_AGENT explícito e read-only'
+    if [ -n "$agent" ] && [ "$agent" != "$verify_agent" ]; then
+      die 'agente OpenCode do argumento diverge do agente read-only validado'
+    fi
+    agent="$verify_agent"
     [ -n "$policy_proof" ] || die 'modo verify exige prova read-only externa'
     local policy_json
     policy_json="$(php "$POLICY_CHECKER" check --repo-root "$repo_root" --agent "$verify_agent" --proof-file "$policy_proof")" \
@@ -177,7 +181,6 @@ run_engine() {
   [ -n "$variant" ] && command+=(--variant "$variant")
   [ "$pure" = 1 ] && command+=(--pure)
   [ "$mode" = impl ] && [ "$auto" = 1 ] && command+=(--auto)
-  [ "$mode" = verify ] && [ -n "${RALPH_OPENCODE_VERIFY_AGENT:-}" ] && command+=(--agent "$RALPH_OPENCODE_VERIFY_AGENT")
   command+=(-- "Execute a instrução de fase anexada. A resposta deve ser objetiva e não deve incluir segredos.")
 
   local rc=0

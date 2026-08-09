@@ -146,6 +146,24 @@ PATH="$TMP/bin:/usr/bin:/bin" RALPH_OPENCODE_MODEL=fixture/model \
     --model fixture/model >/dev/null 2>&1 || verify_exit=$?
 [ "$verify_exit" -eq 2 ] || fail 'modo verify sem agente read-only foi aceito'
 
+divergent_exit=0
+divergent_output="$(PATH="$TMP/bin:/usr/bin:/bin" RALPH_OPENCODE_MODEL=fixture/model \
+  RALPH_OPENCODE_VERIFY_AGENT=ralph-review \
+  "$ROOT/adapters/opencode/runner.sh" run \
+    --repo-root "$TMP/repo" \
+    --prompt-file "$TMP/prompt.md" \
+    --events-file "$TMP/artifacts/divergent-events.jsonl" \
+    --result-file "$TMP/artifacts/divergent-result.json" \
+    --mode verify \
+    --execution-id exec_fixture_divergent \
+    --workflow-id wf_fixture \
+    --feature-key FEATURE-ADAPTER \
+    --attempt 1 \
+    --agent another-reviewer \
+    --model fixture/model 2>&1)" || divergent_exit=$?
+[ "$divergent_exit" -eq 2 ] || fail 'agente divergente foi aceito no modo verify'
+printf '%s' "$divergent_output" | grep -q 'agente OpenCode.*diverge' || fail 'mensagem de agente divergente ausente'
+
 echo '{"type":"step_start","sessionID":"ses_bad"}' > "$TMP/artifacts/malformed.jsonl"
 echo 'not-json' >> "$TMP/artifacts/malformed.jsonl"
 php "$ROOT/adapters/opencode/parser.php" \
@@ -189,6 +207,55 @@ php "$ROOT/adapters/opencode/parser.php" \
 RESULT_FILE="$TMP/artifacts/too-many-result.json" php -r '
   $result = json_decode(file_get_contents(getenv("RESULT_FILE")), true, 512, JSON_THROW_ON_ERROR);
   exit(($result["status"] ?? null) === "failed" && str_contains((string) ($result["error_summary"] ?? ""), "limite") ? 0 : 1);
+'
+
+printf '%s\n' \
+  '{"type":"step_start","sessionID":"ses_multi_step"}' \
+  '{"type":"step_finish","sessionID":"ses_multi_step"}' \
+  '{"type":"step_start","sessionID":"ses_multi_step"}' \
+  '{"type":"step_finish","sessionID":"ses_multi_step"}' \
+  > "$TMP/artifacts/multi-step.jsonl"
+php "$ROOT/adapters/opencode/parser.php" \
+  --events "$TMP/artifacts/multi-step.jsonl" \
+  --result "$TMP/artifacts/multi-step-result.json" \
+  --exit-code 0 \
+  --runner-version 1.18.15 \
+  --provider fixture \
+  --requested-model fixture/model \
+  --execution-id exec_fixture_multi_step \
+  --execution-mode impl \
+  --workflow-id wf_fixture \
+  --feature-key FEATURE-MULTI-STEP \
+  --attempt 1 \
+  --prompt-sha256 deadbeef \
+  --prompt-transport file >/dev/null
+RESULT_FILE="$TMP/artifacts/multi-step-result.json" php -r '
+  $result = json_decode(file_get_contents(getenv("RESULT_FILE")), true, 512, JSON_THROW_ON_ERROR);
+  exit(($result["status"] ?? null) === "completed" && ($result["events_seen"] ?? 0) === 4 ? 0 : 1);
+'
+
+printf '%s\n' \
+  '{"type":"step_start","sessionID":"ses_first"}' \
+  '{"type":"step_finish","sessionID":"ses_first"}' \
+  '{"type":"step_start","sessionID":"ses_second"}' \
+  > "$TMP/artifacts/multi-session.jsonl"
+php "$ROOT/adapters/opencode/parser.php" \
+  --events "$TMP/artifacts/multi-session.jsonl" \
+  --result "$TMP/artifacts/multi-session-result.json" \
+  --exit-code 0 \
+  --runner-version 1.18.15 \
+  --provider fixture \
+  --requested-model fixture/model \
+  --execution-id exec_fixture_multi_session \
+  --execution-mode impl \
+  --workflow-id wf_fixture \
+  --feature-key FEATURE-MULTI-SESSION \
+  --attempt 1 \
+  --prompt-sha256 deadbeef \
+  --prompt-transport file >/dev/null
+RESULT_FILE="$TMP/artifacts/multi-session-result.json" php -r '
+  $result = json_decode(file_get_contents(getenv("RESULT_FILE")), true, 512, JSON_THROW_ON_ERROR);
+  exit(($result["status"] ?? null) === "failed" && str_contains((string) ($result["error_summary"] ?? ""), "mais de uma sessão") ? 0 : 1);
 '
 
 echo 'OK: adapter OpenCode, transporte por arquivo, parser, schema impl/verify, sessão, evento terminal, tri-state e limites passaram.'

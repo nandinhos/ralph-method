@@ -177,8 +177,10 @@ mas deve sempre consultar `ralph-control status` para decisões. Feedback
 ausente ou atrasado significa falta de observabilidade, não aprovação.
 
 Para uma revisão OpenCode, o controlador exige `RALPH_OPENCODE_VERIFY_AGENT`
-e uma prova externa em `RALPH_OPENCODE_VERIFY_POLICY_PROOF`. Gere a prova
-somente fora da raiz mutável:
+e uma prova externa. O runner recebe essa prova por
+`RALPH_OPENCODE_VERIFY_POLICY_PROOF` ou pelo argumento `--policy-proof`;
+ausência de ambas bloqueia a chamada à CLI. Gere a prova somente fora da raiz
+mutável:
 
 ```bash
 scripts/opencode-readonly-proof.sh \

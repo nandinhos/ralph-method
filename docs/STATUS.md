@@ -59,11 +59,24 @@ Os checks portáteis verdes são `scripts/check-shell.sh`,
 `scripts/test-installation.sh`, `scripts/test-feedback.sh`,
 `scripts/test-provider-readiness.sh`, `scripts/test-ralph-method.sh` e
 `scripts/test-ralph.sh`, além de `scripts/test-opencode-policy.sh`,
-`scripts/test-opencode-adapter.sh` e da prova real
+`scripts/test-opencode-adapter.sh`, `scripts/test-opencode-adversarial.sh` e da prova real
 `scripts/test-opencode-field.sh`. Eles cobrem ownership, conflito, idempotência,
 remoção segura, eventos, prontidão de providers, progresso e a regressão do
 loop, capability adversarial, parsing JSONL, política read-only e execução
 complexa por OpenCode com implementação e revisão preservadas no trace.
+
+Os smoke tests reais dos CLIs também foram comprovados fora do loop: Codex
+retornou exit `0`, JSONL válido, thread e marcador determinístico; Claude
+retornou exit `0`, JSON válido, sessão e marcador após a correção do limite de
+orçamento artificial da primeira tentativa. O teste de campo complexo OpenCode
+foi repetido com `opencode/big-pickle` e terminou verde em 137s, com
+`FEATURE_CHECK_OK`, trace e revisão read-only.
+
+O adversarial do adapter OpenCode foi maturado com um probe direto da CLI real:
+`ralph-review` retornou `ADVERSARIAL_VERDICT: PASS` em 38s, com uma sessão,
+quatro `step_finish`, dez operações somente de leitura, política revalidada e
+hash da superfície idêntico antes/depois. O teste também reproduz e protege a
+rejeição de múltiplas sessões e de agente divergente.
 
 O teste de campo real do OpenCode foi concluído com a feature
 `FEATURE-FIELD-OPENCODE-001` em checkout descartável: implementação, revisão
@@ -71,6 +84,9 @@ read-only, `bin/check`, evidência de runtime e curadoria passaram; o handoff
 foi versionado e o controlador avançou para uma fila vazia. O relatório
 sanitizado está em
 [`docs/reports/0004-teste-campo-opencode-cinco-gates.md`](reports/0004-teste-campo-opencode-cinco-gates.md).
-As duas falhas anteriores foram preservadas nos incidentes 0003 e 0004. A
-branch `feat/opencode-engine` ainda requer revisão adversarial final e regressão
-antes de qualquer promoção para `main`.
+O reteste adversarial oficial está em
+[`docs/reports/0006-reteste-adversarial-oficial-opencode.md`](reports/0006-reteste-adversarial-oficial-opencode.md).
+As falhas anteriores foram preservadas nos incidentes 0003, 0004, 0005 e 0006.
+A branch `feat/opencode-engine` ainda requer a revisão adversarial final da
+branch completa e a regressão documental após essa etapa antes de qualquer
+promoção para `main`.

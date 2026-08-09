@@ -45,3 +45,11 @@
 2026-08-08T21:31:00-03:00 | fix | systematic debugging confirmou as causas, anexou referências oficiais e retomou a execução em checkout limpa com permissões concorrentes restringidas e modelo OpenCode alternativo.
 2026-08-08T21:44:00-03:00 | verification | campo real `wf_field_refactor_radar_20260808_004` passou os cinco gates, gerou handoff, criou Commit B `e49ad49`, avançou para fila vazia e manteve conhecimento não bloqueante; relatório `0004`.
 2026-08-08T21:50:00-03:00 | review | revisão adversarial independente foi disparada contra o relatório, ledger, trace e status; o agente não concluiu dentro de duas janelas e foi encerrado, portanto a promoção para `main` permanece deliberadamente pendente.
+2026-08-08T22:00:00-03:00 | error | duas revisões adversariais bounded expiraram sem parecer; não foram tratadas como aprovação e os agentes foram encerrados.
+2026-08-08T22:01:00-03:00 | review | revisão mínima encontrou falso finding sobre `--policy-proof`; o runner aceita também RALPH_OPENCODE_VERIFY_POLICY_PROOF e exige prova antes da CLI.
+2026-08-08T22:02:00-03:00 | decision | maturação adversarial do adapter OpenCode entrou na to-do com protocolo bounded, timeout e saída estruturada antes da promoção.
+2026-08-08T22:42:00-03:00 | verification | smoke real Codex e Claude passaram com marcador; a primeira execução Claude falhou somente pelo limite de orçamento artificial e a segunda passou.
+2026-08-08T22:42:00-03:00 | verification | teste de campo complexo OpenCode repetido com big-pickle passou em 137s com FEATURE_CHECK_OK, trace e revisão read-only.
+2026-08-08T23:10:00-03:00 | error | probe adversarial direto encontrou múltiplos step_finish legítimos na mesma sessão, parser que não rejeitava sessão divergente e possível agente OpenCode duplicado na CLI.
+2026-08-08T23:11:00-03:00 | fix | parser passou a rejeitar múltiplas sessões, runner passou a resolver um único agente validado e o probe passou a aceitar múltiplos step_finish da mesma sessão.
+2026-08-08T23:12:00-03:00 | verification | probe direto OpenCode 1.18.15 com big-pickle passou em 38s: verdict PASS, uma sessão, quatro step_finish, dez leituras/globs/greps, política e superfície preservadas; relatório 0006.

@@ -108,8 +108,9 @@ status, reason, fallback_used e fallback_status
 Quando o provider não expõe modelo efetivo, a identidade deve ser marcada como
 `declared`, `observed`, `partial` ou `unavailable`.
 
-O adapter OpenCode também exige `runner-result.schema.json`, sessão e evento
-terminal `step_finish`; falta de evidência de fallback permanece como
+O adapter OpenCode também exige `runner-result.schema.json`, uma única sessão e
+pelo menos um evento terminal `step_finish`; múltiplos `step_finish` na mesma
+sessão são válidos. Falta de evidência de fallback permanece como
 `fallback_used=null` e `fallback_status=unknown`.
 
 No modo de revisão, o resultado também deve conter `permission_policy_hash`,

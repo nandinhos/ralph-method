@@ -322,10 +322,10 @@ Regras da invocação:
 
 O OpenCode documenta `--format json` como uma linha JSON por evento, com campos
 como `type`, `timestamp` e `sessionID`. O parser do adapter será tolerante a
-campos opcionais, mas fail-closed para os fatos necessários. O conjunto de
-eventos terminais será confirmado pela versão real no fixture e no smoke; a
-documentação atual sugere `step_finish`, mas o parser não poderá aceitar essa
-hipótese sem comprovação da execução.
+campos opcionais, mas fail-closed para os fatos necessários. A execução real
+confirmou `step_finish` como evento terminal; uma sessão pode emitir múltiplos
+terminais durante uma revisão multi-step, mas o parser rejeita sessões
+divergentes.
 
 ### Sucesso
 

@@ -13,13 +13,22 @@ runner.sh run --repo-root DIR --prompt-file FILE --events-file FILE \
   [--policy-proof EXTERNAL_FILE]
 ```
 
+No modo `verify`, a prova read-only externa é obrigatória. Ela pode ser
+fornecida por `--policy-proof EXTERNAL_FILE` ou por
+`RALPH_OPENCODE_VERIFY_POLICY_PROOF`; as duas formas são equivalentes e a
+ausência de ambas reprova antes da chamada à CLI. O agente read-only também
+precisa estar explícito em `--agent` ou
+`RALPH_OPENCODE_VERIFY_AGENT`.
+
 O prompt é anexado por `--file`. A versão da CLI é consultada, o modelo é
 obrigatório e `--format json` é obrigatório. `--continue`, `--session`,
 `--fork`, `--attach` e `--port` não fazem parte do contrato inicial.
 
 ## Saída
 
-O arquivo de eventos é local e descartável. O arquivo de resultado segue
+O arquivo de eventos é local e descartável. Uma sessão pode emitir múltiplos
+eventos `step_finish`; o parser exige pelo menos um e rejeita JSONL que misture
+sessões. O arquivo de resultado segue
 `schemas/runner-result.schema.json` e contém apenas fatos sanitizados:
 
 - `session_id`, quando a CLI o expõe;
