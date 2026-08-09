@@ -53,3 +53,8 @@
 2026-08-08T23:10:00-03:00 | error | probe adversarial direto encontrou múltiplos step_finish legítimos na mesma sessão, parser que não rejeitava sessão divergente e possível agente OpenCode duplicado na CLI.
 2026-08-08T23:11:00-03:00 | fix | parser passou a rejeitar múltiplas sessões, runner passou a resolver um único agente validado e o probe passou a aceitar múltiplos step_finish da mesma sessão.
 2026-08-08T23:12:00-03:00 | verification | probe direto OpenCode 1.18.15 com big-pickle passou em 38s: verdict PASS, uma sessão, quatro step_finish, dez leituras/globs/greps, política e superfície preservadas; relatório 0006.
+2026-08-08T23:45:00-03:00 | error | revisão ampla final do snapshot expirou em 240s sem marcadores FINAL_REVIEW, apesar de JSONL válido; não foi tratada como aprovação.
+2026-08-08T23:48:00-03:00 | mitigation | revisão final foi reduzida a escopo bounded de oito arquivos e oito leituras; deepseek-v4-flash-free retornou PASS estruturado em uma sessão, dois step_finish e oito leituras.
+2026-08-08T23:52:00-03:00 | verification | probe adversarial final passou em 61s com cinco verificações verdes, hash estável e modelo deepseek-v4-flash-free; a tentativa anterior com big-pickle expirou sem veredicto.
+2026-08-08T23:56:00-03:00 | verification | teste de campo final passou em 136s com FEATURE_CHECK_OK, trace, processo contido e cinco gates verdes.
+2026-08-08T23:58:28-03:00 | release | v0.4.0 promovida localmente de feat/opencode-engine para main por merge --ff-only; push remoto não realizado; relatório 0007.

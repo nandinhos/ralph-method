@@ -2,6 +2,12 @@
 
 ## Estado atual
 
+A versão `0.4.0` foi promovida localmente para `main` em 2026-08-08 pelo
+commit candidato `c6a7f74995bc5f93aefe51212b3ba1e949788baf`, usando
+`git merge --ff-only`. O push remoto não foi realizado. A certificação completa
+está em
+[`docs/reports/0007-certificacao-e-promocao-v0-4-0.md`](reports/0007-certificacao-e-promocao-v0-4-0.md).
+
 O repositório é uma extração independente do núcleo Ralph validado no
 `refactor-radar`. A versão `0.4.0` mantém a instalação local reversível,
 doctor, ownership por hash e canal de feedback para o orquestrador externo, e
@@ -69,8 +75,9 @@ Os smoke tests reais dos CLIs também foram comprovados fora do loop: Codex
 retornou exit `0`, JSONL válido, thread e marcador determinístico; Claude
 retornou exit `0`, JSON válido, sessão e marcador após a correção do limite de
 orçamento artificial da primeira tentativa. O teste de campo complexo OpenCode
-foi repetido com `opencode/big-pickle` e terminou verde em 137s, com
-`FEATURE_CHECK_OK`, trace e revisão read-only.
+foi repetido no commit candidato com `opencode/deepseek-v4-flash-free` e
+terminou verde em 136s, com `FEATURE_CHECK_OK`, trace, processo contido e
+revisão read-only.
 
 O adversarial do adapter OpenCode foi maturado com um probe direto da CLI real:
 `ralph-review` retornou `ADVERSARIAL_VERDICT: PASS` em 38s, com uma sessão,
@@ -86,7 +93,8 @@ sanitizado está em
 [`docs/reports/0004-teste-campo-opencode-cinco-gates.md`](reports/0004-teste-campo-opencode-cinco-gates.md).
 O reteste adversarial oficial está em
 [`docs/reports/0006-reteste-adversarial-oficial-opencode.md`](reports/0006-reteste-adversarial-oficial-opencode.md).
-As falhas anteriores foram preservadas nos incidentes 0003, 0004, 0005 e 0006.
-A branch `feat/opencode-engine` ainda requer a revisão adversarial final da
-branch completa e a regressão documental após essa etapa antes de qualquer
-promoção para `main`.
+O relatório final de certificação e promoção está em
+[`docs/reports/0007-certificacao-e-promocao-v0-4-0.md`](reports/0007-certificacao-e-promocao-v0-4-0.md).
+As falhas anteriores foram preservadas nos incidentes 0003 a 0007. A revisão
+ampla exploratória que expirou não foi considerada aprovação; a decisão usou a
+prova externa, a revisão bounded estruturada, a regressão e os testes reais.

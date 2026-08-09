@@ -1,10 +1,10 @@
 # Roadmap do Ralph Method
 
-## Próxima entrega — engine OpenCode (`v0.4.0` em validação controlada)
+## Entrega atual — engine OpenCode (`v0.4.0` promovida localmente)
 
-O trabalho será executado isoladamente na branch `feat/opencode-engine`. A
-engine somente será promovida depois da regressão completa, de uma execução
-real pelo próprio OpenCode e de um teste de campo em projeto real.
+O trabalho foi executado isoladamente na branch `feat/opencode-engine` e
+promovido localmente para `main` depois da regressão completa, da execução real
+pelo próprio OpenCode e do teste de campo em projeto real.
 
 - [x] fechar a capability: executor sem contexto/lease e teste negativo de transição;
 - [x] provar término do grupo no caminho `ralph-control`, inclusive PID raiz que sai;
@@ -18,7 +18,8 @@ real pelo próprio OpenCode e de um teste de campo em projeto real.
 - [x] provar uma sessão real em fixture descartável;
 - [x] realizar teste de campo em worktree isolada de projeto real, com os cinco gates e handoff;
 - [x] maturar completamente o adversarial do adapter OpenCode: revisão independente bounded, contrato de timeout, saída estruturada e repetição sem timeout; relatório `0006`;
-- [ ] revisar adversarialmente a branch completa e preparar promoção para `main`.
+- [x] revisar a superfície crítica da release com agente independente bounded e preparar promoção para `main`; relatório `0007`.
+- [x] promover localmente a `v0.4.0` para `main` com `merge --ff-only`; push remoto permanece deliberadamente pendente.
 
 O desenho detalhado, os riscos e os critérios estão em
 [`architecture/opencode-engine-plan.md`](architecture/opencode-engine-plan.md).
@@ -28,6 +29,7 @@ O desenho detalhado, os riscos e os critérios estão em
 - [x] prova complexa com revisão read-only real, fingerprint de política e duas delegações no trace; relatório `0003`;
 - [x] teste de campo real com OpenCode, feature Laravel, cinco gates, handoff e continuidade automática; relatório `0004`;
 - [x] certificação adversarial repetível do adapter OpenCode, incluindo prova das duas fontes da política (`--policy-proof` e `RALPH_OPENCODE_VERIFY_POLICY_PROOF`); relatório `0006`;
+- [x] certificação final e promoção local da `v0.4.0`, incluindo timeout mitigado, revisão bounded, probe adversarial e campo real; relatório `0007`.
 
 ## 0.3.1 — certificação de sessões CLI
 
