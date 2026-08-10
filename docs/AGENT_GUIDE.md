@@ -1,6 +1,6 @@
 # Guia operacional para agentes de IA — Ralph Method
 
-- guide_version: 1.1.0
+- guide_version: 1.2.0
 - method_version: 0.6.1
 - status: ativo
 - fonte_do_metodo: `VERSION`
@@ -31,6 +31,183 @@ Uma alteração de CLI, schema, máquina de estados, provider, comunicação ou
 ownership exige também a atualização da seção correspondente deste guia, de
 `docs/STATUS.md` e, quando houver decisão arquitetural, de um ADR em
 `docs/adr/`.
+
+## 0. Roteiro operacional obrigatório
+
+Use esta sequência em qualquer projeto novo. O agente só avança quando a
+saída da etapa atual for compatível com a decisão esperada.
+
+### 0.1 Preparar o contexto
+
+1. Identifique a raiz do checkout Git e leia `AGENTS.md`, `docs/STATUS.md`,
+   convenções, arquitetura e ADRs do projeto-alvo.
+2. Confira a árvore antes de agir:
+
+   ```bash
+   git -C "$PROJECT_ROOT" status --short --branch
+   ```
+
+3. Não instale, aplique ou inicie provider enquanto escopo, árvore e comando
+   real de qualidade não estiverem claros.
+
+O Ralph Method é instalado exclusivamente no projeto-alvo. O repositório que
+distribui o método é apenas a fonte dos componentes; não é dependência de
+runtime, banco ou credencial do projeto.
+
+### 0.2 Fazer o dry-run
+
+Use primeiro `plan`, sempre sem mutação:
+
+```bash
+"$METHOD_ROOT/bin/ralph-init" plan \
+  --project "$PROJECT_ROOT" \
+  --provider auto \
+  --verify-providers
+```
+
+Leia o JSON completo:
+
+| Resultado | Ação |
+|---|---|
+| `functional` + `adapter_enabled=true` | provider pode ser usado |
+| `functional` + `adapter_enabled=false` | não executar; falta runner autorizado |
+| `needs_review` | parar e reportar o requisito ausente |
+| `conflict` ou `drift_detected` | preservar arquivos e resolver explicitamente |
+| provider não autenticado ou não saudável | corrigir a sessão; não usar fallback silencioso |
+
+`--verify-providers` executa apenas probes seguros de prontidão; não envie uma
+mensagem generativa para testar o modelo. Codex e Claude CLI usam runners
+nativos; OpenCode exige modelo explícito e revisão read-only comprovada; Hermes
+e agy permanecem em readiness passiva nesta versão.
+
+Se o plano não produzir runner elegível, não materialize configuração fictícia
+e não avance para `apply`. O retorno correto é `needs_review` com a causa.
+
+### 0.3 Aplicar e verificar
+
+Somente após revisar o dry-run:
+
+```bash
+RALPH_METHOD_SOURCE="$METHOD_ROOT" \
+  "$METHOD_ROOT/bin/ralph-init" apply \
+  --project "$PROJECT_ROOT" \
+  --provider auto \
+  --verify-providers
+
+"$PROJECT_ROOT/bin/ralph-doctor" --project "$PROJECT_ROOT"
+```
+
+Confirme `healthy`, os perfis gerados e o ownership em
+`.ralph/install-manifest.json`. Se houver `drift_detected`, interrompa e
+entregue a decisão ao usuário; não substitua arquivos modificados.
+
+### 0.4 Preparar a fila
+
+Antes de `ralph-control init`, o workflow deve ser versionável e conter:
+
+- `workflow_id` único e estável;
+- `plan_file` e comando real de qualidade;
+- features ordenadas por `position`, com uma feature por bloco lógico;
+- critérios de aceitação e evidências esperadas;
+- `knowledge_policy.mode: non_blocking`, salvo decisão explícita diferente;
+- árvore limpa e plano protegido contra alterações durante a execução.
+
+Exemplo mínimo:
+
+```json
+{
+  "schema_version": "1.0.0",
+  "workflow_id": "wf_exemplo_20260810_001",
+  "plan_file": ".spec/init/project-phases.md",
+  "knowledge_policy": {"mode": "non_blocking"},
+  "features": [{"feature_key":"FEATURE-001","title":"Primeira feature","position":1}]
+}
+```
+
+Inicialize somente após validar o manifesto:
+
+```bash
+cd "$PROJECT_ROOT"
+bin/ralph-control init \
+  --workflow wf_exemplo_20260810_001 \
+  --manifest workflow.json
+```
+
+### 0.5 Executar e comunicar
+
+Mantenha uma única instância do supervisor por checkout:
+
+```bash
+bin/ralph-control supervise \
+  --workflow wf_exemplo_20260810_001 \
+  --interval 30 \
+  --max-retries 3
+```
+
+Para acompanhamento em outro terminal:
+
+```bash
+bin/ralph-monitor \
+  --workflow wf_exemplo_20260810_001 \
+  --interval 30
+```
+
+O monitor e o hook observam; decisões usam sempre o controlador:
+
+```bash
+bin/ralph-control status --workflow wf_exemplo_20260810_001
+```
+
+Feedback ao orquestrador deve ser curto e factual:
+
+```text
+[Ralph] FEATURE-001 concluída: os cinco gates foram aprovados; handoff gerado.
+O ralph-control selecionará a próxima feature.
+```
+
+Nunca converta `phase_done`, `run_end`, screenshot ou texto do provider em
+aprovação. Aguarde a projeção do controlador e os cinco gates registrados.
+
+### 0.6 Reagir a falha ou interrupção
+
+Se parecer parado:
+
+1. leia o último snapshot do monitor e o último evento do ledger;
+2. consulte `ralph-control status`;
+3. verifique processo ativo antes de encerrar qualquer terminal;
+4. não execute um segundo supervisor;
+5. em crash, use `continue` e aguarde `recovery_required`;
+6. encaminhe a falha ao systematic debugging;
+7. só crie novo lease/retry após diagnóstico verificável;
+8. registre causa, hipótese, correção e evidência antes/depois no handoff.
+
+```bash
+bin/ralph-control continue --workflow wf_exemplo_20260810_001
+```
+
+`recovery_required`, `debugging_required` e `knowledge_review_required` são
+estados explícitos. Não force `approved`, edite o ledger ou avance a fila
+manualmente para “destravar” a execução.
+
+### 0.7 Encerrar e preservar conhecimento
+
+Ao concluir a feature, confirme os cinco gates, handoff, evidências, commit,
+árvore e liberação pelo controlador. A memória candidata pode ser curada,
+rejeitada, descartada ou revisada; nesta versão ela é não bloqueante. Use
+`ralph-knowledge candidates` e retenção explícita, sem copiar eventos brutos
+para `docs/engineering/`.
+
+### 0.8 Desinstalar com segurança
+
+Faça primeiro o plano somente de leitura:
+
+```bash
+"$METHOD_ROOT/bin/ralph-init" uninstall \
+  --project "$PROJECT_ROOT"
+```
+
+Use `--apply` apenas após revisar os arquivos. O método preserva runtime,
+workflow, handoffs, relatórios e arquivos modificados pelo usuário.
 
 ## 1. Princípios que o agente deve respeitar
 
