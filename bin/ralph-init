@@ -104,18 +104,25 @@ function commandResult(string $command, string $cwd, int $timeoutSeconds = 8): a
     stream_set_blocking($pipes[2], false);
     $output = '';
     $timedOut = false;
+    $exitCodeFromStatus = null;
     $deadline = microtime(true) + $timeoutSeconds;
     while (true) {
         $status = proc_get_status($process);
         $output .= (string) stream_get_contents($pipes[1]).(string) stream_get_contents($pipes[2]);
         if (! ($status['running'] ?? false)) {
+            $exitCodeFromStatus = is_int($status['exitcode'] ?? null) && ($status['exitcode'] ?? -1) >= 0
+                ? $status['exitcode']
+                : null;
             break;
         }
         if (! $usesExternalTimeout && microtime(true) >= $deadline) {
             proc_terminate($process, 15);
             usleep(100000);
-            if (proc_get_status($process)['running'] ?? false) {
+            $terminatedStatus = proc_get_status($process);
+            if ($terminatedStatus['running'] ?? false) {
                 proc_terminate($process, 9);
+            } elseif (is_int($terminatedStatus['exitcode'] ?? null) && ($terminatedStatus['exitcode'] ?? -1) >= 0) {
+                $exitCodeFromStatus = $terminatedStatus['exitcode'];
             }
             $timedOut = true;
             break;
@@ -125,8 +132,9 @@ function commandResult(string $command, string $cwd, int $timeoutSeconds = 8): a
     $output .= (string) stream_get_contents($pipes[1]).(string) stream_get_contents($pipes[2]);
     fclose($pipes[1]);
     fclose($pipes[2]);
-    $exit = proc_close($process);
-    $timedOut = $timedOut || ($usesExternalTimeout && in_array($exit, [124, 137, 143], true));
+    $closeExit = proc_close($process);
+    $exit = $exitCodeFromStatus ?? $closeExit;
+    $timedOut = $timedOut || ($usesExternalTimeout && in_array($exit, [124, 137, 143], true)) || ($usesExternalTimeout && in_array($closeExit, [124, 137, 143], true));
 
     return ['exit' => $timedOut ? 124 : $exit, 'output' => trim($output), 'timed_out' => $timedOut];
 }

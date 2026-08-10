@@ -48,7 +48,10 @@ chmod +x "$fake_bin/hermes"
 printf '%s\n' '#!/usr/bin/env bash' 'case "$1" in' '  --version) printf "%s\\n" "fixture" ;;' '  *--print*|*exec*|*run*) exit 91 ;;' '  *) exit 2 ;;' 'esac' > "$fake_bin/agy"
 chmod +x "$fake_bin/agy"
 
-common_env=(PATH="$fake_bin:/usr/bin:/bin" RALPH_METHOD_SOURCE="$ROOT" RALPH_HERMES_PROVIDER=)
+php_bin="$(command -v php || true)"
+[ -n "$php_bin" ] || fail 'PHP não está disponível no PATH do teste'
+php_runtime_path="$(dirname "$php_bin"):/usr/bin:/bin"
+common_env=(PATH="$fake_bin:$php_runtime_path" RALPH_METHOD_SOURCE="$ROOT" RALPH_HERMES_PROVIDER=)
 
 without_verification="$(env "${common_env[@]}" "$ROOT/bin/ralph-init" plan --project "$project" --provider claude)"
 assert_json "$without_verification" '
@@ -122,7 +125,7 @@ assert_json "$auto_blocked" '
     exit(($plan["orchestration"]["mode"] ?? null) === "needs_review" && ($plan["orchestration"]["primary_runner"] ?? null) === null && ($plan["selection"]["selected_provider"] ?? null) === null && ($plan["selection"]["adapter_enabled"] ?? true) === false ? 0 : 1);
 '
 
-no_runner="$(env PATH=/usr/bin:/bin RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" plan --project "$project" --provider auto --verify-providers)"
+no_runner="$(env PATH="$php_runtime_path" RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" plan --project "$project" --provider auto --verify-providers)"
 assert_json "$no_runner" '
     $plan = json_decode(getenv("JSON"), true, 512, JSON_THROW_ON_ERROR);
     exit(($plan["orchestration"]["mode"] ?? null) === "needs_review" && ($plan["orchestration"]["primary_runner"] ?? null) === null && ($plan["selection"]["available_runners"] ?? ["unexpected"]) === [] ? 0 : 1);

@@ -459,6 +459,30 @@ function commandOutput(string $command, int &$exitCode): string
     return implode("\n", $output);
 }
 
+function closeProcess(mixed $process, ?int $knownExitCode = null): int
+{
+    $closeExit = proc_close($process);
+
+    return $knownExitCode !== null && $knownExitCode >= 0 ? $knownExitCode : $closeExit;
+}
+
+function processNamespaceAvailable(): bool
+{
+    static $available = null;
+    if ($available !== null) {
+        return $available;
+    }
+    if (getenv('RALPH_PROCESS_NAMESPACE') === '0' || ! is_executable('/usr/bin/unshare')) {
+        return $available = false;
+    }
+
+    $output = [];
+    $exitCode = 1;
+    exec('/usr/bin/unshare --user --map-root-user --pid --fork --mount-proc -- /bin/true 2>/dev/null', $output, $exitCode);
+
+    return $available = $exitCode === 0;
+}
+
 function relayFeedbackChunk(string &$buffer, string $chunk): void
 {
     $buffer .= $chunk;
@@ -505,7 +529,7 @@ function captureChunk($handle, string $chunk, int &$bytes, int $limit, string &$
 
 function controlledProcessCommand(string $command): array
 {
-    $namespace = getenv('RALPH_PROCESS_NAMESPACE') !== '0' && is_executable('/usr/bin/unshare');
+    $namespace = processNamespaceAvailable();
     if ($namespace) {
         return [
             'command' => ['setsid', 'unshare', '--user', '--map-root-user', '--pid', '--fork', '--mount-proc', '--', '/bin/sh', '-c', $command],
@@ -842,6 +866,7 @@ function runReadOnlyCommand(string $command, int $timeoutSeconds, array $environ
     $stderr = '';
     $startedAt = microtime(true);
     $timedOut = false;
+    $exitCodeFromStatus = null;
     do {
         $stdoutChunk = stream_get_contents($pipes[1]);
         $stderrChunk = stream_get_contents($pipes[2]);
@@ -853,6 +878,9 @@ function runReadOnlyCommand(string $command, int $timeoutSeconds, array $environ
         }
         $status = proc_get_status($process);
         if (! ($status['running'] ?? false)) {
+            $exitCodeFromStatus = is_int($status['exitcode'] ?? null) && ($status['exitcode'] ?? -1) >= 0
+                ? $status['exitcode']
+                : null;
             break;
         }
         if (microtime(true) - $startedAt >= $timeoutSeconds) {
@@ -876,7 +904,7 @@ function runReadOnlyCommand(string $command, int $timeoutSeconds, array $environ
     }
     fclose($pipes[1]);
     fclose($pipes[2]);
-    $exitCode = proc_close($process);
+    $exitCode = closeProcess($process, $exitCodeFromStatus);
     $tree = processTreeSnapshot($pid);
 
     return [
@@ -2352,7 +2380,10 @@ function superviseWorkflow(array $arguments): void
                 }
 
                 if (! ($status['running'] ?? false)) {
-                    $runExit = proc_close($run['process']);
+                    $knownExitCode = is_int($status['exitcode'] ?? null) && ($status['exitcode'] ?? -1) >= 0
+                        ? $status['exitcode']
+                        : null;
+                    $runExit = closeProcess($run['process'], $knownExitCode);
                     $projection = project(loadWorkflowForId($workflowId), readEvents());
                     $feature = featureFrom($projection, $cursor);
                     if (in_array($feature['state'] ?? null, ['awaiting_gates', 'debugging_required'], true)) {
@@ -3880,6 +3911,7 @@ function runControlled(array $arguments): void
     $lastHeartbeatAt = microtime(true);
     $lastActivityAt = $lastHeartbeatAt;
     $heartbeatSequence = 0;
+    $exitCodeFromStatus = null;
     do {
         $stdoutChunk = stream_get_contents($pipes[1]);
         $stderrChunk = stream_get_contents($pipes[2]);
@@ -3918,6 +3950,9 @@ function runControlled(array $arguments): void
         }
 
         if (! ($status['running'] ?? false)) {
+            $exitCodeFromStatus = is_int($status['exitcode'] ?? null) && ($status['exitcode'] ?? -1) >= 0
+                ? $status['exitcode']
+                : null;
             break;
         }
 
@@ -3945,7 +3980,7 @@ function runControlled(array $arguments): void
     fclose($pipes[2]);
     fclose($stdoutHandle);
     fclose($stderrHandle);
-    $exitCode = proc_close($process);
+    $exitCode = closeProcess($process, $exitCodeFromStatus);
     $processSnapshot = processTreeSnapshot($pid);
     $groupGone = ! $processSnapshot['alive'];
 
