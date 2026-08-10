@@ -135,16 +135,18 @@ opt-in.
 
 ## Estado
 
-A versão publicada atual é `0.6.0`, promovida para `main` no commit
-`5d579b5` e identificada pela tag `v0.6.0`. O método nasceu da extração do núcleo validado no
-`refactor-radar`, mas não possui dependência de runtime, importação de código,
+A versão publicada atual é `0.6.1`, uma release de manutenção baseada no
+merge `ba98dfa` em `main` e identificada pela tag `v0.6.1`. Ela consolida a
+portabilidade do CI em PHP 8.2, o fallback seguro quando namespaces não estão
+disponíveis e a documentação pós-promoção. O método nasceu da extração do
+núcleo validado no `refactor-radar`, mas não possui dependência de runtime, importação de código,
 banco ou credencial desse produto. O bundle pode ser instalado em qualquer
 checkout Git compatível, conforme a prova em
 [`scripts/test-reproducibility.sh`](scripts/test-reproducibility.sh). A
 instalação reversível, o canal de feedback e o guia operacional sincronizado
 para agentes de IA fazem parte da release.
 
-O Ralph Method está na versão publicada `0.6.0`, com memória episódica
+O Ralph Method está na versão publicada `0.6.1`, com memória episódica
 sanitizada, retenção explícita e índices de engenharia por categoria e tema.
 O fechamento de escopo e as decisões de adiamento estão em
 [`docs/adr/0007-escopo-fechado-de-harnesses.md`](docs/adr/0007-escopo-fechado-de-harnesses.md)

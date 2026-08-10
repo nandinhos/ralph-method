@@ -5,6 +5,26 @@ português do Brasil. A versão no arquivo `VERSION` identifica o bundle em
 desenvolvimento; uma versão só é considerada publicada após commit, tag
 anotada e promoção documentada.
 
+## 0.6.1 — publicada em 2026-08-09
+
+### Portabilidade e fechamento da release
+
+- preservado o PHP efetivo dos runners nos fixtures com PATH controlado;
+- usado o exit code observado antes de `proc_close()` nos processos críticos;
+- adicionada alternativa portátil a `rg` nos testes do Ralph Method;
+- sondada a capacidade real de `unshare`, com fallback seguro para
+  `process_group_observed` quando namespaces não estão disponíveis;
+- sincronizados `VERSION`, `STATUS`, README, guia de agentes e incidente do
+  CI pós-promoção;
+- adicionada a evidência numerada da release em
+  `docs/reports/0017-release-manutencao-v0-6-1.md`.
+
+### Estado da publicação
+
+O hotfix foi promovido para `main` pela PR #1 no merge `ba98dfa`. O CI remoto
+passou no run `31341326999`, incluindo os checks portáteis e o GitGuardian. A
+tag anotada `v0.6.1` identifica este fechamento documental e de portabilidade.
+
 ## 0.6.0 — publicada em 2026-08-09
 
 ### Memória episódica e retenção

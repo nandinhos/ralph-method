@@ -1,7 +1,7 @@
 # Guia operacional para agentes de IA — Ralph Method
 
 - guide_version: 1.1.0
-- method_version: 0.6.0
+- method_version: 0.6.1
 - status: ativo
 - fonte_do_metodo: `VERSION`
 - contrato_de_feedback: `schemas/feedback-event.schema.json`
@@ -10,7 +10,9 @@ Escopo da versão: Codex e Claude CLI operam pelos runners nativos do loop;
 OpenCode opera pelo adapter executável certificado em campo. Hermes e agy são
 somente detecção passiva nesta linha e estão no backlog com prioridade nenhuma.
 
-Este documento é o manual operacional para qualquer agente de IA, provider,
+Esta versão de manutenção consolida a portabilidade do CI em PHP 8.2, a
+supervisão sem namespace privilegiado e a documentação pós-promoção. Este
+documento é o manual operacional para qualquer agente de IA, provider,
 subagente ou orquestrador que instalar, executar, revisar, recuperar,
 atualizar ou remover o Ralph Method de um projeto.
 

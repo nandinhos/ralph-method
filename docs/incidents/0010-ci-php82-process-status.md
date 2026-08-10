@@ -4,7 +4,7 @@
 **Componente:** CI portátil, prontidão de providers e control plane
 **Run afetado:** [GitHub Actions 31339614180](https://github.com/nandinhos/ralph-method/actions/runs/31339614180)
 **Commit afetado:** `5d579b5`
-**Status:** hotfix validado localmente; CI remoto pendente
+**Status:** resolvido e promovido para `main`
 
 ## Sintoma
 
@@ -68,5 +68,13 @@ validado nos testes relevantes.
 
 ## Prevenção
 
-O hotfix será enviado primeiro para uma branch de pré-teste. A promoção para
-`main` só será considerada novamente depois de um novo run remoto verde.
+## Resolução e evidência de promoção
+
+O hotfix foi publicado primeiro na branch `fix/ci-portable-path`, passou pelo
+run remoto [`31341326999`](https://github.com/nandinhos/ralph-method/actions/runs/31341326999)
+com exit `0` e foi promovido pela PR #1 no merge `ba98dfa`. A correção entrou
+na release de manutenção `v0.6.1`.
+
+A reprodução equivalente em PHP 8.2 também passou com
+`bash scripts/ci-portable.sh`, incluindo a regressão do supervisor sem
+namespace de usuário permitido.
