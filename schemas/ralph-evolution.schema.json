@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ralph-method.local/schemas/ralph-evolution.schema.json",
+  "title": "Evolução controlada de uma instalação Ralph externa",
+  "type": "object",
+  "required": ["schema_version", "evolution_id", "status", "project", "source", "migration", "backup", "installation", "rollback"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "evolution_id": {"type": "string", "pattern": "^EVL-[0-9]{8}-[0-9]{4}$"},
+    "status": {"enum": ["quarantine_in_progress", "installing", "awaiting_acceptance", "accepted", "failed", "recovery_required", "rolled_back"]},
+    "created_at": {"type": "string"},
+    "updated_at": {"type": "string"},
+    "state_path": {"type": "string"},
+    "project": {"type": "object", "required": ["root", "git"], "properties": {"root": {"type": "string"}, "git": {"type": "object"}}, "additionalProperties": true},
+    "source": {"type": "object", "required": ["classification", "confidence", "signals"], "properties": {"classification": {"type": "string"}, "confidence": {"type": "string"}, "signals": {"type": "array"}}, "additionalProperties": true},
+    "migration": {"type": "object", "required": ["mode", "state_imported", "unsupported_imports"], "properties": {"mode": {"const": "quarantine_only"}, "state_imported": {"const": false}, "adapter": {"type": ["string", "null"]}, "unsupported_imports": {"type": "array", "items": {"type": "string"}}}, "additionalProperties": false},
+    "backup": {"type": "object", "required": ["directory", "files", "preserved_runtime_paths"], "properties": {"directory": {"type": "string"}, "files": {"type": "array"}, "preserved_runtime_paths": {"type": "array"}}, "additionalProperties": true},
+    "installation": {"type": "object", "required": ["method_version", "managed_files", "manifest_hash"], "properties": {"method_version": {"type": "string"}, "managed_files": {"type": "array"}, "manifest_hash": {"type": ["string", "null"]}, "provider": {"type": ["string", "null"]}}, "additionalProperties": true},
+    "rollback": {"type": "object", "required": ["available", "status"], "properties": {"available": {"type": "boolean"}, "status": {"type": "string"}}, "additionalProperties": true},
+    "failure": {"type": "object", "properties": {"message": {"type": "string"}}, "additionalProperties": false},
+    "accepted_at": {"type": "string"}
+  },
+  "additionalProperties": false
+}

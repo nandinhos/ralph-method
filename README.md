@@ -18,9 +18,8 @@ gates comprovam e o controlador decide.
 - desinstalação reversível por ownership e hashes;
 - feedback JSONL/stdout/callback para o orquestrador externo.
 
-A evolução em desenvolvimento está registrada no
-[CHANGELOG](CHANGELOG.md); a versão em `VERSION` e o estado de promoção estão
-em [`docs/STATUS.md`](docs/STATUS.md).
+A evolução publicada está registrada no [CHANGELOG](CHANGELOG.md); a versão em
+`VERSION` e o estado de promoção estão em [`docs/STATUS.md`](docs/STATUS.md).
 
 ## Estrutura
 
@@ -103,9 +102,19 @@ workflow, handoffs e relatórios são preservados.
 O `plan` também verifica se já existe um Ralph de outra origem. O resultado em
 `ralph_installation.external` lista somente sinais relativos, tipo e SHA-256;
 não expõe conteúdo. Um Ralph externo ou uma origem ambígua bloqueia o `apply`
-comum para evitar sobrescrita. A evolução assistida com backup verificável,
-rollback e adapter específico será uma operação separada; nenhum ledger,
-prompt, workflow ou credencial legado é importado automaticamente.
+comum para evitar sobrescrita. A evolução assistida é uma operação separada e
+explícita:
+
+```bash
+ralph-init evolve --project /caminho/do/projeto
+ralph-init evolve --project /caminho/do/projeto --apply
+ralph-init rollback --project /caminho/do/projeto --evolution EVL-YYYYMMDD-NNNN --apply
+```
+
+Ela cria um backup numerado com hashes, isola os sinais detectados, instala o
+método novo e aguarda aceite. O modo é `quarantine_only`: nenhum ledger,
+prompt, workflow, credencial ou estado legado é importado automaticamente.
+Rollback só prossegue sem drift e preserva alterações feitas pelo usuário.
 
 Para comprovar a reprodução a partir de um bundle limpo e de um projeto Git
 independente, execute:
@@ -142,10 +151,10 @@ opt-in.
 
 ## Estado
 
-A versão publicada atual é `0.6.1`, uma release de manutenção baseada no
-merge `ba98dfa` em `main` e identificada pela tag `v0.6.1`. Ela consolida a
-portabilidade do CI em PHP 8.2, o fallback seguro quando namespaces não estão
-disponíveis e a documentação pós-promoção. O método nasceu da extração do
+A versão publicada atual é `0.8.0`, identificada pela tag `v0.8.0`. Ela
+incorpora a manutenção `0.6.1`, consolida a portabilidade do CI em PHP 8.2,
+o fallback seguro quando namespaces não estão disponíveis e adiciona a
+evolução assistida de instalações externas. O método nasceu da extração do
 núcleo validado no `refactor-radar`, mas não possui dependência de runtime, importação de código,
 banco ou credencial desse produto. O bundle pode ser instalado em qualquer
 checkout Git compatível, conforme a prova em
@@ -153,15 +162,18 @@ checkout Git compatível, conforme a prova em
 instalação reversível, o canal de feedback e o guia operacional sincronizado
 para agentes de IA fazem parte da release.
 
-O Ralph Method está na versão publicada `0.6.1`, com memória episódica
-sanitizada, retenção explícita e índices de engenharia por categoria e tema.
+O Ralph Method está na versão publicada `0.8.0`, com memória episódica
+sanitizada, retenção explícita, índices de engenharia por categoria e tema,
+evolução externa com rollback e verificação de campo no OpenCode.
 O fechamento de escopo e as decisões de adiamento estão em
 [`docs/adr/0007-escopo-fechado-de-harnesses.md`](docs/adr/0007-escopo-fechado-de-harnesses.md)
 e [`docs/backlog.md`](docs/backlog.md).
 
-A próxima versão em desenvolvimento é `0.7.0`. Ela adiciona a barreira de
-detecção segura para Ralph externo e prepara o contrato de evolução sem
-misturar ownership, backup legado e runtime novo.
+A versão atual é `0.8.0`. Ela adiciona evolução assistida com backup,
+isolamento, aceite e rollback condicional para Ralph externo, mantendo o
+método desacoplado de estado legado. O ciclo foi comprovado em campo pelo
+OpenCode `1.18.15` e está detalhado em
+[`docs/reports/0019-evolucao-opencode-v0-8-0.md`](docs/reports/0019-evolucao-opencode-v0-8-0.md).
 
 Consulte [docs/README.md](docs/README.md), [docs/STATUS.md](docs/STATUS.md), [docs/architecture/README.md](docs/architecture/README.md),
 [docs/AGENT_GUIDE.md](docs/AGENT_GUIDE.md) e [docs/roadmap.md](docs/roadmap.md).

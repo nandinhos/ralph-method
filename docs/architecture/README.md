@@ -23,6 +23,8 @@ O Ralph Method é um framework local instalado dentro de um projeto-alvo. O
   — decisão de retenção explícita, taxonomia e índices derivados.
 - [../adr/0010-deteccao-evolucao-de-ralph-externo.md](../adr/0010-deteccao-evolucao-de-ralph-externo.md)
   — detecção segura de Ralph externo e evolução assistida futura.
+- [../adr/0011-evolucao-assistida-backup-rollback.md](../adr/0011-evolucao-assistida-backup-rollback.md)
+  — contrato executável de backup, isolamento, aceite e rollback condicional.
 - [../reports/0001-prova-real-opencode.md](../reports/0001-prova-real-opencode.md)
   — evidência da primeira prova real isolada.
 
@@ -49,7 +51,7 @@ Ralph for instalado em outro projeto ou receber outro harness.
 
 | Camada | Componente | Função | Responsabilidade e limite |
 |---|---|---|---|
-| Instalação | `bin/ralph-init` | Instalar, atualizar e remover localmente | Faz `plan`, `apply` e `uninstall` com ownership, hashes, staging, lock, idempotência e rollback; detecta Ralph externo e bloqueia o apply comum sem ownership. |
+| Instalação | `bin/ralph-init` | Instalar, evoluir e remover localmente | Faz `plan`, `apply`, `evolve`, `rollback` e `uninstall` com ownership, hashes, staging, lock, idempotência e aceite explícito; não importa estado legado. |
 | Diagnóstico | `bin/ralph-doctor` | Verificar a instalação | Detecta drift, arquivos ausentes, manifesto inválido e integridade; não corrige silenciosamente. |
 | Handoff | `scripts/ralph-generate-handoff.sh` | Projetar o encerramento da feature | Gera resumo, bugs, evidências e manifestos numerados; não aprova gate. |
 | Qualidade | `scripts/ralph-run-quality.sh` | Executar o comando real do projeto | Centraliza o gate de qualidade e seu exit code; não substitui o comando declarado pelo projeto. |
@@ -81,6 +83,7 @@ Ralph for instalado em outro projeto ou receber outro harness.
 | Eventos de feedback | `schemas/feedback-event.schema.json` | Validar progresso JSONL/stdout/callback | Define correlação, estado, saúde e percentual; feedback é observabilidade, não autorização. |
 | Instalação | `schemas/method-install.schema.json` | Validar manifesto e ownership | Protege hashes, versão e arquivos gerenciados; não autoriza substituir alterações do usuário. |
 | Detecção de instalação | `schemas/ralph-installation-detection.schema.json` | Classificar Ralph Method e Ralph externo | Expõe sinais relativos e hashes sem conteúdo; não migra ou importa runtime desconhecido. |
+| Evolução | `schemas/ralph-evolution.schema.json`, `.ralph/evolutions/` | Controlar backup, isolamento e rollback | Registra estado `EVL-YYYYMMDD-NNNN`, hashes e drift; o modo `quarantine_only` não importa ledger, workflow, prompts ou credenciais. |
 | Readiness | `schemas/provider-readiness.schema.json` | Validar autenticação e capacidade | Separa `functional`, `runner_supported` e `adapter_enabled`; não prova geração real. |
 | Runner | `schemas/runner-result.schema.json` | Validar resultado normalizado | Garante identidade, sessão, evento terminal, fallback e modo impl/verify; não faz transição de estado. |
 | Política read-only | `schemas/readonly-policy-proof.schema.json` | Validar prova externa | Garante fingerprint e status da política; não substitui a revisão independente. |

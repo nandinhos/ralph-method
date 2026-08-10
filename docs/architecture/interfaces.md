@@ -96,7 +96,7 @@ genérico isolado pode produzir `ambiguous`; por segurança também bloqueia o
 `apply`. Em ambos os casos o exit code é `3`, nenhum arquivo é movido e a
 instalação externa permanece intacta.
 
-O caminho futuro de evolução é deliberadamente explícito:
+O caminho de evolução é deliberadamente explícito:
 
 ```text
 plan → inventário aprovado → backup com hashes → isolamento
@@ -106,6 +106,28 @@ plan → inventário aprovado → backup com hashes → isolamento
 
 Não existe migração genérica nesta versão. O método não importa ledger,
 workflow, prompts, credenciais ou eventos de uma origem desconhecida.
+
+### Evolução assistida e rollback
+
+Quando o `plan` detectar uma instalação externa, o agente pode solicitar a
+operação explícita abaixo:
+
+```bash
+bin/ralph-init evolve --project /projeto
+bin/ralph-init evolve --project /projeto --apply
+bin/ralph-init rollback --project /projeto --evolution EVL-YYYYMMDD-NNNN
+bin/ralph-init rollback --project /projeto --evolution EVL-YYYYMMDD-NNNN --apply
+bin/ralph-init evolve --project /projeto --evolution EVL-YYYYMMDD-NNNN --accept --apply
+```
+
+`evolve --apply` adquire o mesmo `install.lock`, revalida os hashes, move os
+sinais não-runtime para `.ralph/evolutions/<id>/backup/`, preserva
+`.git/ralph-control` e instala o bundle atual. O estado termina em
+`awaiting_acceptance`; repetir o comando é idempotente e devolve o mesmo ID.
+`rollback --apply` verifica o manifesto novo, todos os hashes instalados, a
+existência do backup e a ausência de destino ocupado. Qualquer drift bloqueia
+com exit code `3`; nenhuma alteração do usuário é sobrescrita. O aceite marca
+o estado como `accepted`, mas mantém o backup para uma decisão posterior.
 
 ## Canal de feedback do loop
 

@@ -25,7 +25,22 @@ O hotfix foi promovido para `main` pela PR #1 no merge `ba98dfa`. O CI remoto
 passou no run `31341326999`, incluindo os checks portáteis e o GitGuardian. A
 tag anotada `v0.6.1` identifica este fechamento documental e de portabilidade.
 
-## 0.7.0 — em desenvolvimento
+## 0.8.0 — publicada em 2026-08-10
+
+### Evolução assistida com backup e rollback
+
+- adicionados `evolve --plan/--apply` e `rollback --plan/--apply`;
+- criado estado numerado `EVL-YYYYMMDD-NNNN` com backup e hashes;
+- isolados somente sinais externos detectados, sem importar ledger, workflow,
+  prompts, credenciais ou eventos;
+- preservados sinais de runtime em `.git/ralph-control`;
+- adicionado aceite explícito com backup mantido;
+- bloqueado rollback quando a instalação nova possui drift, arquivo ausente,
+  backup incompleto ou destino ocupado;
+- adicionada regressão de idempotência, restauração, drift e runtime legado;
+- adicionado o contrato `schemas/ralph-evolution.schema.json`;
+- comprovado o ciclo completo em fixture isolada conduzida pelo OpenCode
+  `1.18.15`, com relatório numerado `docs/reports/0019-evolucao-opencode-v0-8-0.md`.
 
 ### Detecção segura de instalação externa
 
@@ -39,8 +54,8 @@ tag anotada `v0.6.1` identifica este fechamento documental e de portabilidade.
 - documentada a evolução futura com backup, rollback e adapter de origem, sem
   migração genérica de ledger, prompts, workflow ou credenciais.
 
-Esta versão está em validação na branch `dev`; ainda não possui tag ou
-promoção para `main`.
+Esta versão foi validada na branch `dev`, promovida para `main` e identificada
+pela tag anotada `v0.8.0`.
 
 ## 0.6.0 — publicada em 2026-08-09
 

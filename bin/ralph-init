@@ -3,9 +3,10 @@
 
 declare(strict_types=1);
 
-const RALPH_METHOD_VERSION = '0.7.0';
+const RALPH_METHOD_VERSION = '0.8.0';
 const RALPH_INSTALL_SCHEMA_VERSION = '1.0.0';
 const RALPH_INSTALL_DETECTION_SCHEMA_VERSION = '1.0.0';
+const RALPH_EVOLUTION_SCHEMA_VERSION = '1.0.0';
 
 $sourceRoot = realpath(getenv('RALPH_METHOD_SOURCE') ?: dirname(__DIR__)) ?: dirname(__DIR__);
 
@@ -15,7 +16,7 @@ function fail(string $message, int $code = 1): never
     exit($code);
 }
 
-/** @return array{command: string, project: string, provider: string, apply: bool, verify_providers: bool} */
+/** @return array{command: string, project: string, provider: string, apply: bool, verify_providers: bool, evolution_id: ?string, accept: bool} */
 function arguments(array $argv): array
 {
     $command = $argv[1] ?? 'plan';
@@ -31,6 +32,8 @@ function arguments(array $argv): array
         'provider' => 'auto',
         'apply' => false,
         'verify_providers' => false,
+        'evolution_id' => null,
+        'accept' => false,
     ];
     for ($index = $offset; $index < count($argv); $index++) {
         $argument = $argv[$index];
@@ -40,6 +43,18 @@ function arguments(array $argv): array
         }
         if ($argument === '--verify-providers') {
             $result['verify_providers'] = true;
+            continue;
+        }
+        if ($argument === '--accept') {
+            $result['accept'] = true;
+            continue;
+        }
+        if (str_starts_with($argument, '--evolution=')) {
+            $result['evolution_id'] = substr($argument, strlen('--evolution='));
+            continue;
+        }
+        if ($argument === '--evolution') {
+            $result['evolution_id'] = $argv[++$index] ?? '';
             continue;
         }
         if (str_starts_with($argument, '--project=')) {
@@ -59,13 +74,13 @@ function arguments(array $argv): array
             continue;
         }
         if (in_array($argument, ['--help', '-h'], true)) {
-            echo "uso: bin/ralph-init plan|apply|uninstall|doctor --project <path> [--provider auto|codex|claude|opencode|hermes|agy] [--verify-providers] [--apply]\n";
+            echo "uso: bin/ralph-init plan|apply|evolve|rollback|uninstall|doctor --project <path> [--provider auto|codex|claude|opencode|hermes|agy] [--verify-providers] [--evolution EVL-YYYYMMDD-NNNN] [--accept] [--apply]\n";
             exit(0);
         }
         fail("argumento desconhecido: {$argument}", 2);
     }
-    if (! in_array($result['command'], ['plan', 'apply', 'uninstall', 'doctor'], true)) {
-        fail('comando inválido; use plan, apply, uninstall ou doctor', 2);
+    if (! in_array($result['command'], ['plan', 'apply', 'evolve', 'rollback', 'uninstall', 'doctor'], true)) {
+        fail('comando inválido; use plan, apply, evolve, rollback, uninstall ou doctor', 2);
     }
     if (! in_array($result['provider'], ['auto', 'codex', 'claude', 'opencode', 'hermes', 'agy'], true)) {
         fail('provider inválido', 2);
@@ -684,6 +699,20 @@ function writeJson(string $path, array $value): void
     }
 }
 
+function writeJsonStrict(string $path, array $value): void
+{
+    $directory = dirname($path);
+    if (! is_dir($directory) && ! mkdir($directory, 0700, true) && ! is_dir($directory)) {
+        throw new RuntimeException("não foi possível criar {$directory}");
+    }
+    $temporary = $path.'.tmp.'.bin2hex(random_bytes(6));
+    $json = json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR)."\n";
+    if (file_put_contents($temporary, $json, LOCK_EX) === false || ! rename($temporary, $path)) {
+        @unlink($temporary);
+        throw new RuntimeException("não foi possível escrever {$path}");
+    }
+}
+
 /** @return list<string> */
 function managedSources(): array
 {
@@ -698,6 +727,7 @@ function managedSources(): array
         'schemas/feedback-event.schema.json', 'schemas/provider-readiness.schema.json',
         'schemas/runner-result.schema.json', 'schemas/readonly-policy-proof.schema.json',
         'schemas/knowledge-candidate.schema.json', 'schemas/ralph-installation-detection.schema.json',
+        'schemas/ralph-evolution.schema.json',
         'adapters/README.md', 'adapters/opencode/runner.sh',
         'adapters/opencode/parser.php', 'adapters/opencode/policy.php', 'adapters/opencode/contract.md',
         'scripts/opencode-readonly-proof.sh', '.opencode/agents/ralph-review.md',
@@ -728,6 +758,17 @@ function writeText(string $path, string $content): void
     }
     if (file_put_contents($path, $content, LOCK_EX) === false) {
         fail("não foi possível escrever {$path}");
+    }
+}
+
+function writeTextStrict(string $path, string $content): void
+{
+    $directory = dirname($path);
+    if (! is_dir($directory) && ! mkdir($directory, 0700, true) && ! is_dir($directory)) {
+        throw new RuntimeException("não foi possível criar {$directory}");
+    }
+    if (file_put_contents($path, $content, LOCK_EX) === false) {
+        throw new RuntimeException("não foi possível escrever {$path}");
     }
 }
 
@@ -906,47 +947,84 @@ function printPlan(array $plan): void
     echo json_encode($plan, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR)."\n";
 }
 
-function applyInstallation(string $root, array $plan): void
+function externalSignalsApproved(array $external, array $allowedPaths): bool
+{
+    if (($external['status'] ?? null) === 'not_found') {
+        return true;
+    }
+    if ($allowedPaths === [] || ! is_array($external['signals'] ?? null)) {
+        return false;
+    }
+    $allowed = array_fill_keys(array_map('strval', $allowedPaths), true);
+    foreach ($external['signals'] as $signal) {
+        if (! is_array($signal) || ! isset($allowed[(string) ($signal['path'] ?? '')])) {
+            return false;
+        }
+    }
+
+    return $external['signals'] !== [];
+}
+
+function installationFailure(string $message, int $code, bool $throwErrors): never
+{
+    if ($throwErrors) {
+        throw new RuntimeException($message);
+    }
+
+    fail($message, $code);
+}
+
+/** @return array<string, mixed> */
+function installMethod(string $root, array $plan, $existingLock = null, array $allowedExternalPaths = [], bool $throwErrors = false): array
 {
     global $sourceRoot;
     $ralphInstallation = $plan['ralph_installation']['external'] ?? [];
-    if (($ralphInstallation['apply_allowed'] ?? false) !== true) {
+    if (($ralphInstallation['apply_allowed'] ?? false) !== true
+        && ! externalSignalsApproved($ralphInstallation, $allowedExternalPaths)) {
         $status = (string) ($ralphInstallation['status'] ?? 'unknown');
         $reason = (string) ($ralphInstallation['reason'] ?? 'a origem existente não foi classificada');
-        fail("apply bloqueado: instalação Ralph {$status} fora do Ralph Method ({$reason}); preserve-a e faça uma migração explícita quando houver adapter compatível", 3);
+        installationFailure("apply bloqueado: instalação Ralph {$status} fora do Ralph Method ({$reason}); preserve-a e faça uma migração explícita quando houver adapter compatível", 3, $throwErrors);
     }
     foreach ($plan['files'] as $file) {
         if ($file['action'] === 'conflict') {
-            fail('instalação interrompida por conflito em '.$file['path'], 3);
+            installationFailure('instalação interrompida por conflito em '.$file['path'], 3, $throwErrors);
         }
     }
     if (($plan['selection']['requested_provider'] ?? 'auto') !== 'auto' && ! ($plan['selection']['adapter_enabled'] ?? false)) {
         $provider = $plan['selection']['selected_provider'] ?? 'desconhecido';
-        fail("provider {$provider} não está apto; use --verify-providers e corrija autenticação/diagnóstico antes de habilitar o adapter", 3);
+        installationFailure("provider {$provider} não está apto; use --verify-providers e corrija autenticação/diagnóstico antes de habilitar o adapter", 3, $throwErrors);
     }
     $provider = $plan['orchestration']['primary_runner'];
-    $lockPath = $root.'/.ralph/install.lock';
-    if (! is_dir(dirname($lockPath)) && ! mkdir(dirname($lockPath), 0700, true) && ! is_dir(dirname($lockPath))) {
-        fail('não foi possível preparar o lock da instalação');
-    }
-    $lock = fopen($lockPath, 'c+');
-    if ($lock === false || ! flock($lock, LOCK_EX | LOCK_NB)) {
-        if (is_resource($lock)) {
-            fclose($lock);
+    $ownsLock = false;
+    $lock = $existingLock;
+    if (! is_resource($lock)) {
+        $lockPath = $root.'/.ralph/install.lock';
+        if (! is_dir(dirname($lockPath)) && ! mkdir(dirname($lockPath), 0700, true) && ! is_dir(dirname($lockPath))) {
+            installationFailure('não foi possível preparar o lock da instalação', 4, $throwErrors);
         }
-        fail('já existe uma instalação ou remoção em andamento', 4);
+        $lock = fopen($lockPath, 'c+');
+        if ($lock === false || ! flock($lock, LOCK_EX | LOCK_NB)) {
+            if (is_resource($lock)) {
+                fclose($lock);
+            }
+            installationFailure('já existe uma instalação ou remoção em andamento', 4, $throwErrors);
+        }
+        $ownsLock = true;
     }
 
     // Revalida depois do lock: entre o plan e o apply outro processo pode ter
     // criado um marcador externo. O bloqueio precisa continuar fail-closed.
     $currentManifest = parseManifest($root.'/.ralph/install-manifest.json', $root);
     $currentInstallation = detectExistingRalphInstallation($root, $currentManifest);
-    if (($currentInstallation['external']['apply_allowed'] ?? false) !== true) {
+    if (($currentInstallation['external']['apply_allowed'] ?? false) !== true
+        && ! externalSignalsApproved($currentInstallation['external'] ?? [], $allowedExternalPaths)) {
         $status = (string) ($currentInstallation['external']['status'] ?? 'unknown');
         $reason = (string) ($currentInstallation['external']['reason'] ?? 'a origem existente não foi classificada');
-        flock($lock, LOCK_UN);
-        fclose($lock);
-        fail("apply bloqueado após revalidação: instalação Ralph {$status} fora do Ralph Method ({$reason})", 3);
+        if ($ownsLock) {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
+        installationFailure("apply bloqueado após revalidação: instalação Ralph {$status} fora do Ralph Method ({$reason})", 3, $throwErrors);
     }
 
     $stage = $root.'/.ralph/.install-stage-'.bin2hex(random_bytes(6));
@@ -970,10 +1048,10 @@ function applyInstallation(string $root, array $plan): void
         foreach ($sourceFiles as $file) {
             stageCopy($sourceRoot.'/'.$file['path'], $stage.'/'.$file['path']);
         }
-        writeJson($stage.'/.ralph/method.json', $method);
-        writeJson($stage.'/.ralph/providers.json', $providers);
+        writeJsonStrict($stage.'/.ralph/method.json', $method);
+        writeJsonStrict($stage.'/.ralph/providers.json', $providers);
         foreach (generatedProfiles() as $relative => $content) {
-            writeText($stage.'/'.$relative, $content);
+            writeTextStrict($stage.'/'.$relative, $content);
             chmod($stage.'/'.$relative, 0644);
         }
 
@@ -995,21 +1073,685 @@ function applyInstallation(string $root, array $plan): void
             'components' => ['installer', 'control_plane', 'trace', 'monitor', 'metrics', 'loop', 'hook', 'feedback', 'provider_readiness'],
             'managed_files' => $managed,
         ];
-        writeJson($stage.'/.ralph/install-manifest.json', $manifest);
+        writeJsonStrict($stage.'/.ralph/install-manifest.json', $manifest);
 
         $commitPaths = array_merge(array_map(static fn (array $file): string => (string) $file['path'], $managedFiles), ['.ralph/install-manifest.json']);
         commitStagedFiles($root, $stage, $backup, $commitPaths);
         removeTree($backup);
         removeTree($stage);
-        flock($lock, LOCK_UN);
-        fclose($lock);
-        printPlan(['status' => 'installed', 'method_version' => RALPH_METHOD_VERSION, 'provider' => $provider, 'manifest' => '.ralph/install-manifest.json']);
+        if ($ownsLock) {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
+
+        return ['status' => 'installed', 'method_version' => RALPH_METHOD_VERSION, 'provider' => $provider, 'manifest' => '.ralph/install-manifest.json'];
     } catch (Throwable $exception) {
         removeTree($stage);
         removeTree($backup);
+        if ($ownsLock) {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
+        installationFailure('instalação transacional revertida: '.$exception->getMessage(), 4, $throwErrors);
+    }
+}
+
+function applyInstallation(string $root, array $plan): void
+{
+    printPlan(installMethod($root, $plan));
+}
+
+/** @return resource */
+function openInstallationLock(string $root)
+{
+    $lockPath = $root.'/.ralph/install.lock';
+    if (! is_dir(dirname($lockPath)) && ! mkdir(dirname($lockPath), 0700, true) && ! is_dir(dirname($lockPath))) {
+        throw new RuntimeException('não foi possível preparar o lock da instalação');
+    }
+    $lock = fopen($lockPath, 'c+');
+    if ($lock === false || ! flock($lock, LOCK_EX | LOCK_NB)) {
+        if (is_resource($lock)) {
+            fclose($lock);
+        }
+        throw new RuntimeException('já existe uma instalação, evolução ou remoção em andamento');
+    }
+
+    return $lock;
+}
+
+function closeInstallationLock($lock): void
+{
+    if (is_resource($lock)) {
         flock($lock, LOCK_UN);
         fclose($lock);
-        fail('instalação transacional revertida: '.$exception->getMessage(), 4);
+    }
+}
+
+function evolutionIdValid(?string $evolutionId): bool
+{
+    return $evolutionId !== null && preg_match('/^EVL-[0-9]{8}-[0-9]{4}$/', $evolutionId) === 1;
+}
+
+function evolutionBase(string $root, string $evolutionId): string
+{
+    return $root.'/.ralph/evolutions/'.$evolutionId;
+}
+
+/** @return list<array<string, mixed>> */
+function evolutionStates(string $root): array
+{
+    $states = [];
+    foreach (glob($root.'/.ralph/evolutions/EVL-*/evolution.json') ?: [] as $path) {
+        try {
+            $state = json_decode((string) file_get_contents($path), true, 512, JSON_THROW_ON_ERROR);
+        } catch (JsonException) {
+            continue;
+        }
+        if (is_array($state) && is_string($state['evolution_id'] ?? null)) {
+            $states[] = $state;
+        }
+    }
+
+    usort($states, static fn (array $left, array $right): int => strcmp((string) ($left['evolution_id'] ?? ''), (string) ($right['evolution_id'] ?? '')));
+
+    return $states;
+}
+
+/** @return array<string, mixed>|null */
+function findEvolutionState(string $root, ?string $evolutionId = null): ?array
+{
+    $states = evolutionStates($root);
+    if ($evolutionId !== null) {
+        foreach ($states as $state) {
+            if (($state['evolution_id'] ?? null) === $evolutionId) {
+                return $state;
+            }
+        }
+        return null;
+    }
+
+    foreach (array_reverse($states) as $state) {
+        if (in_array($state['status'] ?? null, ['quarantine_in_progress', 'installing', 'awaiting_acceptance', 'accepted', 'recovery_required'], true)) {
+            return $state;
+        }
+    }
+
+    return null;
+}
+
+function nextEvolutionId(string $root): string
+{
+    $date = gmdate('Ymd');
+    $highest = 0;
+    foreach (evolutionStates($root) as $state) {
+        $id = (string) ($state['evolution_id'] ?? '');
+        if (preg_match('/^EVL-'.$date.'-([0-9]{4})$/', $id, $matches) === 1) {
+            $highest = max($highest, (int) $matches[1]);
+        }
+    }
+
+    return sprintf('EVL-%s-%04d', $date, $highest + 1);
+}
+
+function signalIsRuntime(array $signal): bool
+{
+    return ($signal['kind'] ?? null) === 'runtime_ledger'
+        || ($signal['kind'] ?? null) === 'runtime_state';
+}
+
+/** @return array<string, mixed> */
+function evolutionPlan(string $root, array $detected, ?string $provider, string $requestedProvider): array
+{
+    $plan = installationPlan($root, $detected, $provider, $requestedProvider);
+    $installation = $plan['ralph_installation'] ?? [];
+    $external = $installation['external'] ?? [];
+    $existingState = findEvolutionState($root);
+    $movable = [];
+    $preserved = [];
+    foreach ($external['signals'] ?? [] as $signal) {
+        if (signalIsRuntime($signal)) {
+            $preserved[] = $signal;
+        } else {
+            $movable[] = $signal;
+        }
+    }
+
+    $status = 'blocked';
+    $reason = 'nenhuma evolução externa apta foi encontrada';
+    if ($existingState !== null && in_array($existingState['status'] ?? null, ['quarantine_in_progress', 'installing', 'recovery_required'], true)) {
+        $status = 'recovery_required';
+        $reason = 'há uma evolução interrompida que exige recuperação explícita';
+    } elseif (($installation['method']['status'] ?? null) === 'managed') {
+        $status = 'managed_installation';
+        $reason = 'o projeto já possui um manifesto válido do Ralph Method';
+    } elseif (($external['status'] ?? null) === 'detected' || ($external['status'] ?? null) === 'ambiguous') {
+        $status = 'ready';
+        $reason = 'a evolução poderá isolar somente os sinais detectados e instalar o Ralph Method sem importar estado legado';
+    } elseif (($external['status'] ?? null) === 'not_found') {
+        $status = 'not_applicable';
+        $reason = 'não há Ralph externo para evoluir; use plan/apply para uma instalação nova';
+    }
+
+    $movablePaths = array_fill_keys(array_map(static fn (array $signal): string => (string) ($signal['path'] ?? ''), $movable), true);
+    $plannedFiles = array_map(static function (array $file) use ($movablePaths): array {
+        if (($file['action'] ?? null) === 'conflict' && isset($movablePaths[(string) ($file['path'] ?? '')])) {
+            $file['action'] = 'quarantine_then_create';
+        }
+        return $file;
+    }, $plan['files']);
+
+    return [
+        'schema_version' => RALPH_EVOLUTION_SCHEMA_VERSION,
+        'status' => $status,
+        'reason' => $reason,
+        'project' => $plan['project'],
+        'requested_provider' => $requestedProvider,
+        'selected_provider' => $provider,
+        'ralph_installation' => $installation,
+        'migration' => [
+            'mode' => 'quarantine_only',
+            'state_imported' => false,
+            'adapter' => null,
+            'unsupported_imports' => ['ledger', 'workflow', 'prompts', 'credentials'],
+        ],
+        'backup' => [
+            'created_on_apply' => true,
+            'directory' => null,
+            'signals_to_quarantine' => $movable,
+            'signals_preserved' => $preserved,
+        ],
+        'new_installation' => [
+            'method_version' => RALPH_METHOD_VERSION,
+            'files' => $plannedFiles,
+        ],
+        'existing_evolution' => $existingState === null ? null : [
+            'evolution_id' => $existingState['evolution_id'] ?? null,
+            'status' => $existingState['status'] ?? null,
+        ],
+        'approval_required' => true,
+    ];
+}
+
+/** @param array<string, mixed> $state */
+function updateEvolutionState(array &$state, string $status, ?string $failure = null): void
+{
+    $state['status'] = $status;
+    $state['updated_at'] = gmdate('Y-m-d\TH:i:s\Z');
+    if ($failure !== null) {
+        $state['failure'] = ['message' => substr($failure, 0, 300)];
+    }
+    writeJsonStrict((string) $state['state_path'], $state);
+}
+
+/** @param array<string, mixed> $state */
+function restoreEvolutionSignals(array &$state): void
+{
+    $root = (string) $state['project']['root'];
+    foreach (array_reverse(array_keys($state['backup']['files'] ?? [])) as $index) {
+        $file = &$state['backup']['files'][$index];
+        if (! in_array(($file['status'] ?? null), ['quarantining', 'quarantined', 'restoring'], true)) {
+            continue;
+        }
+        $destination = $root.'/'.$file['path'];
+        $backupPath = $root.'/'.$file['backup_path'];
+        if (($file['status'] ?? null) === 'restoring' && is_file($destination) && ! is_file($backupPath)) {
+            if (hashFile($destination) !== ($file['sha256'] ?? null)) {
+                throw new RuntimeException('restauração interrompida com conteúdo divergente em '.$file['path']);
+            }
+            $file['status'] = 'restored';
+            writeJsonStrict((string) $state['state_path'], $state);
+            unset($file);
+            continue;
+        }
+        if (! is_file($backupPath)) {
+            throw new RuntimeException('backup ausente para '.$file['path']);
+        }
+        if (is_file($destination)) {
+            throw new RuntimeException('restauração recusada: destino ocupado '.$file['path']);
+        }
+        if (! is_dir(dirname($destination)) && ! mkdir(dirname($destination), 0700, true) && ! is_dir(dirname($destination))) {
+            throw new RuntimeException('não foi possível preparar restauração de '.$file['path']);
+        }
+        $file['status'] = 'restoring';
+        writeJsonStrict((string) $state['state_path'], $state);
+        if (! rename($backupPath, $destination)) {
+            throw new RuntimeException('não foi possível restaurar '.$file['path']);
+        }
+        $file['status'] = 'restored';
+        writeJsonStrict((string) $state['state_path'], $state);
+        unset($file);
+    }
+}
+
+/** @param array<string, mixed> $state */
+function evolveApply(string $root, array $detected, string $requestedProvider, bool $verifyProviders): void
+{
+    global $sourceRoot;
+    $lock = null;
+    $state = null;
+    $installed = false;
+    try {
+        $lock = openInstallationLock($root);
+        $existing = findEvolutionState($root);
+        if ($existing !== null && ($existing['status'] ?? null) === 'awaiting_acceptance') {
+            closeInstallationLock($lock);
+            printPlan(['status' => 'already_pending', 'evolution_id' => $existing['evolution_id'], 'state' => '.ralph/evolutions/'.$existing['evolution_id'].'/evolution.json']);
+            return;
+        }
+        if ($existing !== null && in_array($existing['status'] ?? null, ['quarantine_in_progress', 'installing', 'recovery_required'], true)) {
+            throw new RuntimeException('há uma evolução interrompida; execute rollback --evolution '.$existing['evolution_id'].' --apply após revisar o estado');
+        }
+
+        $detected = detectProject($root, $verifyProviders);
+        $provider = selectProvider($detected, $requestedProvider);
+        $plan = installationPlan($root, $detected, $provider, $requestedProvider);
+        $external = $plan['ralph_installation']['external'] ?? [];
+        if (($plan['ralph_installation']['method']['status'] ?? null) === 'managed') {
+            throw new RuntimeException('o projeto já possui uma instalação válida do Ralph Method; evolução externa não se aplica');
+        }
+        if (! in_array($external['status'] ?? null, ['detected', 'ambiguous'], true)) {
+            throw new RuntimeException('nenhuma instalação Ralph externa apta para evolução foi encontrada');
+        }
+
+        $evolutionId = nextEvolutionId($root);
+        $base = evolutionBase($root, $evolutionId);
+        $backupBase = $base.'/backup';
+        if (! mkdir($backupBase, 0700, true) && ! is_dir($backupBase)) {
+            throw new RuntimeException('não foi possível criar o diretório de backup da evolução');
+        }
+        $state = [
+            'schema_version' => RALPH_EVOLUTION_SCHEMA_VERSION,
+            'evolution_id' => $evolutionId,
+            'status' => 'quarantine_in_progress',
+            'created_at' => gmdate('Y-m-d\TH:i:s\Z'),
+            'updated_at' => gmdate('Y-m-d\TH:i:s\Z'),
+            'state_path' => $base.'/evolution.json',
+            'project' => ['root' => $root, 'git' => $plan['project']['git']],
+            'source' => [
+                'classification' => $external['classification'],
+                'confidence' => $external['confidence'],
+                'signals' => $external['signals'],
+            ],
+            'migration' => [
+                'mode' => 'quarantine_only',
+                'state_imported' => false,
+                'adapter' => null,
+                'unsupported_imports' => ['ledger', 'workflow', 'prompts', 'credentials'],
+            ],
+            'backup' => [
+                'directory' => '.ralph/evolutions/'.$evolutionId.'/backup',
+                'files' => [],
+                'preserved_runtime_paths' => [],
+            ],
+            'installation' => [
+                'method_version' => RALPH_METHOD_VERSION,
+                'managed_files' => [],
+                'manifest_hash' => null,
+            ],
+            'rollback' => ['available' => true, 'status' => 'not_started'],
+        ];
+        foreach ($external['signals'] as $signal) {
+            $relative = (string) $signal['path'];
+            if (signalIsRuntime($signal)) {
+                $state['backup']['preserved_runtime_paths'][] = ['path' => $relative, 'sha256' => $signal['sha256']];
+                continue;
+            }
+            $state['backup']['files'][] = [
+                'path' => $relative,
+                'sha256' => $signal['sha256'],
+                'backup_path' => '.ralph/evolutions/'.$evolutionId.'/backup/'.$relative,
+                'status' => 'pending',
+            ];
+        }
+        writeJsonStrict($state['state_path'], $state);
+
+        foreach ($state['backup']['files'] as $index => $file) {
+            $source = $root.'/'.$file['path'];
+            if (hashFile($source) !== $file['sha256']) {
+                throw new RuntimeException('o sinal mudou entre o plan e o apply: '.$file['path']);
+            }
+            $backupPath = $root.'/'.$file['backup_path'];
+            if (! is_dir(dirname($backupPath)) && ! mkdir(dirname($backupPath), 0700, true) && ! is_dir(dirname($backupPath))) {
+                throw new RuntimeException('não foi possível preparar backup de '.$file['path']);
+            }
+            $state['backup']['files'][$index]['status'] = 'quarantining';
+            writeJsonStrict($state['state_path'], $state);
+            if (! rename($source, $backupPath)) {
+                throw new RuntimeException('não foi possível isolar '.$file['path']);
+            }
+            $state['backup']['files'][$index]['status'] = 'quarantined';
+            writeJsonStrict($state['state_path'], $state);
+        }
+
+        updateEvolutionState($state, 'installing');
+        $freshDetected = detectProject($root, $verifyProviders);
+        $freshProvider = selectProvider($freshDetected, $requestedProvider);
+        $freshPlan = installationPlan($root, $freshDetected, $freshProvider, $requestedProvider);
+        $preservedPaths = array_map(static fn (array $item): string => (string) $item['path'], $state['backup']['preserved_runtime_paths']);
+        $installResult = installMethod($root, $freshPlan, $lock, $preservedPaths, true);
+        $installed = true;
+        $manifest = parseManifest($root.'/.ralph/install-manifest.json', $root);
+        if ($manifest === null) {
+            throw new RuntimeException('manifesto novo não pôde ser validado após a instalação');
+        }
+        $state['installation']['method_version'] = $manifest['method_version'];
+        $state['installation']['managed_files'] = array_merge(
+            $manifest['managed_files'],
+            [['path' => '.ralph/install-manifest.json', 'installed_hash' => hashFile($root.'/.ralph/install-manifest.json')]]
+        );
+        $state['installation']['manifest_hash'] = hashFile($root.'/.ralph/install-manifest.json');
+        $state['installation']['provider'] = $installResult['provider'] ?? null;
+        updateEvolutionState($state, 'awaiting_acceptance');
+        $result = [
+            'status' => 'awaiting_acceptance',
+            'evolution_id' => $evolutionId,
+            'method_version' => RALPH_METHOD_VERSION,
+            'migration' => $state['migration'],
+            'backup' => $state['backup'],
+            'rollback' => ['command' => 'bin/ralph-init rollback --project '.$root.' --evolution '.$evolutionId.' --apply'],
+            'accept' => ['command' => 'bin/ralph-init evolve --project '.$root.' --evolution '.$evolutionId.' --accept --apply'],
+        ];
+        closeInstallationLock($lock);
+        printPlan($result);
+    } catch (Throwable $exception) {
+        if (is_array($state) && ! $installed) {
+            try {
+                restoreEvolutionSignals($state);
+                updateEvolutionState($state, 'failed', $exception->getMessage());
+            } catch (Throwable $restoreException) {
+                try {
+                    updateEvolutionState($state, 'recovery_required', $exception->getMessage().' | restauração: '.$restoreException->getMessage());
+                } catch (Throwable) {
+                    // O manifesto parcial permanece como evidência para o doctor.
+                }
+            }
+        } elseif (is_array($state)) {
+            try {
+                updateEvolutionState($state, 'recovery_required', $exception->getMessage());
+            } catch (Throwable) {
+                // O estado installing exige recuperação explícita se o disco falhar.
+            }
+        }
+        closeInstallationLock($lock);
+        fail('evolução não concluída: '.$exception->getMessage(), 4);
+    }
+}
+
+/** @return list<array<string, mixed>>|null */
+function evolutionManagedFiles(string $root, array $state): ?array
+{
+    $managedFiles = $state['installation']['managed_files'] ?? [];
+    if ($managedFiles !== []) {
+        return $managedFiles;
+    }
+
+    $manifest = parseManifest($root.'/.ralph/install-manifest.json', $root);
+    if ($manifest === null || ($manifest['method_version'] ?? null) !== ($state['installation']['method_version'] ?? null)) {
+        return null;
+    }
+
+    return array_merge(
+        $manifest['managed_files'],
+        [['path' => '.ralph/install-manifest.json', 'installed_hash' => hashFile($root.'/.ralph/install-manifest.json')]]
+    );
+}
+
+/** @return array<string, mixed> */
+function rollbackPlan(string $root, string $evolutionId): array
+{
+    $state = findEvolutionState($root, $evolutionId);
+    if ($state === null) {
+        return ['schema_version' => RALPH_EVOLUTION_SCHEMA_VERSION, 'status' => 'not_found', 'evolution_id' => $evolutionId, 'rollback_allowed' => false];
+    }
+    if (($state['status'] ?? null) === 'rolled_back') {
+        return ['schema_version' => RALPH_EVOLUTION_SCHEMA_VERSION, 'status' => 'already_rolled_back', 'evolution_id' => $evolutionId, 'rollback_allowed' => false];
+    }
+    $persistedRoot = (string) ($state['project']['root'] ?? '');
+    if ($persistedRoot !== $root) {
+        return [
+            'schema_version' => RALPH_EVOLUTION_SCHEMA_VERSION,
+            'status' => 'blocked',
+            'reason' => 'o projeto atual não corresponde à raiz registrada na evolução; não seguiria um caminho antigo',
+            'evolution_id' => $evolutionId,
+            'evolution_status' => $state['status'] ?? null,
+            'rollback_allowed' => false,
+            'root_mismatch' => ['requested' => $root, 'persisted' => $persistedRoot],
+        ];
+    }
+    $managedFiles = evolutionManagedFiles($root, $state);
+    $managedFilesKnown = $managedFiles !== null;
+    $managedFiles ??= [];
+    $stagingRoot = null;
+    if (is_string($state['rollback']['staging_path'] ?? null)) {
+        $stagingRoot = $root.'/'.$state['rollback']['staging_path'];
+    }
+    $drift = [];
+    foreach ($managedFiles as $managed) {
+        $path = (string) ($managed['path'] ?? '');
+        $expected = $managed['installed_hash'] ?? null;
+        $actual = hashFile($root.'/'.$path);
+        if ($actual === null && $stagingRoot !== null && is_file($stagingRoot.'/'.$path)) {
+            $actual = hashFile($stagingRoot.'/'.$path);
+        }
+        if ($actual !== $expected) {
+            $drift[] = ['path' => $path, 'expected' => $expected, 'actual' => $actual];
+        }
+    }
+    $missingBackup = [];
+    $occupiedDestinations = [];
+    $managedPaths = array_fill_keys(array_map(static fn (array $file): string => (string) ($file['path'] ?? ''), $managedFiles), true);
+    foreach ($state['backup']['files'] ?? [] as $file) {
+        $status = (string) ($file['status'] ?? 'pending');
+        $backupPath = $root.'/'.(string) ($file['backup_path'] ?? '');
+        $destination = $root.'/'.(string) ($file['path'] ?? '');
+        $restoringInPlace = $status === 'restoring'
+            && ! is_file($backupPath)
+            && is_file($destination)
+            && hashFile($destination) === ($file['sha256'] ?? null);
+        if (! in_array($status, ['pending', 'restored'], true) && ! $restoringInPlace && ! is_file($backupPath)) {
+            $missingBackup[] = $file['path'] ?? null;
+        }
+        if (! in_array($status, ['pending', 'restored'], true) && ! $restoringInPlace && is_file($destination) && ! isset($managedPaths[(string) ($file['path'] ?? '')])) {
+            $occupiedDestinations[] = $file['path'] ?? null;
+        }
+    }
+    $statusAllowsRollback = in_array($state['status'] ?? null, ['quarantine_in_progress', 'installing', 'awaiting_acceptance', 'accepted', 'recovery_required'], true);
+    $installationEvidenceAllowsRollback = $managedFilesKnown || ($state['status'] ?? null) === 'quarantine_in_progress';
+    $allowed = $drift === [] && $missingBackup === [] && $occupiedDestinations === []
+        && $statusAllowsRollback && $installationEvidenceAllowsRollback;
+
+    return [
+        'schema_version' => RALPH_EVOLUTION_SCHEMA_VERSION,
+        'status' => $allowed ? 'ready' : 'blocked',
+        'reason' => $allowed ? 'instalação nova sem drift e backup legado disponível' : 'rollback bloqueado por drift, backup ausente, destino ocupado ou recuperação pendente',
+        'evolution_id' => $evolutionId,
+        'evolution_status' => $state['status'],
+        'rollback_allowed' => $allowed,
+        'drift' => $drift,
+        'managed_files' => $managedFiles,
+        'managed_files_known' => $managedFilesKnown,
+        'missing_backup' => $missingBackup,
+        'occupied_destinations' => $occupiedDestinations,
+        'preserved_runtime_paths' => $state['backup']['preserved_runtime_paths'] ?? [],
+    ];
+}
+
+function rollbackApply(string $root, string $evolutionId): void
+{
+    $lock = null;
+    $stage = null;
+    $movedNew = [];
+    $restoredOld = [];
+    $recoveryIncomplete = false;
+    $state = findEvolutionState($root, $evolutionId);
+    try {
+        if ($state === null) {
+            fail('evolução não encontrada: '.$evolutionId, 2);
+        }
+        $plan = rollbackPlan($root, $evolutionId);
+        if (($plan['rollback_allowed'] ?? false) !== true) {
+            fail('rollback bloqueado: '.$plan['reason'], 3);
+        }
+        $lock = openInstallationLock($root);
+        $state = findEvolutionState($root, $evolutionId);
+        $plan = rollbackPlan($root, $evolutionId);
+        if (($plan['rollback_allowed'] ?? false) !== true) {
+            throw new RuntimeException('rollback deixou de estar apto após adquirir o lock');
+        }
+        $stage = evolutionBase($root, $evolutionId).'/rollback-stage';
+        if (! mkdir($stage, 0700, true) && ! is_dir($stage)) {
+            throw new RuntimeException('não foi possível criar staging do rollback');
+        }
+        if (($state['installation']['managed_files'] ?? []) === [] && ($plan['managed_files'] ?? []) !== []) {
+            $state['installation']['managed_files'] = $plan['managed_files'];
+        }
+        $state['rollback']['status'] = 'in_progress';
+        $state['rollback']['staging_path'] = '.ralph/evolutions/'.$evolutionId.'/rollback-stage';
+        writeJsonStrict((string) $state['state_path'], $state);
+        foreach (($plan['managed_files'] ?? []) as $index => $managed) {
+            $relative = (string) $managed['path'];
+            $source = $root.'/'.$relative;
+            $destination = $stage.'/'.$relative;
+            if (! is_dir(dirname($destination)) && ! mkdir(dirname($destination), 0700, true) && ! is_dir(dirname($destination))) {
+                throw new RuntimeException('não foi possível preparar rollback de '.$relative);
+            }
+            if (is_file($destination)) {
+                if (hashFile($destination) !== ($managed['installed_hash'] ?? null)) {
+                    throw new RuntimeException('staging divergente durante rollback de '.$relative);
+                }
+                $state['installation']['managed_files'][$index]['rollback_status'] = 'staged';
+                writeJsonStrict((string) $state['state_path'], $state);
+                $movedNew[] = $relative;
+                continue;
+            }
+            if (! is_file($source)) {
+                throw new RuntimeException('arquivo novo ausente durante rollback de '.$relative);
+            }
+            $state['installation']['managed_files'][$index]['rollback_status'] = 'staging';
+            writeJsonStrict((string) $state['state_path'], $state);
+            if (! rename($source, $destination)) {
+                throw new RuntimeException('não foi possível retirar a instalação nova de '.$relative);
+            }
+            $state['installation']['managed_files'][$index]['rollback_status'] = 'staged';
+            writeJsonStrict((string) $state['state_path'], $state);
+            $movedNew[] = $relative;
+        }
+        foreach ($state['backup']['files'] as $index => $file) {
+            if (in_array(($file['status'] ?? null), ['pending', 'restored'], true)) {
+                continue;
+            }
+            $backupPath = $root.'/'.$file['backup_path'];
+            $destination = $root.'/'.$file['path'];
+            if (($file['status'] ?? null) === 'restoring' && ! is_file($backupPath) && is_file($destination)) {
+                if (hashFile($destination) !== ($file['sha256'] ?? null)) {
+                    throw new RuntimeException('restauração interrompida com conteúdo divergente em '.$file['path']);
+                }
+                $state['backup']['files'][$index]['status'] = 'restored';
+                writeJsonStrict((string) $state['state_path'], $state);
+                continue;
+            }
+            if (! is_dir(dirname($destination)) && ! mkdir(dirname($destination), 0700, true) && ! is_dir(dirname($destination))) {
+                throw new RuntimeException('não foi possível preparar restauração de '.$file['path']);
+            }
+            $state['backup']['files'][$index]['status'] = 'restoring';
+            writeJsonStrict((string) $state['state_path'], $state);
+            if (! rename($backupPath, $destination)) {
+                throw new RuntimeException('não foi possível restaurar '.$file['path']);
+            }
+            $restoredOld[] = $file['path'];
+            $state['backup']['files'][$index]['status'] = 'restored';
+            writeJsonStrict((string) $state['state_path'], $state);
+        }
+        $state['rollback'] = ['available' => false, 'status' => 'applied', 'applied_at' => gmdate('Y-m-d\TH:i:s\Z')];
+        updateEvolutionState($state, 'rolled_back');
+        removeTree($stage);
+        closeInstallationLock($lock);
+        printPlan(['status' => 'rolled_back', 'evolution_id' => $evolutionId, 'restored_paths' => $restoredOld, 'new_installation_removed' => $movedNew]);
+    } catch (Throwable $exception) {
+        if (is_array($state) && is_string($stage)) {
+            foreach (array_reverse($restoredOld) as $relative) {
+                $destination = $root.'/'.$relative;
+                $matchingIndex = null;
+                $backupPath = $root.'/';
+                foreach ($state['backup']['files'] ?? [] as $index => $file) {
+                    if (($file['path'] ?? null) === $relative) {
+                        $matchingIndex = $index;
+                        $backupPath .= (string) ($file['backup_path'] ?? '');
+                        break;
+                    }
+                }
+                if (is_file($destination) && $backupPath !== $root.'/' && ! is_file($backupPath)) {
+                    @mkdir(dirname($backupPath), 0700, true);
+                    if ($matchingIndex !== null) {
+                        $state['backup']['files'][$matchingIndex]['status'] = 'restoring';
+                    }
+                    if (@rename($destination, $backupPath)) {
+                        if ($matchingIndex !== null) {
+                            $state['backup']['files'][$matchingIndex]['status'] = 'quarantined';
+                        }
+                    } else {
+                        $recoveryIncomplete = true;
+                    }
+                }
+            }
+            foreach (array_reverse($movedNew) as $relative) {
+                $staged = $stage.'/'.$relative;
+                $destination = $root.'/'.$relative;
+                if (is_file($staged) && ! is_file($destination)) {
+                    @mkdir(dirname($destination), 0700, true);
+                    if (! @rename($staged, $destination)) {
+                        $recoveryIncomplete = true;
+                    }
+                }
+            }
+        }
+        if (is_array($state)) {
+            try {
+                if ($recoveryIncomplete) {
+                    $state['rollback']['staging_path'] = '.ralph/evolutions/'.$evolutionId.'/rollback-stage';
+                }
+                updateEvolutionState($state, 'recovery_required', $exception->getMessage());
+            } catch (Throwable) {
+                // Mantém a falha no stderr quando a escrita do estado também falha.
+            }
+        }
+        if (! $recoveryIncomplete) {
+            removeTree((string) $stage);
+        }
+        closeInstallationLock($lock);
+        fail('rollback não concluído: '.$exception->getMessage(), 4);
+    }
+}
+
+function acceptEvolution(string $root, string $evolutionId): void
+{
+    $state = findEvolutionState($root, $evolutionId);
+    if ($state === null) {
+        fail('evolução não encontrada: '.$evolutionId, 2);
+    }
+    if (($state['status'] ?? null) === 'accepted') {
+        printPlan(['status' => 'already_accepted', 'evolution_id' => $evolutionId]);
+        return;
+    }
+    $plan = rollbackPlan($root, $evolutionId);
+    if (($plan['rollback_allowed'] ?? false) !== true || ($state['status'] ?? null) !== 'awaiting_acceptance') {
+        fail('aceitação bloqueada: a instalação nova possui drift ou não está aguardando aceite', 3);
+    }
+    $lock = null;
+    try {
+        $lock = openInstallationLock($root);
+        $state = findEvolutionState($root, $evolutionId);
+        $plan = rollbackPlan($root, $evolutionId);
+        if (($plan['rollback_allowed'] ?? false) !== true || ($state['status'] ?? null) !== 'awaiting_acceptance') {
+            throw new RuntimeException('aceitação deixou de estar apta após adquirir o lock');
+        }
+        $state['accepted_at'] = gmdate('Y-m-d\TH:i:s\Z');
+        updateEvolutionState($state, 'accepted');
+        closeInstallationLock($lock);
+        printPlan(['status' => 'accepted', 'evolution_id' => $evolutionId, 'backup_preserved' => true]);
+    } catch (Throwable $exception) {
+        closeInstallationLock($lock);
+        fail('aceitação não concluída: '.$exception->getMessage(), 4);
     }
 }
 
@@ -1156,6 +1898,17 @@ $root = projectRoot($arguments['project']);
 $manifestPath = $root.'/.ralph/install-manifest.json';
 
 try {
+    if ($arguments['command'] === 'rollback') {
+        if (! evolutionIdValid($arguments['evolution_id'])) {
+            fail('rollback exige --evolution EVL-YYYYMMDD-NNNN', 2);
+        }
+        if ($arguments['apply']) {
+            rollbackApply($root, (string) $arguments['evolution_id']);
+        } else {
+            printPlan(rollbackPlan($root, (string) $arguments['evolution_id']));
+        }
+        exit(0);
+    }
     if ($arguments['command'] === 'uninstall') {
         uninstall($root, $arguments['apply']);
         exit(0);
@@ -1166,6 +1919,22 @@ try {
     }
     $detected = detectProject($root, $arguments['verify_providers']);
     $provider = selectProvider($detected, $arguments['provider']);
+    if ($arguments['command'] === 'evolve') {
+        if ($arguments['accept']) {
+            if (! evolutionIdValid($arguments['evolution_id']) || ! $arguments['apply']) {
+                fail('aceitação exige --evolution EVL-YYYYMMDD-NNNN e --apply', 2);
+            }
+            acceptEvolution($root, (string) $arguments['evolution_id']);
+            exit(0);
+        }
+        $evolutionPlan = evolutionPlan($root, $detected, $provider, $arguments['provider']);
+        if (! $arguments['apply']) {
+            printPlan($evolutionPlan);
+            exit(0);
+        }
+        evolveApply($root, $detected, $arguments['provider'], $arguments['verify_providers']);
+        exit(0);
+    }
     $plan = installationPlan($root, $detected, $provider, $arguments['provider']);
     if ($arguments['command'] === 'plan') {
         printPlan($plan);

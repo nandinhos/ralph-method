@@ -45,21 +45,26 @@ O escopo ativo termina nos três harnesses Codex, Claude CLI e OpenCode. Hermes
 e agy não são prioridades desta linha; seus itens estão formalmente adiados em
 [`backlog.md`](backlog.md), com prioridade nenhuma.
 
-## Próxima evolução — instalação externa e rollback assistido (`v0.7.0`)
+## Evolução concluída — instalação externa e rollback assistido (`v0.8.0`)
 
 - [x] detectar sinais canônicos de Ralph fora do manifesto do Ralph Method;
 - [x] emitir classificação, confiança, caminhos relativos e SHA-256 sem expor conteúdo;
 - [x] bloquear `apply` comum para origem externa ou ambígua;
 - [x] cobrir instalação externa, origem neutra, doctor e idempotência em fixture;
 - [x] documentar a separação entre detecção, migração, backup e rollback;
-- [ ] implementar `evolve --plan/--apply` com inventário aprovado e backup verificável;
-- [ ] implementar `rollback --plan/--apply` com verificação de drift e restauração condicional;
+- [x] implementar `evolve --plan/--apply` com inventário aprovado e backup verificável;
+- [x] implementar `rollback --plan/--apply` com verificação de drift e restauração condicional;
 - [ ] adicionar adapters de migração por origem, sem importar estado desconhecido por inferência;
-- [ ] testar crash, espaço insuficiente, backup incompleto e rollback após alteração do usuário.
+- [x] testar backup incompleto e rollback após alteração do usuário;
+- [x] testar recuperação de estado interrompido com reconstrução pelo manifesto;
+- [ ] testar SIGKILL real durante rename e espaço insuficiente com fixture de falha de filesystem.
 
-O detector já é parte da branch `dev`; a operação que move a instalação antiga
-permanece deliberadamente separada até que o contrato de backup e rollback seja
-executável e coberto por falhas reais.
+O detector e a evolução assistida foram validados na branch `dev`, incluindo
+uma prova de campo conduzida pelo OpenCode, e promovidos para `main`; o
+resultado está no relatório
+[`0019`](reports/0019-evolucao-opencode-v0-8-0.md). A importação semântica de
+estado legado e os adapters por origem continuam deliberadamente separados
+até que exista um contrato específico e comprovado.
 
 ## Próxima evolução — memória episódica e taxonomia (`v0.6.0`)
 

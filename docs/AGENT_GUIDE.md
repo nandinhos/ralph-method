@@ -1,7 +1,7 @@
 # Guia operacional para agentes de IA — Ralph Method
 
-- guide_version: 1.3.0
-- method_version: 0.7.0
+- guide_version: 1.4.0
+- method_version: 0.8.0
 - status: ativo
 - fonte_do_metodo: `VERSION`
 - contrato_de_feedback: `schemas/feedback-event.schema.json`
@@ -91,12 +91,34 @@ arquivos e reporte os campos `classification`, `confidence`, `signals` e
 `reason`; não copie conteúdo, não apague o ledger e não tente traduzir
 prompts, workflow ou credenciais por inferência.
 
-A evolução futura deverá ser solicitada como operação explícita, com inventário
-aprovado, backup com hashes, instalação transacional, `doctor` e manifesto de
-rollback. A solicitação de desinstalação/rollback só poderá restaurar o legado
-se a instalação nova permanecer íntegra e sem alterações do usuário. Esses
-comandos ainda não estão disponíveis nesta versão; até lá, a ação correta é
-revisão manual ou adapter de migração específico da origem.
+A evolução deve ser solicitada como operação explícita, com inventário aprovado,
+backup com hashes, instalação transacional, aceite e manifesto de rollback. O
+modo atual é `quarantine_only`: nenhum ledger, workflow, prompt, credencial ou
+evento legado é importado.
+
+```bash
+RALPH_METHOD_SOURCE="$METHOD_ROOT" "$METHOD_ROOT/bin/ralph-init" evolve --project "$PROJECT_ROOT" --provider auto --verify-providers
+RALPH_METHOD_SOURCE="$METHOD_ROOT" "$METHOD_ROOT/bin/ralph-init" evolve --project "$PROJECT_ROOT" --provider auto --apply
+```
+
+O resultado `awaiting_acceptance` fornece um ID `EVL-YYYYMMDD-NNNN`. Antes
+de aceitar, verifique o método novo com `ralph-doctor` e os testes do projeto.
+Para rejeitar a evolução:
+
+```bash
+RALPH_METHOD_SOURCE="$METHOD_ROOT" "$METHOD_ROOT/bin/ralph-init" rollback --project "$PROJECT_ROOT" --evolution EVL-YYYYMMDD-NNNN
+RALPH_METHOD_SOURCE="$METHOD_ROOT" "$METHOD_ROOT/bin/ralph-init" rollback --project "$PROJECT_ROOT" --evolution EVL-YYYYMMDD-NNNN --apply
+```
+
+Para aceitar explicitamente, mantendo o backup disponível:
+
+```bash
+RALPH_METHOD_SOURCE="$METHOD_ROOT" "$METHOD_ROOT/bin/ralph-init" evolve --project "$PROJECT_ROOT" --evolution EVL-YYYYMMDD-NNNN --accept --apply
+```
+
+Rollback é fail-closed: se qualquer arquivo do método novo tiver drift,
+estiver ausente, ou o destino do legado estiver ocupado, o comando retorna
+exit code `3` e não sobrescreve alterações do usuário.
 
 ### 0.3 Aplicar e verificar
 
@@ -833,10 +855,9 @@ Se o plano mostrar `conflict`, preserve o arquivo modificado e resolva a
 decisão explicitamente. Não force overwrite.
 
 Se o plano mostrar `ralph_installation.external.status` como `detected` ou
-`ambiguous`, interrompa a atualização normal. O Ralph Method não assume que
-conhece os arquivos, o ledger ou o contrato da instalação antiga. Aguarde uma
-operação de evolução com backup e rollback ou remova a instalação antiga por
-procedimento próprio, sempre preservando o histórico.
+`ambiguous`, interrompa a atualização normal e use `evolve --plan`. O Ralph
+Method não assume que conhece o contrato da instalação antiga: a evolução
+isola somente sinais detectados, preserva o histórico e não importa estado.
 
 Depois da atualização:
 

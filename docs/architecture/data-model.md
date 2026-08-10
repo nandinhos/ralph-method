@@ -16,6 +16,8 @@
 | manifesto de instalação | `.ralph/install-manifest.json` | `ralph-init` |
 | detecção de instalação | saída transitória de `ralph-init plan` | `ralph-init`, sem persistência implícita |
 | relatório de remoção | `.ralph/uninstall-report.json` | `ralph-init` |
+| estado de evolução | `.ralph/evolutions/EVL-YYYYMMDD-NNNN/evolution.json` | `ralph-init evolve/rollback` |
+| backup de evolução | `.ralph/evolutions/<evolution_id>/backup/` | `ralph-init`, com hashes e sem importação de estado |
 | lock de instalação | `.ralph/install.lock` | `ralph-init`, preservado para coordenação local |
 | feedback do loop | `.git/ralph-control/feedback/events.jsonl` | `ralph.sh` |
 | métricas derivadas | stdout de `bin/ralph-metrics` | consumidor do projeto/orquestrador, sem persistência implícita |
@@ -36,7 +38,9 @@
   tipos e SHA-256; não persiste conteúdo de configuração, prompts ou ledger.
 - backup e rollback de uma instalação externa exigirão manifesto próprio,
   hashes antes/depois e confirmação explícita; não são efeito colateral do
-  `apply` comum.
+  `apply` comum. A evolução implementada usa o modo `quarantine_only`: move
+  somente sinais detectados, preserva ledger/workflow e instala o método novo
+  com aceite pendente.
 - `.ralph/providers.json` registra somente path, versão, capacidades, status,
   suporte do runner, provider-alvo, códigos de saída e timestamps dos probes;
   não registra saída bruta,

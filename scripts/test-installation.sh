@@ -74,6 +74,7 @@ assert_file "$project/schemas/runner-result.schema.json"
 assert_file "$project/schemas/readonly-policy-proof.schema.json"
 assert_file "$project/schemas/knowledge-candidate.schema.json"
 assert_file "$project/schemas/ralph-installation-detection.schema.json"
+assert_file "$project/schemas/ralph-evolution.schema.json"
 assert_file "$project/.ralph/opencode.env"
 assert_file "$project/schemas/provider-readiness.schema.json"
 
@@ -248,6 +249,137 @@ AMBIGUOUS_JSON="$ambiguous_plan" php -r '
 ambiguous_apply_exit=0
 RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" apply --project "$ambiguous_project" --provider auto >/dev/null 2>&1 || ambiguous_apply_exit=$?
 [ "$ambiguous_apply_exit" -eq 3 ] || fail "origem ambígua não bloqueou apply com exit 3"
+
+# A evolução explícita isola os sinais externos, instala uma versão nova sem
+# importar estado legado e deixa um manifesto persistente para rollback.
+evolution_project="$TMP/ralph-evolucao"
+new_project "$evolution_project"
+printf '%s\n' '#!/usr/bin/env bash' 'echo ralph-legado' > "$evolution_project/ralph.sh"
+printf '%s\n' '# Ralphfile legado' > "$evolution_project/Ralphfile"
+chmod +x "$evolution_project/ralph.sh"
+evolution_plan_output="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" evolve --project "$evolution_project")"
+EVOLUTION_PLAN_JSON="$evolution_plan_output" php -r '
+    $plan = json_decode(getenv("EVOLUTION_PLAN_JSON"), true, 512, JSON_THROW_ON_ERROR);
+    exit(($plan["status"] ?? null) === "ready"
+        && ($plan["migration"]["mode"] ?? null) === "quarantine_only"
+        && ($plan["migration"]["state_imported"] ?? true) === false
+        && count($plan["backup"]["signals_to_quarantine"] ?? []) === 2
+        && ($plan["approval_required"] ?? false) === true ? 0 : 1);
+'
+evolution_apply_output="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" evolve --project "$evolution_project" --apply --provider auto)"
+EVOLUTION_APPLY_JSON="$evolution_apply_output" php -r '
+    $result = json_decode(getenv("EVOLUTION_APPLY_JSON"), true, 512, JSON_THROW_ON_ERROR);
+    exit(($result["status"] ?? null) === "awaiting_acceptance"
+        && preg_match("/^EVL-[0-9]{8}-[0-9]{4}$/", (string) ($result["evolution_id"] ?? "")) === 1
+        && ($result["migration"]["state_imported"] ?? true) === false ? 0 : 1);
+'
+evolution_id="$(EVOLUTION_APPLY_JSON="$evolution_apply_output" php -r '$result = json_decode(getenv("EVOLUTION_APPLY_JSON"), true, 512, JSON_THROW_ON_ERROR); echo $result["evolution_id"];')"
+assert_not_file "$evolution_project/ralph.sh"
+assert_not_file "$evolution_project/Ralphfile"
+assert_file "$evolution_project/.ralph/install-manifest.json"
+assert_file "$evolution_project/.ralph/evolutions/$evolution_id/backup/ralph.sh"
+repeat_evolution_output="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" evolve --project "$evolution_project" --apply --provider auto)"
+REPEAT_EVOLUTION_JSON="$repeat_evolution_output" php -r '
+    $result = json_decode(getenv("REPEAT_EVOLUTION_JSON"), true, 512, JSON_THROW_ON_ERROR);
+    exit(($result["status"] ?? null) === "already_pending" ? 0 : 1);
+'
+rollback_plan_output="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" rollback --project "$evolution_project" --evolution "$evolution_id")"
+ROLLBACK_PLAN_JSON="$rollback_plan_output" php -r '
+    $plan = json_decode(getenv("ROLLBACK_PLAN_JSON"), true, 512, JSON_THROW_ON_ERROR);
+    exit(($plan["status"] ?? null) === "ready" && ($plan["rollback_allowed"] ?? false) === true ? 0 : 1);
+'
+RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" rollback --project "$evolution_project" --evolution "$evolution_id" --apply >/dev/null
+assert_file "$evolution_project/ralph.sh"
+assert_file "$evolution_project/Ralphfile"
+assert_not_file "$evolution_project/.ralph/install-manifest.json"
+ROLLBACK_STATE_JSON="$(cat "$evolution_project/.ralph/evolutions/$evolution_id/evolution.json")" php -r '
+    $state = json_decode(getenv("ROLLBACK_STATE_JSON"), true, 512, JSON_THROW_ON_ERROR);
+    exit(($state["status"] ?? null) === "rolled_back"
+        && (($state["backup"]["files"][0]["status"] ?? null) === "restored") ? 0 : 1);
+'
+
+# O aceite é explícito e não elimina o backup; uma alteração na instalação
+# nova bloqueia rollback em vez de sobrescrever trabalho do usuário.
+accept_project="$TMP/ralph-evolucao-aceite"
+new_project "$accept_project"
+printf '%s\n' '# Ralph externo para aceite' > "$accept_project/ralph.sh"
+accept_output="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" evolve --project "$accept_project" --apply --provider auto)"
+accept_id="$(EVOLUTION_APPLY_JSON="$accept_output" php -r '$result = json_decode(getenv("EVOLUTION_APPLY_JSON"), true, 512, JSON_THROW_ON_ERROR); echo $result["evolution_id"];')"
+RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" evolve --project "$accept_project" --evolution "$accept_id" --accept --apply >/dev/null
+ACCEPT_STATE_JSON="$(cat "$accept_project/.ralph/evolutions/$accept_id/evolution.json")" php -r '
+    $state = json_decode(getenv("ACCEPT_STATE_JSON"), true, 512, JSON_THROW_ON_ERROR);
+    exit(($state["status"] ?? null) === "accepted" ? 0 : 1);
+'
+printf '%s\n' '# alteração após aceite' >> "$accept_project/bin/ralph-control"
+drift_rollback_exit=0
+RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" rollback --project "$accept_project" --evolution "$accept_id" --apply >/dev/null 2>&1 || drift_rollback_exit=$?
+[ "$drift_rollback_exit" -eq 3 ] || fail 'rollback não bloqueou drift após aceite'
+
+# A evolução não pode seguir a raiz antiga se o checkout for movido.
+moved_project="$TMP/ralph-evolucao-movido"
+new_project "$moved_project"
+printf '%s\n' '# Ralph externo movido' > "$moved_project/ralph.sh"
+moved_apply_output="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" evolve --project "$moved_project" --apply --provider auto)"
+moved_id="$(EVOLUTION_APPLY_JSON="$moved_apply_output" php -r '$result = json_decode(getenv("EVOLUTION_APPLY_JSON"), true, 512, JSON_THROW_ON_ERROR); echo $result["evolution_id"];')"
+moved_destination="$TMP/ralph-evolucao-movido-destino"
+mv "$moved_project" "$moved_destination"
+moved_rollback_plan="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" rollback --project "$moved_destination" --evolution "$moved_id")"
+MOVED_ROLLBACK_JSON="$moved_rollback_plan" php -r '
+    $plan = json_decode(getenv("MOVED_ROLLBACK_JSON"), true, 512, JSON_THROW_ON_ERROR);
+    exit(($plan["status"] ?? null) === "blocked"
+        && ($plan["rollback_allowed"] ?? true) === false
+        && isset($plan["root_mismatch"]) ? 0 : 1);
+'
+moved_rollback_exit=0
+RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" rollback --project "$moved_destination" --evolution "$moved_id" --apply >/dev/null 2>&1 || moved_rollback_exit=$?
+[ "$moved_rollback_exit" -eq 3 ] || fail 'rollback seguiu caminho antigo depois de mover o projeto'
+assert_file "$moved_destination/.ralph/install-manifest.json"
+
+# Ledger e workflow externos são preservados durante a evolução; não são
+# importados nem movidos para o backup legado.
+runtime_evolution_project="$TMP/ralph-evolucao-runtime"
+new_project "$runtime_evolution_project"
+printf '%s\n' '# Ralph externo' > "$runtime_evolution_project/ralph.sh"
+mkdir -p "$runtime_evolution_project/.git/ralph-control"
+printf '%s\n' '{"legacy":true}' > "$runtime_evolution_project/.git/ralph-control/events.jsonl"
+printf '%s\n' '{"legacy":true}' > "$runtime_evolution_project/.git/ralph-control/workflow.json"
+runtime_events_hash="$(php -r 'echo hash_file("sha256", $argv[1]);' "$runtime_evolution_project/.git/ralph-control/events.jsonl")"
+runtime_evolution_output="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" evolve --project "$runtime_evolution_project" --apply --provider auto)"
+runtime_evolution_id="$(EVOLUTION_APPLY_JSON="$runtime_evolution_output" php -r '$result = json_decode(getenv("EVOLUTION_APPLY_JSON"), true, 512, JSON_THROW_ON_ERROR); echo $result["evolution_id"];')"
+assert_file "$runtime_evolution_project/.git/ralph-control/events.jsonl"
+assert_file "$runtime_evolution_project/.git/ralph-control/workflow.json"
+runtime_events_after_hash="$(php -r 'echo hash_file("sha256", $argv[1]);' "$runtime_evolution_project/.git/ralph-control/events.jsonl")"
+[ "$runtime_events_after_hash" = "$runtime_events_hash" ] || fail 'evolução alterou o ledger legado'
+RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" rollback --project "$runtime_evolution_project" --evolution "$runtime_evolution_id" --apply >/dev/null
+assert_file "$runtime_evolution_project/ralph.sh"
+assert_file "$runtime_evolution_project/.git/ralph-control/events.jsonl"
+
+# Simula crash depois da instalação nova, antes de persistir a lista de
+# arquivos gerenciados. O rollback deve reconstruir essa lista pelo manifesto
+# compatível e restaurar o legado sem assumir ownership indevido.
+interrupted_project="$TMP/ralph-evolucao-interrompida"
+new_project "$interrupted_project"
+printf '%s\n' '# Ralph externo interrompido' > "$interrupted_project/ralph.sh"
+interrupted_output="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" evolve --project "$interrupted_project" --apply --provider auto)"
+interrupted_id="$(EVOLUTION_APPLY_JSON="$interrupted_output" php -r '$result = json_decode(getenv("EVOLUTION_APPLY_JSON"), true, 512, JSON_THROW_ON_ERROR); echo $result["evolution_id"];')"
+interrupted_state="$interrupted_project/.ralph/evolutions/$interrupted_id/evolution.json"
+EVOLUTION_STATE_PATH="$interrupted_state" php -r '
+    $path = getenv("EVOLUTION_STATE_PATH");
+    $state = json_decode(file_get_contents($path), true, 512, JSON_THROW_ON_ERROR);
+    $state["status"] = "installing";
+    $state["installation"]["managed_files"] = [];
+    file_put_contents($path, json_encode($state, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT)."\n");
+'
+interrupted_rollback_plan="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" rollback --project "$interrupted_project" --evolution "$interrupted_id")"
+INTERRUPTED_ROLLBACK_JSON="$interrupted_rollback_plan" php -r '
+    $plan = json_decode(getenv("INTERRUPTED_ROLLBACK_JSON"), true, 512, JSON_THROW_ON_ERROR);
+    exit(($plan["status"] ?? null) === "ready"
+        && count($plan["managed_files"] ?? []) > 1
+        && ($plan["rollback_allowed"] ?? false) === true ? 0 : 1);
+'
+RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" rollback --project "$interrupted_project" --evolution "$interrupted_id" --apply >/dev/null
+assert_file "$interrupted_project/ralph.sh"
+assert_not_file "$interrupted_project/.ralph/install-manifest.json"
 
 # Falha durante o staging não publica arquivos parcialmente.
 broken_source="$TMP/source-incompleto"

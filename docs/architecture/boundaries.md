@@ -9,7 +9,7 @@
 | canal de feedback | publicar fatos sanitizados ao consumidor externo | alterar estado, gate, lease ou fila |
 | relay do `ralph-control` | retransmitir feedback durante o bloco | interpretar feedback como aprovação |
 | adaptador provider | converter saída externa para contrato trace e reportar política comprovada | escrever ledger ou alterar código |
-| `ralph-init` | detectar contexto, detectar Ralph externo, instalar e remover bundle com ownership | copiar credenciais, remover histórico, migrar runtime desconhecido ou sobrescrever arquivos sem ownership |
+| `ralph-init` | detectar contexto, instalar/remover bundle com ownership e executar evolução explícita com backup/rollback | copiar credenciais, remover histórico, importar runtime desconhecido, sobrescrever arquivos sem ownership ou liberar rollback com drift |
 | verificador de provider | executar probes seguros explícitos e materializar prontidão | iniciar geração, salvar saída sensível ou habilitar adapter sem diagnóstico |
 | projeto-alvo | fornecer contexto, fases e comando de teste | depender do banco ou domínio do Ralph |
 
@@ -30,8 +30,10 @@ Antes do `apply`, o instalador executa uma detecção somente leitura de sinais
 de um Ralph que não pertence ao manifesto do método. A saída usa caminhos
 relativos, tipos e SHA-256, sem conteúdo. Sinal canônico ou combinação de
 sinais gera bloqueio fail-closed; uma pasta `.ralph` sem marcador conhecido é
-insuficiente para bloquear. A evolução com backup e rollback será uma operação
-explícita, separada do `apply` comum, e ainda depende de um adapter de origem.
+insuficiente para bloquear. A evolução com backup e rollback é uma operação
+explícita, separada do `apply` comum. Ela opera em modo `quarantine_only`:
+não traduz estado legado, mantém sinais de runtime e exige aceite ou rollback
+após a instalação nova.
 
 ## Seam de harnesses e providers
 

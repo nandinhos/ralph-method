@@ -1,5 +1,6 @@
 .ralph/runtime/
 .ralph/reports/
+.ralph/evolutions/
 .ralph/install.lock
 .phases/
 .DS_Store
