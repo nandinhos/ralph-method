@@ -2,10 +2,13 @@
 
 ## Estado atual
 
-A versão `0.4.0` foi a primeira promoção para `main`. A versão atual `0.6.0`
-foi promovida para `main` no commit `5d579b5`, recebeu a tag anotada `v0.6.0`
-e está sincronizada com `origin/main`. A comprovação está em
+A versão `0.4.0` foi a primeira promoção para `main`. A versão atual `0.6.1`
+é uma release de manutenção baseada no merge `ba98dfa` em `main`, recebeu a
+tag anotada `v0.6.1` e está sincronizada com `origin/main`. A comprovação da
+base funcional está em
 [`docs/reports/0016-promocao-v0-6-0.md`](reports/0016-promocao-v0-6-0.md).
+O fechamento da manutenção está em
+[`docs/reports/0017-release-manutencao-v0-6-1.md`](reports/0017-release-manutencao-v0-6-1.md).
 
 A branch `feat/ralph-hardening` concentrou a evolução de segurança da v0.5.0
 e a evolução de memória da v0.6.0; essas mudanças agora fazem parte de
@@ -13,13 +16,13 @@ e a evolução de memória da v0.6.0; essas mudanças agora fazem parte de
 
 A primeira execução remota do CI após a promoção falhou no teste de prontidão
 de providers por incompatibilidades de `PATH` e de `proc_close()` no PHP 8.2.
-O hotfix está isolado em `fix/ci-portable-path`; a promoção da correção e a
-certificação remota da release permanecem pendentes. O postmortem está em
+O hotfix foi corrigido, validado em PHP 8.2, promovido pela PR #1 e certificado
+no run remoto `31341326999`. O postmortem e a resolução estão em
 [`docs/incidents/0010-ci-php82-process-status.md`](incidents/0010-ci-php82-process-status.md).
 
 A primeira entrega adiciona exclusividade por feature durante o bloco controlado,
 protege o ledger com `workflow.lock` e comprova a rejeição de duas execuções
-simultâneas no teste de método. A promoção desta evolução ainda não ocorreu.
+simultâneas no teste de método. Essa evolução agora faz parte de `main`.
 O handoff e a memória de engenharia são uma camada não bloqueante: a entrega
 pode continuar enquanto a curadoria aguarda revisão, sem perder o candidato
 rastreável. A v0.6.0 adiciona cache episódico sanitizado, decisão explícita de
@@ -37,7 +40,7 @@ sem evento terminal após crash. O contrato executável dessa evolução está e
 O repositório é uma extração independente do núcleo Ralph validado no
 `refactor-radar`: essa é a origem histórica, não uma dependência de runtime.
 Não há importação de código, banco, credencial ou módulo do produto-alvo. A
-A base `0.4.0` mantém a instalação local reversível, doctor, ownership por hash
+base `0.4.0` mantém a instalação local reversível, doctor, ownership por hash
 e canal de feedback para o orquestrador externo; as evoluções `0.5.0` e `0.6.0`
 adicionam hardening do control plane e memória de engenharia versionada.
 
