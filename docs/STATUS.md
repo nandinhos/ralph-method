@@ -9,6 +9,9 @@ base funcional está em
 [`docs/reports/0016-promocao-v0-6-0.md`](reports/0016-promocao-v0-6-0.md).
 O fechamento da manutenção está em
 [`docs/reports/0017-release-manutencao-v0-6-1.md`](reports/0017-release-manutencao-v0-6-1.md).
+O guia operacional para agentes está na `guide_version: 1.2.0` e agora
+descreve o ciclo completo de dry-run, instalação, execução, monitoramento,
+recuperação, memória e desinstalação.
 
 A branch `feat/ralph-hardening` concentrou a evolução de segurança da v0.5.0
 e a evolução de memória da v0.6.0; essas mudanças agora fazem parte de
