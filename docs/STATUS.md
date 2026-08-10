@@ -2,14 +2,17 @@
 
 ## Estado atual
 
-A versão `0.4.0` foi a primeira promoção para `main`. A versão atual `0.6.1`
+A versão em desenvolvimento é `0.7.0`.
+
+A versão `0.4.0` foi a primeira promoção para `main`. A versão publicada atual
+é `0.6.1`; nesta branch está em desenvolvimento a `0.7.0`. A `0.6.1`
 é uma release de manutenção baseada no merge `ba98dfa` em `main`, recebeu a
 tag anotada `v0.6.1` e está sincronizada com `origin/main`. A comprovação da
 base funcional está em
 [`docs/reports/0016-promocao-v0-6-0.md`](reports/0016-promocao-v0-6-0.md).
 O fechamento da manutenção está em
 [`docs/reports/0017-release-manutencao-v0-6-1.md`](reports/0017-release-manutencao-v0-6-1.md).
-O guia operacional para agentes está na `guide_version: 1.2.0` e agora
+O guia operacional para agentes está na `guide_version: 1.3.0` e agora
 descreve o ciclo completo de dry-run, instalação, execução, monitoramento,
 recuperação, memória e desinstalação.
 
@@ -52,6 +55,17 @@ runners nativos do loop, e OpenCode pelo adapter executável certificado em
 campo. Hermes e agy permanecem somente na detecção passiva compatível e estão
 registrados em [`docs/backlog.md`](backlog.md) com prioridade nenhuma.
 
+A v0.7.0 adiciona uma camada de detecção somente leitura para identificar
+Ralph externo antes do `apply`. A instalação externa é classificada por sinais,
+confiança, caminhos relativos e hashes SHA-256; `detected` e `ambiguous`
+bloqueiam a instalação normal com exit code `3`. O caminho de evolução com
+backup, rollback e adapter de origem está documentado no ADR-0010, mas ainda
+não é executado automaticamente. A evidência desta etapa está no
+[`relatório 0018`](reports/0018-deteccao-ralph-externo-v0-7-0.md).
+O timeout observado na revisão adversarial foi isolado como falha de contexto
+de checkout do subagente, não como falha do detector; a correção e a
+reprodução estão em [`incidente 0011`](incidents/0011-timeout-revisao-adversarial-contexto.md).
+
 ## Componentes extraídos
 
 | Componente | Path | Responsabilidade |
@@ -69,6 +83,7 @@ registrados em [`docs/backlog.md`](backlog.md) com prioridade nenhuma.
 | Doctor | `bin/ralph-doctor` | drift e integridade da instalação |
 | Feedback | `schemas/feedback-event.schema.json` | contrato JSONL/stdout/callback |
 | Prontidão de provider | `schemas/provider-readiness.schema.json` | autenticação, diagnóstico seguro e elegibilidade do adapter |
+| Detecção de instalação | `schemas/ralph-installation-detection.schema.json` | Ralph Method gerenciado, Ralph externo ou origem ambígua |
 | Adapter OpenCode | `adapters/opencode/` | preflight, execução JSONL, parser fail-closed e resultado normalizado |
 | Runners Codex/Claude | `scripts/ralph.sh` | integração nativa de execução e revisão do loop |
 | Resultado de runner | `schemas/runner-result.schema.json` | contrato sanitizado de sessão, modelo, terminal e fallback |

@@ -84,3 +84,10 @@
 2026-08-09T20:04:00-03:00 | fix | test-ralph-method passou a usar rg quando disponível e grep -Eq como fallback portátil
 2026-08-09T20:09:00-03:00 | error | pré-teste remoto 31341071541 revelou unshare presente mas indisponível no runner; a execução concorrente terminou antes do gate e recebeu exit 1
 2026-08-09T20:09:00-03:00 | fix | ralph-control passou a sondar a capacidade real de unshare e recuar para process_group_observed quando o namespace é proibido
+2026-08-09T23:42:27-03:00 | decision | ralph-init passou a detectar Ralph externo por sinais relativos e SHA-256, mantendo o manifesto do Ralph Method como fronteira de ownership.
+2026-08-09T23:42:27-03:00 | fix | apply comum bloqueia origem externa, ambígua ou manifesto inválido antes do staging e revalida a condição depois do lock.
+2026-08-09T23:42:27-03:00 | decision | evolução com backup e rollback será operação explícita futura; não haverá migração genérica de ledger, workflow, prompts ou credenciais desconhecidos.
+2026-08-09T23:42:27-03:00 | review | revisão independente bounded excedeu o timeout e foi encerrada sem veredito; regressão local e fixtures focados permaneceram verdes.
+2026-08-09T23:50:09-03:00 | error | probes adversariais com caminhos relativos foram executados fora da raiz do projeto pelo subagente e receberam paths inexistentes, levando a tentativas amplas até o timeout.
+2026-08-09T23:50:09-03:00 | fix | delegações ao bc-reviewer passaram a exigir cd explícito para a raiz, escopo de arquivos fechado, uma única busca e proibição de testes/rede.
+2026-08-09T23:50:09-03:00 | verification | probe bc-reviewer com cd explícito concluiu em menos de um minuto com verdict pass e confirmou os contratos apply_allowed e migration_supported.

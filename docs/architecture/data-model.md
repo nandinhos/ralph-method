@@ -14,6 +14,7 @@
 | candidatos de memória | `.ralph/knowledge-candidates/` | controlador e curador; cache sanitizado e descartável |
 | memória curada | `docs/engineering/` | projeto-alvo |
 | manifesto de instalação | `.ralph/install-manifest.json` | `ralph-init` |
+| detecção de instalação | saída transitória de `ralph-init plan` | `ralph-init`, sem persistência implícita |
 | relatório de remoção | `.ralph/uninstall-report.json` | `ralph-init` |
 | lock de instalação | `.ralph/install.lock` | `ralph-init`, preservado para coordenação local |
 | feedback do loop | `.git/ralph-control/feedback/events.jsonl` | `ralph.sh` |
@@ -31,6 +32,11 @@
 - tokens, prompts e custos não entram em eventos;
 - relatório `TRC` é projeção do ledger e não fonte de estado;
 - o manifesto de instalação registra versão e hashes, não segredos.
+- a detecção de Ralph externo registra somente estado, caminhos relativos,
+  tipos e SHA-256; não persiste conteúdo de configuração, prompts ou ledger.
+- backup e rollback de uma instalação externa exigirão manifesto próprio,
+  hashes antes/depois e confirmação explícita; não são efeito colateral do
+  `apply` comum.
 - `.ralph/providers.json` registra somente path, versão, capacidades, status,
   suporte do runner, provider-alvo, códigos de saída e timestamps dos probes;
   não registra saída bruta,

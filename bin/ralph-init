@@ -3,8 +3,9 @@
 
 declare(strict_types=1);
 
-const RALPH_METHOD_VERSION = '0.6.1';
+const RALPH_METHOD_VERSION = '0.7.0';
 const RALPH_INSTALL_SCHEMA_VERSION = '1.0.0';
+const RALPH_INSTALL_DETECTION_SCHEMA_VERSION = '1.0.0';
 
 $sourceRoot = realpath(getenv('RALPH_METHOD_SOURCE') ?: dirname(__DIR__)) ?: dirname(__DIR__);
 
@@ -560,6 +561,115 @@ function hashFile(string $path): ?string
     return is_file($path) ? hash_file('sha256', $path) ?: null : null;
 }
 
+/**
+ * @param array<string, mixed>|null $methodManifest
+ * @return array<string, mixed>
+ */
+function detectExistingRalphInstallation(string $root, ?array $methodManifest): array
+{
+    $manifestPath = '.ralph/install-manifest.json';
+    $manifestPresent = is_file($root.'/'.$manifestPath);
+    $methodStatus = $manifestPresent
+        ? ($methodManifest === null ? 'invalid' : 'managed')
+        : 'not_installed';
+    $managedPaths = [];
+    foreach (($methodManifest['managed_files'] ?? []) as $managed) {
+        if (is_array($managed) && is_string($managed['path'] ?? null)) {
+            $managedPaths[(string) $managed['path']] = true;
+        }
+    }
+
+    $definitions = [
+        ['id' => 'root_ralph_script', 'path' => 'ralph.sh', 'kind' => 'canonical_script'],
+        ['id' => 'hidden_ralph_script', 'path' => '.ralph/ralph.sh', 'kind' => 'canonical_script'],
+        ['id' => 'ralphfile', 'path' => 'Ralphfile', 'kind' => 'canonical_manifest'],
+        ['id' => 'root_ralph_yaml', 'path' => 'ralph.yml', 'kind' => 'configuration'],
+        ['id' => 'root_ralph_yaml_long', 'path' => 'ralph.yaml', 'kind' => 'configuration'],
+        ['id' => 'root_ralph_json', 'path' => 'ralph.json', 'kind' => 'configuration'],
+        ['id' => 'root_ralph_toml', 'path' => 'ralph.toml', 'kind' => 'configuration'],
+        ['id' => 'hidden_ralph_yaml', 'path' => '.ralph.yml', 'kind' => 'configuration'],
+        ['id' => 'hidden_ralph_yaml_long', 'path' => '.ralph.yaml', 'kind' => 'configuration'],
+        ['id' => 'hidden_ralph_json', 'path' => '.ralph.json', 'kind' => 'configuration'],
+        ['id' => 'hidden_ralph_toml', 'path' => '.ralph.toml', 'kind' => 'configuration'],
+        ['id' => 'ralph_control_binary', 'path' => 'bin/ralph-control', 'kind' => 'canonical_binary'],
+        ['id' => 'ralph_block_binary', 'path' => 'bin/ralph-block', 'kind' => 'canonical_binary'],
+        ['id' => 'ralph_loop_script', 'path' => 'scripts/ralph.sh', 'kind' => 'canonical_script'],
+        ['id' => 'ralph_install_manifest', 'path' => '.ralph/install-manifest.json', 'kind' => 'installation_manifest'],
+        ['id' => 'ralph_ledger_events', 'path' => '.git/ralph-control/events.jsonl', 'kind' => 'runtime_ledger'],
+        ['id' => 'ralph_workflow_state', 'path' => '.git/ralph-control/workflow.json', 'kind' => 'runtime_state'],
+    ];
+    $signals = [];
+    $methodRuntimePaths = ['.git/ralph-control/events.jsonl', '.git/ralph-control/workflow.json'];
+    foreach ($definitions as $definition) {
+        $relative = $definition['path'];
+        if (($managedPaths[$relative] ?? false) === true
+            || ($methodStatus === 'managed' && ($relative === $manifestPath || in_array($relative, $methodRuntimePaths, true)))) {
+            continue;
+        }
+        $absolute = $root.'/'.$relative;
+        if (! is_file($absolute)) {
+            continue;
+        }
+        $signals[] = [
+            'id' => $definition['id'],
+            'path' => $relative,
+            'kind' => $definition['kind'],
+            'sha256' => hashFile($absolute),
+        ];
+    }
+
+    $strongSignals = array_values(array_filter(
+        $signals,
+        static fn (array $signal): bool => in_array($signal['id'], [
+            'root_ralph_script', 'hidden_ralph_script', 'ralphfile',
+            'ralph_control_binary', 'ralph_block_binary', 'ralph_loop_script',
+            'ralph_install_manifest',
+        ], true)
+    ));
+    $hasExternalSignals = $signals !== [];
+    if (! $hasExternalSignals) {
+        $status = 'not_found';
+        $classification = 'none';
+        $confidence = 'none';
+        $recommendedAction = 'proceed';
+        $reason = $methodStatus === 'managed'
+            ? 'manifesto válido do Ralph Method; sinais pertencentes ao método foram ignorados'
+            : 'nenhum sinal de uma instalação Ralph externa foi encontrado';
+    } elseif ($strongSignals !== [] || count($signals) >= 2) {
+        $status = 'detected';
+        $classification = 'external_ralph';
+        $confidence = 'high';
+        $recommendedAction = 'review_before_apply';
+        $reason = 'foram encontrados sinais canônicos de Ralph fora do ownership do Ralph Method';
+    } else {
+        $status = 'ambiguous';
+        $classification = 'unknown_ralph_like';
+        $confidence = 'medium';
+        $recommendedAction = 'review_before_apply';
+        $reason = 'foi encontrado um sinal compatível, mas insuficiente para classificar a implementação';
+    }
+
+    return [
+        'schema_version' => RALPH_INSTALL_DETECTION_SCHEMA_VERSION,
+        'method' => [
+            'status' => $methodStatus,
+            'manifest_present' => $manifestPresent,
+            'manifest_path' => $manifestPresent ? $manifestPath : null,
+            'method_version' => $methodManifest['method_version'] ?? null,
+        ],
+        'external' => [
+            'status' => $status,
+            'classification' => $classification,
+            'confidence' => $confidence,
+            'signals' => $signals,
+            'recommended_action' => $recommendedAction,
+            'apply_allowed' => $status === 'not_found',
+            'migration_supported' => false,
+            'reason' => $reason,
+        ],
+    ];
+}
+
 function writeJson(string $path, array $value): void
 {
     $directory = dirname($path);
@@ -587,7 +697,7 @@ function managedSources(): array
         'scripts/ralph-run-runtime-evidence.sh',
         'schemas/feedback-event.schema.json', 'schemas/provider-readiness.schema.json',
         'schemas/runner-result.schema.json', 'schemas/readonly-policy-proof.schema.json',
-        'schemas/knowledge-candidate.schema.json',
+        'schemas/knowledge-candidate.schema.json', 'schemas/ralph-installation-detection.schema.json',
         'adapters/README.md', 'adapters/opencode/runner.sh',
         'adapters/opencode/parser.php', 'adapters/opencode/policy.php', 'adapters/opencode/contract.md',
         'scripts/opencode-readonly-proof.sh', '.opencode/agents/ralph-review.md',
@@ -699,15 +809,38 @@ function commitStagedFiles(string $root, string $stage, string $backup, array $p
 /** @return array<string, mixed> */
 function readManifest(string $path, ?string $expectedRoot = null): array
 {
-    if (! is_file($path)) {
-        fail("manifesto de instalação não encontrado: {$path}", 2);
+    $manifest = parseManifest($path, $expectedRoot);
+    if ($manifest === null) {
+        fail(is_file($path) ? 'manifesto de instalação inválido ou incompatível' : "manifesto de instalação não encontrado: {$path}", 2);
     }
-    $manifest = json_decode((string) file_get_contents($path), true, 512, JSON_THROW_ON_ERROR);
-    if (! is_array($manifest) || ! is_array($manifest['managed_files'] ?? null)) {
-        fail('manifesto de instalação inválido', 2);
+
+    return $manifest;
+}
+
+/** @return array<string, mixed>|null */
+function parseManifest(string $path, ?string $expectedRoot = null): ?array
+{
+    if (! is_file($path)) {
+        return null;
+    }
+    try {
+        $manifest = json_decode((string) file_get_contents($path), true, 512, JSON_THROW_ON_ERROR);
+    } catch (JsonException) {
+        return null;
+    }
+    if (! is_array($manifest)
+        || ($manifest['schema_version'] ?? null) !== RALPH_INSTALL_SCHEMA_VERSION
+        || ! is_string($manifest['method_version'] ?? null)
+        || ! is_string($manifest['installed_at'] ?? null)
+        || ! is_array($manifest['project'] ?? null)
+        || ! is_array($manifest['orchestration'] ?? null)
+        || ! is_array($manifest['components'] ?? null)
+        || ! in_array('installer', $manifest['components'], true)
+        || ! is_array($manifest['managed_files'] ?? null)) {
+        return null;
     }
     if ($expectedRoot !== null && ($manifest['project']['root'] ?? null) !== $expectedRoot) {
-        fail('manifesto de instalação pertence a outro projeto', 3);
+        return null;
     }
 
     return $manifest;
@@ -718,7 +851,8 @@ function installationPlan(string $root, array $detected, ?string $provider, stri
 {
     global $sourceRoot;
     $manifestPath = $root.'/.ralph/install-manifest.json';
-    $existing = is_file($manifestPath) ? readManifest($manifestPath, $root) : null;
+    $existing = parseManifest($manifestPath, $root);
+    $ralphInstallation = detectExistingRalphInstallation($root, $existing);
     $files = [];
     foreach (array_merge(managedSources(), generatedPaths()) as $relative) {
         $source = $sourceRoot.'/'.$relative;
@@ -761,6 +895,7 @@ function installationPlan(string $root, array $detected, ?string $provider, stri
             'fallback_policy' => 'none',
         ],
         'detection' => $detected,
+        'ralph_installation' => $ralphInstallation,
         'files' => $files,
         'existing_installation' => $existing !== null,
     ];
@@ -774,6 +909,12 @@ function printPlan(array $plan): void
 function applyInstallation(string $root, array $plan): void
 {
     global $sourceRoot;
+    $ralphInstallation = $plan['ralph_installation']['external'] ?? [];
+    if (($ralphInstallation['apply_allowed'] ?? false) !== true) {
+        $status = (string) ($ralphInstallation['status'] ?? 'unknown');
+        $reason = (string) ($ralphInstallation['reason'] ?? 'a origem existente não foi classificada');
+        fail("apply bloqueado: instalação Ralph {$status} fora do Ralph Method ({$reason}); preserve-a e faça uma migração explícita quando houver adapter compatível", 3);
+    }
     foreach ($plan['files'] as $file) {
         if ($file['action'] === 'conflict') {
             fail('instalação interrompida por conflito em '.$file['path'], 3);
@@ -794,6 +935,18 @@ function applyInstallation(string $root, array $plan): void
             fclose($lock);
         }
         fail('já existe uma instalação ou remoção em andamento', 4);
+    }
+
+    // Revalida depois do lock: entre o plan e o apply outro processo pode ter
+    // criado um marcador externo. O bloqueio precisa continuar fail-closed.
+    $currentManifest = parseManifest($root.'/.ralph/install-manifest.json', $root);
+    $currentInstallation = detectExistingRalphInstallation($root, $currentManifest);
+    if (($currentInstallation['external']['apply_allowed'] ?? false) !== true) {
+        $status = (string) ($currentInstallation['external']['status'] ?? 'unknown');
+        $reason = (string) ($currentInstallation['external']['reason'] ?? 'a origem existente não foi classificada');
+        flock($lock, LOCK_UN);
+        fclose($lock);
+        fail("apply bloqueado após revalidação: instalação Ralph {$status} fora do Ralph Method ({$reason})", 3);
     }
 
     $stage = $root.'/.ralph/.install-stage-'.bin2hex(random_bytes(6));
@@ -953,15 +1106,31 @@ function doctor(string $root, bool $verifyProviders): void
     $manifestPath = $root.'/.ralph/install-manifest.json';
     $detected = detectProject($root, $verifyProviders);
     if (! is_file($manifestPath)) {
+        $ralphInstallation = detectExistingRalphInstallation($root, null);
         printPlan([
-            'status' => 'not_installed',
+            'status' => ($ralphInstallation['external']['status'] ?? 'not_found') === 'not_found'
+                ? 'not_installed'
+                : 'external_ralph_detected',
             'project' => $root,
+            'ralph_installation' => $ralphInstallation,
             'provider_verification' => $detected['verification'],
             'providers' => $detected['providers'],
         ]);
         return;
     }
-    $manifest = readManifest($manifestPath, $root);
+    $manifest = parseManifest($manifestPath, $root);
+    if ($manifest === null) {
+        $ralphInstallation = detectExistingRalphInstallation($root, null);
+        printPlan([
+            'status' => 'invalid_installation',
+            'project' => $root,
+            'ralph_installation' => $ralphInstallation,
+            'provider_verification' => $detected['verification'],
+            'providers' => $detected['providers'],
+        ]);
+        return;
+    }
+    $ralphInstallation = detectExistingRalphInstallation($root, $manifest);
     $drift = [];
     foreach ($manifest['managed_files'] as $managed) {
         $path = (string) $managed['path'];
@@ -976,6 +1145,7 @@ function doctor(string $root, bool $verifyProviders): void
         'provider' => $manifest['orchestration']['primary_runner'] ?? null,
         'drift' => $drift,
         'runtime_preserved' => is_dir($root.'/.git/ralph-control'),
+        'ralph_installation' => $ralphInstallation,
         'provider_verification' => $detected['verification'],
         'providers' => $detected['providers'],
     ]);

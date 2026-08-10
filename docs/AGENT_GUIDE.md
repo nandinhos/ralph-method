@@ -1,7 +1,7 @@
 # Guia operacional para agentes de IA — Ralph Method
 
-- guide_version: 1.2.0
-- method_version: 0.6.1
+- guide_version: 1.3.0
+- method_version: 0.7.0
 - status: ativo
 - fonte_do_metodo: `VERSION`
 - contrato_de_feedback: `schemas/feedback-event.schema.json`
@@ -73,6 +73,7 @@ Leia o JSON completo:
 | `functional` + `adapter_enabled=false` | não executar; falta runner autorizado |
 | `needs_review` | parar e reportar o requisito ausente |
 | `conflict` ou `drift_detected` | preservar arquivos e resolver explicitamente |
+| `ralph_installation.external.status=detected` ou `ambiguous` | não aplicar; preservar o Ralph externo e iniciar a revisão de evolução |
 | provider não autenticado ou não saudável | corrigir a sessão; não usar fallback silencioso |
 
 `--verify-providers` executa apenas probes seguros de prontidão; não envie uma
@@ -82,6 +83,20 @@ e agy permanecem em readiness passiva nesta versão.
 
 Se o plano não produzir runner elegível, não materialize configuração fictícia
 e não avance para `apply`. O retorno correto é `needs_review` com a causa.
+
+Se `ralph_installation.external.status` for `detected` ou `ambiguous`, o
+projeto já contém sinais de um Ralph que não pertence ao manifesto do Ralph
+Method. O instalador bloqueia o `apply` comum com exit code `3`. Preserve os
+arquivos e reporte os campos `classification`, `confidence`, `signals` e
+`reason`; não copie conteúdo, não apague o ledger e não tente traduzir
+prompts, workflow ou credenciais por inferência.
+
+A evolução futura deverá ser solicitada como operação explícita, com inventário
+aprovado, backup com hashes, instalação transacional, `doctor` e manifesto de
+rollback. A solicitação de desinstalação/rollback só poderá restaurar o legado
+se a instalação nova permanecer íntegra e sem alterações do usuário. Esses
+comandos ainda não estão disponíveis nesta versão; até lá, a ação correta é
+revisão manual ou adapter de migração específico da origem.
 
 ### 0.3 Aplicar e verificar
 
@@ -520,6 +535,7 @@ Leia o JSON do plano. Procure especialmente por:
 - `runner_supported`, `functional_providers` e `available_runners`;
 - comando de teste detectado;
 - sinais de `.codex`, `.claude` ou OpenCode;
+- `ralph_installation.method` e `ralph_installation.external`;
 - working tree suja;
 - modo `needs_review` quando não houver runner habilitado.
 
@@ -815,6 +831,12 @@ RALPH_METHOD_SOURCE="$METHOD_ROOT" \
 
 Se o plano mostrar `conflict`, preserve o arquivo modificado e resolva a
 decisão explicitamente. Não force overwrite.
+
+Se o plano mostrar `ralph_installation.external.status` como `detected` ou
+`ambiguous`, interrompa a atualização normal. O Ralph Method não assume que
+conhece os arquivos, o ledger ou o contrato da instalação antiga. Aguarde uma
+operação de evolução com backup e rollback ou remova a instalação antiga por
+procedimento próprio, sempre preservando o histórico.
 
 Depois da atualização:
 

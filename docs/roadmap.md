@@ -45,6 +45,22 @@ O escopo ativo termina nos três harnesses Codex, Claude CLI e OpenCode. Hermes
 e agy não são prioridades desta linha; seus itens estão formalmente adiados em
 [`backlog.md`](backlog.md), com prioridade nenhuma.
 
+## Próxima evolução — instalação externa e rollback assistido (`v0.7.0`)
+
+- [x] detectar sinais canônicos de Ralph fora do manifesto do Ralph Method;
+- [x] emitir classificação, confiança, caminhos relativos e SHA-256 sem expor conteúdo;
+- [x] bloquear `apply` comum para origem externa ou ambígua;
+- [x] cobrir instalação externa, origem neutra, doctor e idempotência em fixture;
+- [x] documentar a separação entre detecção, migração, backup e rollback;
+- [ ] implementar `evolve --plan/--apply` com inventário aprovado e backup verificável;
+- [ ] implementar `rollback --plan/--apply` com verificação de drift e restauração condicional;
+- [ ] adicionar adapters de migração por origem, sem importar estado desconhecido por inferência;
+- [ ] testar crash, espaço insuficiente, backup incompleto e rollback após alteração do usuário.
+
+O detector já é parte da branch `dev`; a operação que move a instalação antiga
+permanece deliberadamente separada até que o contrato de backup e rollback seja
+executável e coberto por falhas reais.
+
 ## Próxima evolução — memória episódica e taxonomia (`v0.6.0`)
 
 - [x] materializar candidato sanitizado em `.ralph/knowledge-candidates/`;

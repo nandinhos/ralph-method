@@ -100,6 +100,13 @@ aquele provider.
 ao hash instalado quando recebe `--apply`. Arquivos modificados, histórico,
 workflow, handoffs e relatórios são preservados.
 
+O `plan` também verifica se já existe um Ralph de outra origem. O resultado em
+`ralph_installation.external` lista somente sinais relativos, tipo e SHA-256;
+não expõe conteúdo. Um Ralph externo ou uma origem ambígua bloqueia o `apply`
+comum para evitar sobrescrita. A evolução assistida com backup verificável,
+rollback e adapter específico será uma operação separada; nenhum ledger,
+prompt, workflow ou credencial legado é importado automaticamente.
+
 Para comprovar a reprodução a partir de um bundle limpo e de um projeto Git
 independente, execute:
 
@@ -151,6 +158,10 @@ sanitizada, retenção explícita e índices de engenharia por categoria e tema.
 O fechamento de escopo e as decisões de adiamento estão em
 [`docs/adr/0007-escopo-fechado-de-harnesses.md`](docs/adr/0007-escopo-fechado-de-harnesses.md)
 e [`docs/backlog.md`](docs/backlog.md).
+
+A próxima versão em desenvolvimento é `0.7.0`. Ela adiciona a barreira de
+detecção segura para Ralph externo e prepara o contrato de evolução sem
+misturar ownership, backup legado e runtime novo.
 
 Consulte [docs/README.md](docs/README.md), [docs/STATUS.md](docs/STATUS.md), [docs/architecture/README.md](docs/architecture/README.md),
 [docs/AGENT_GUIDE.md](docs/AGENT_GUIDE.md) e [docs/roadmap.md](docs/roadmap.md).

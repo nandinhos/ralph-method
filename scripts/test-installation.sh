@@ -49,6 +49,10 @@ INIT_JSON="$init_output" EXPECTED_VERSION="$EXPECTED_VERSION" php -r '
     if (($plan["method_version"] ?? null) !== getenv("EXPECTED_VERSION") || ! in_array("create", $actions, true)) {
         exit(1);
     }
+    if (($plan["ralph_installation"]["external"]["status"] ?? null) !== "not_found"
+        || ($plan["ralph_installation"]["external"]["apply_allowed"] ?? false) !== true) {
+        exit(1);
+    }
 '
 
 RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" apply --project "$project" --provider auto >/dev/null
@@ -69,6 +73,7 @@ assert_file "$project/.opencode/agents/ralph-review.md"
 assert_file "$project/schemas/runner-result.schema.json"
 assert_file "$project/schemas/readonly-policy-proof.schema.json"
 assert_file "$project/schemas/knowledge-candidate.schema.json"
+assert_file "$project/schemas/ralph-installation-detection.schema.json"
 assert_file "$project/.ralph/opencode.env"
 assert_file "$project/schemas/provider-readiness.schema.json"
 
@@ -78,8 +83,25 @@ printf '%s\n' "$dry_output" | grep -q 'ralph.*scripts/ralph.sh' || fail 'perfil 
 doctor_output="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" doctor --project "$project")"
 DOCTOR_JSON="$doctor_output" php -r '
     $doctor = json_decode(getenv("DOCTOR_JSON"), true, 512, JSON_THROW_ON_ERROR);
-    exit(($doctor["status"] ?? null) === "healthy" ? 0 : 1);
+    exit(($doctor["status"] ?? null) === "healthy"
+        && ($doctor["ralph_installation"]["method"]["status"] ?? null) === "managed"
+        && ($doctor["ralph_installation"]["external"]["status"] ?? null) === "not_found" ? 0 : 1);
 '
+
+# O manifesto válido não transforma um marcador externo posterior em arquivo
+# pertencente ao método: a coexistência também exige revisão.
+printf '%s\n' '# Ralph de outra origem' > "$project/ralph.sh"
+managed_external_plan="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" plan --project "$project")"
+MANAGED_EXTERNAL_JSON="$managed_external_plan" php -r '
+    $plan = json_decode(getenv("MANAGED_EXTERNAL_JSON"), true, 512, JSON_THROW_ON_ERROR);
+    exit(($plan["ralph_installation"]["method"]["status"] ?? null) === "managed"
+        && ($plan["ralph_installation"]["external"]["status"] ?? null) === "detected"
+        && ($plan["ralph_installation"]["external"]["apply_allowed"] ?? true) === false ? 0 : 1);
+'
+managed_external_exit=0
+RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" apply --project "$project" --provider auto >/dev/null 2>&1 || managed_external_exit=$?
+[ "$managed_external_exit" -eq 3 ] || fail "marcador externo posterior não bloqueou apply"
+rm "$project/ralph.sh"
 
 # Runtime, histórico e handoff são do projeto e sobrevivem à remoção do método.
 mkdir -p "$project/.git/ralph-control" "$project/.ralph/handoffs" "$project/.ralph/reports"
@@ -134,6 +156,98 @@ CONFLICT_JSON="$conflict_plan" php -r '
 conflict_exit=0
 RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" apply --project "$conflict_project" --provider auto >/dev/null 2>&1 || conflict_exit=$?
 [ "$conflict_exit" -eq 3 ] || fail "conflito não interrompeu a instalação com exit 3"
+
+# Uma instalação Ralph externa é inventariada sem ler ou copiar conteúdo e
+# bloqueia o apply comum para exigir uma evolução explícita.
+external_project="$TMP/ralph-externo"
+new_project "$external_project"
+printf '%s\n' '#!/usr/bin/env bash' 'echo legacy-ralph' > "$external_project/ralph.sh"
+printf '%s\n' '# Ralph legado' > "$external_project/Ralphfile"
+chmod +x "$external_project/ralph.sh"
+external_plan="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" plan --project "$external_project")"
+EXTERNAL_JSON="$external_plan" php -r '
+    $plan = json_decode(getenv("EXTERNAL_JSON"), true, 512, JSON_THROW_ON_ERROR);
+    $installation = $plan["ralph_installation"] ?? [];
+    $external = $installation["external"] ?? [];
+    if (($installation["method"]["status"] ?? null) !== "not_installed"
+        || ($external["status"] ?? null) !== "detected"
+        || ($external["classification"] ?? null) !== "external_ralph"
+        || ($external["confidence"] ?? null) !== "high"
+        || ($external["apply_allowed"] ?? true) !== false
+        || ($external["migration_supported"] ?? true) !== false) {
+        exit(1);
+    }
+    foreach ($external["signals"] ?? [] as $signal) {
+        if (str_starts_with((string) ($signal["path"] ?? ""), "/")
+            || isset($signal["content"])
+            || ! preg_match("/^[a-f0-9]{64}$/", (string) ($signal["sha256"] ?? ""))) {
+            exit(1);
+        }
+    }
+'
+
+external_apply_exit=0
+RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" apply --project "$external_project" --provider auto >/dev/null 2>&1 || external_apply_exit=$?
+[ "$external_apply_exit" -eq 3 ] || fail "Ralph externo não bloqueou apply com exit 3"
+assert_file "$external_project/ralph.sh"
+assert_file "$external_project/Ralphfile"
+assert_not_file "$external_project/.ralph/install-manifest.json"
+external_doctor="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" doctor --project "$external_project")"
+EXTERNAL_DOCTOR_JSON="$external_doctor" php -r '
+    $doctor = json_decode(getenv("EXTERNAL_DOCTOR_JSON"), true, 512, JSON_THROW_ON_ERROR);
+    exit(($doctor["status"] ?? null) === "external_ralph_detected"
+        && ($doctor["ralph_installation"]["external"]["status"] ?? null) === "detected" ? 0 : 1);
+'
+
+# Manifesto presente, mas inválido ou de outra origem, também bloqueia e fica
+# visível como instalação inválida em vez de falhar sem diagnóstico.
+invalid_project="$TMP/ralph-manifesto-invalido"
+new_project "$invalid_project"
+mkdir -p "$invalid_project/.ralph"
+printf '%s\n' '{"origem":"ralph-legado"}' > "$invalid_project/.ralph/install-manifest.json"
+invalid_plan="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" plan --project "$invalid_project")"
+INVALID_JSON="$invalid_plan" php -r '
+    $plan = json_decode(getenv("INVALID_JSON"), true, 512, JSON_THROW_ON_ERROR);
+    exit(($plan["ralph_installation"]["method"]["status"] ?? null) === "invalid"
+        && ($plan["ralph_installation"]["external"]["status"] ?? null) === "detected"
+        && ($plan["ralph_installation"]["external"]["apply_allowed"] ?? true) === false ? 0 : 1);
+'
+invalid_apply_exit=0
+RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" apply --project "$invalid_project" --provider auto >/dev/null 2>&1 || invalid_apply_exit=$?
+[ "$invalid_apply_exit" -eq 3 ] || fail "manifesto inválido não bloqueou apply com exit 3"
+invalid_doctor="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" doctor --project "$invalid_project")"
+INVALID_DOCTOR_JSON="$invalid_doctor" php -r '
+    $doctor = json_decode(getenv("INVALID_DOCTOR_JSON"), true, 512, JSON_THROW_ON_ERROR);
+    exit(($doctor["status"] ?? null) === "invalid_installation"
+        && ($doctor["ralph_installation"]["method"]["status"] ?? null) === "invalid" ? 0 : 1);
+'
+
+# Uma pasta .ralph sem marcador conhecido não é tratada como instalação Ralph.
+neutral_project="$TMP/ralph-neutro"
+new_project "$neutral_project"
+mkdir -p "$neutral_project/.ralph"
+printf '%s\n' 'configuração do projeto' > "$neutral_project/.ralph/project-notes.txt"
+neutral_plan="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" plan --project "$neutral_project")"
+NEUTRAL_JSON="$neutral_plan" php -r '
+    $plan = json_decode(getenv("NEUTRAL_JSON"), true, 512, JSON_THROW_ON_ERROR);
+    exit(($plan["ralph_installation"]["external"]["status"] ?? null) === "not_found"
+        && ($plan["ralph_installation"]["external"]["apply_allowed"] ?? false) === true ? 0 : 1);
+'
+
+# Um marcador genérico isolado é ambíguo, mas ainda bloqueia por segurança.
+ambiguous_project="$TMP/ralph-ambiguo"
+new_project "$ambiguous_project"
+printf '%s\n' 'workflow: legado' > "$ambiguous_project/ralph.yml"
+ambiguous_plan="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" plan --project "$ambiguous_project")"
+AMBIGUOUS_JSON="$ambiguous_plan" php -r '
+    $plan = json_decode(getenv("AMBIGUOUS_JSON"), true, 512, JSON_THROW_ON_ERROR);
+    exit(($plan["ralph_installation"]["external"]["status"] ?? null) === "ambiguous"
+        && ($plan["ralph_installation"]["external"]["classification"] ?? null) === "unknown_ralph_like"
+        && ($plan["ralph_installation"]["external"]["apply_allowed"] ?? true) === false ? 0 : 1);
+'
+ambiguous_apply_exit=0
+RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" apply --project "$ambiguous_project" --provider auto >/dev/null 2>&1 || ambiguous_apply_exit=$?
+[ "$ambiguous_apply_exit" -eq 3 ] || fail "origem ambígua não bloqueou apply com exit 3"
 
 # Falha durante o staging não publica arquivos parcialmente.
 broken_source="$TMP/source-incompleto"

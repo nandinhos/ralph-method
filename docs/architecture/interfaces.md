@@ -77,6 +77,36 @@ relatório fica em
 `.ralph/uninstall-report.json`. O histórico operacional (`.git/ralph-control`),
 workflow, handoffs e relatórios não pertencem ao uninstall e são preservados.
 
+## Detecção de Ralph externo
+
+Todo `plan` também devolve `ralph_installation`, validável por
+`schemas/ralph-installation-detection.schema.json`:
+
+| Campo | Valores | Decisão |
+|---|---|---|
+| `method.status` | `managed`, `not_installed`, `invalid` | informa se o manifesto pertence ao Ralph Method |
+| `external.status` | `not_found`, `detected`, `ambiguous` | classifica sinais fora do ownership conhecido |
+| `external.confidence` | `none`, `low`, `medium`, `high` | indica força do inventário, não semântica do legado |
+| `external.apply_allowed` | booleano | somente `true` permite o `apply` comum |
+| `external.signals` | id, caminho relativo, tipo e SHA-256 | comprova o que foi encontrado sem expor conteúdo |
+
+Sinais canônicos como `Ralphfile`, `ralph.sh`, `bin/ralph-control` ou
+`scripts/ralph.sh` produzem `detected` com confiança alta. Um marcador
+genérico isolado pode produzir `ambiguous`; por segurança também bloqueia o
+`apply`. Em ambos os casos o exit code é `3`, nenhum arquivo é movido e a
+instalação externa permanece intacta.
+
+O caminho futuro de evolução é deliberadamente explícito:
+
+```text
+plan → inventário aprovado → backup com hashes → isolamento
+→ instalação transacional → doctor → manifesto de rollback
+→ rollback condicional se a nova instalação for rejeitada
+```
+
+Não existe migração genérica nesta versão. O método não importa ledger,
+workflow, prompts, credenciais ou eventos de uma origem desconhecida.
+
 ## Canal de feedback do loop
 
 `scripts/ralph.sh` emite um evento sanitizado para cada início, tentativa,

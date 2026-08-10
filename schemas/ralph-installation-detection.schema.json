@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ralph-method.local/schemas/ralph-installation-detection.schema.json",
+  "title": "Detecção de instalação Ralph no projeto-alvo",
+  "type": "object",
+  "required": ["schema_version", "method", "external"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "method": {
+      "type": "object",
+      "required": ["status", "manifest_present", "manifest_path", "method_version"],
+      "properties": {
+        "status": {"enum": ["managed", "not_installed", "invalid"]},
+        "manifest_present": {"type": "boolean"},
+        "manifest_path": {"type": ["string", "null"]},
+        "method_version": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "external": {
+      "type": "object",
+      "required": [
+        "status",
+        "classification",
+        "confidence",
+        "signals",
+        "recommended_action",
+        "apply_allowed",
+        "migration_supported",
+        "reason"
+      ],
+      "properties": {
+        "status": {"enum": ["not_found", "detected", "ambiguous"]},
+        "classification": {"enum": ["none", "external_ralph", "unknown_ralph_like"]},
+        "confidence": {"enum": ["none", "low", "medium", "high"]},
+        "signals": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "path", "kind", "sha256"],
+            "properties": {
+              "id": {"type": "string", "pattern": "^[a-z0-9_]+$"},
+              "path": {"type": "string", "pattern": "^(?!/)(?!.*\\.\\.)[^\\n]+$"},
+              "kind": {"type": "string"},
+              "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+            },
+            "additionalProperties": false
+          }
+        },
+        "recommended_action": {"enum": ["proceed", "review_before_apply"]},
+        "apply_allowed": {"type": "boolean"},
+        "migration_supported": {"const": false},
+        "reason": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

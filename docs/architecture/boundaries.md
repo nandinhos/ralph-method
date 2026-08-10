@@ -9,7 +9,7 @@
 | canal de feedback | publicar fatos sanitizados ao consumidor externo | alterar estado, gate, lease ou fila |
 | relay do `ralph-control` | retransmitir feedback durante o bloco | interpretar feedback como aprovação |
 | adaptador provider | converter saída externa para contrato trace e reportar política comprovada | escrever ledger ou alterar código |
-| `ralph-init` | detectar contexto, instalar e remover bundle com ownership | copiar credenciais, remover histórico ou sobrescrever arquivos sem ownership |
+| `ralph-init` | detectar contexto, detectar Ralph externo, instalar e remover bundle com ownership | copiar credenciais, remover histórico, migrar runtime desconhecido ou sobrescrever arquivos sem ownership |
 | verificador de provider | executar probes seguros explícitos e materializar prontidão | iniciar geração, salvar saída sensível ou habilitar adapter sem diagnóstico |
 | projeto-alvo | fornecer contexto, fases e comando de teste | depender do banco ou domínio do Ralph |
 
@@ -25,6 +25,13 @@ relatórios.
 O `bc-harness` pode distribuir o instalador, mas não é necessário em runtime.
 Depois de instalado, o projeto-alvo possui cópia própria do método e pode
 desinstalá-la sem apagar suas evidências.
+
+Antes do `apply`, o instalador executa uma detecção somente leitura de sinais
+de um Ralph que não pertence ao manifesto do método. A saída usa caminhos
+relativos, tipos e SHA-256, sem conteúdo. Sinal canônico ou combinação de
+sinais gera bloqueio fail-closed; uma pasta `.ralph` sem marcador conhecido é
+insuficiente para bloquear. A evolução com backup e rollback será uma operação
+explícita, separada do `apply` comum, e ainda depende de um adapter de origem.
 
 ## Seam de harnesses e providers
 

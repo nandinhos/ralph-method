@@ -25,6 +25,23 @@ O hotfix foi promovido para `main` pela PR #1 no merge `ba98dfa`. O CI remoto
 passou no run `31341326999`, incluindo os checks portáteis e o GitGuardian. A
 tag anotada `v0.6.1` identifica este fechamento documental e de portabilidade.
 
+## 0.7.0 — em desenvolvimento
+
+### Detecção segura de instalação externa
+
+- adicionada detecção somente leitura de sinais de Ralph fora do manifesto do
+  Ralph Method;
+- publicado o contrato `schemas/ralph-installation-detection.schema.json` com
+  classificação, confiança, caminhos relativos e hashes SHA-256;
+- bloqueado o `apply` comum quando há Ralph externo detectado ou origem
+  ambígua, preservando os arquivos encontrados;
+- adicionado `doctor` com status explícito para instalação externa;
+- documentada a evolução futura com backup, rollback e adapter de origem, sem
+  migração genérica de ledger, prompts, workflow ou credenciais.
+
+Esta versão está em validação na branch `dev`; ainda não possui tag ou
+promoção para `main`.
+
 ## 0.6.0 — publicada em 2026-08-09
 
 ### Memória episódica e retenção
