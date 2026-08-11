@@ -66,16 +66,19 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["path", "relative_path", "type", "sha256"],
+            "required": ["path", "relative_path", "type", "mode", "sha256"],
             "properties": {
               "path": {"type": "string", "pattern": "^(?!/)(?!.*\\.\\.)[^\\n]+$"},
               "relative_path": {"type": "string", "pattern": "^(?!/)(?!.*\\.\\.)[^\\n]+$"},
-              "type": {"const": "file"},
-              "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+              "type": {"enum": ["file", "directory", "symlink"]},
+              "mode": {"type": "string", "pattern": "^[0-7]{4}$"},
+              "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+              "link_target": {"type": ["string", "null"]}
             },
             "additionalProperties": false
           }
         },
+        "root_mode": {"type": ["string", "null"], "pattern": "^[0-7]{4}$"},
         "tree_fingerprint": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
         "legacy_candidates": {
           "type": "array",

@@ -6,7 +6,7 @@ declare(strict_types=1);
 const RALPH_METHOD_VERSION = '0.8.0';
 const RALPH_INSTALL_SCHEMA_VERSION = '1.0.0';
 const RALPH_INSTALL_DETECTION_SCHEMA_VERSION = '1.1.0';
-const RALPH_EVOLUTION_SCHEMA_VERSION = '1.0.0';
+const RALPH_EVOLUTION_SCHEMA_VERSION = '1.1.0';
 
 $sourceRoot = realpath(getenv('RALPH_METHOD_SOURCE') ?: dirname(__DIR__)) ?: dirname(__DIR__);
 
@@ -576,6 +576,115 @@ function hashFile(string $path): ?string
     return is_file($path) ? hash_file('sha256', $path) ?: null : null;
 }
 
+function entryType(string $path): ?string
+{
+    if (is_link($path)) {
+        return 'symlink';
+    }
+    if (is_file($path)) {
+        return 'file';
+    }
+    if (is_dir($path)) {
+        return 'directory';
+    }
+
+    return null;
+}
+
+function entryMode(string $path): ?string
+{
+    $stat = @lstat($path);
+    if (! is_array($stat) || ! isset($stat['mode'])) {
+        return null;
+    }
+
+    return sprintf('%04o', ((int) $stat['mode']) & 07777);
+}
+
+function entryHash(string $path, ?string $type = null): ?string
+{
+    $type ??= entryType($path);
+    if ($type === 'file') {
+        return hashFile($path);
+    }
+    if ($type === 'symlink') {
+        $target = readlink($path);
+        return $target === false ? null : hash('sha256', $target);
+    }
+    if ($type === 'directory') {
+        return hash('sha256', 'directory');
+    }
+
+    return null;
+}
+
+function entryLinkTarget(string $path, ?string $type = null): ?string
+{
+    return ($type ?? entryType($path)) === 'symlink' ? (readlink($path) ?: null) : null;
+}
+
+function entryExists(string $path): bool
+{
+    return file_exists($path) || is_link($path);
+}
+
+function entryMatches(string $path, array $member): bool
+{
+    $type = entryType($path);
+    if ($type !== ($member['type'] ?? null)) {
+        return false;
+    }
+    if (entryMode($path) !== ($member['mode'] ?? null)) {
+        return false;
+    }
+    if (entryHash($path, $type) !== ($member['sha256'] ?? null)) {
+        return false;
+    }
+    if ($type === 'symlink' && entryLinkTarget($path, $type) !== ($member['link_target'] ?? null)) {
+        return false;
+    }
+
+    return true;
+}
+
+/** @param list<array<string, mixed>> $members */
+function legacyTreeFingerprint(array $members, ?string $rootMode = null): string
+{
+    usort($members, static fn (array $left, array $right): int => strcmp((string) ($left['relative_path'] ?? ''), (string) ($right['relative_path'] ?? '')));
+
+    return hash('sha256', (string) $rootMode."\n".implode("\n", array_map(
+        static fn (array $member): string => implode("\0", [
+            (string) ($member['relative_path'] ?? ''),
+            (string) ($member['type'] ?? ''),
+            (string) ($member['mode'] ?? ''),
+            (string) ($member['sha256'] ?? ''),
+            (string) ($member['link_target'] ?? ''),
+        ]),
+        $members
+    )));
+}
+
+/** @param list<array<string, mixed>> $members */
+function orderedLegacyMembers(array $members, bool $restore = false): array
+{
+    usort($members, static function (array $left, array $right) use ($restore): int {
+        $leftType = ($left['type'] ?? null) === 'directory' ? 1 : 0;
+        $rightType = ($right['type'] ?? null) === 'directory' ? 1 : 0;
+        if ($leftType !== $rightType) {
+            return $restore ? $rightType <=> $leftType : $leftType <=> $rightType;
+        }
+        $leftDepth = substr_count((string) ($left['relative_path'] ?? ''), '/');
+        $rightDepth = substr_count((string) ($right['relative_path'] ?? ''), '/');
+        if ($leftDepth !== $rightDepth) {
+            return $restore ? $leftDepth <=> $rightDepth : $rightDepth <=> $leftDepth;
+        }
+
+        return strcmp((string) ($left['relative_path'] ?? ''), (string) ($right['relative_path'] ?? ''));
+    });
+
+    return $members;
+}
+
 function isSafeRelativePath(string $path): bool
 {
     if ($path === '' || str_starts_with($path, '/') || str_contains($path, "\\") || str_contains($path, "\0")) {
@@ -635,11 +744,20 @@ function inspectLegacyRoot(string $projectRoot, string $relativeRoot, string $ty
     }
 
     $members = [];
+    $rootMode = entryMode($root);
+    if ($rootMode === null) {
+        return [
+            'path' => $relativeRoot,
+            'type' => $type,
+            'status' => 'rejected',
+            'reason' => 'não foi possível ler as permissões da raiz legada',
+        ];
+    }
     $unsafeReason = null;
     try {
         $iterator = new RecursiveIteratorIterator(
             new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS),
-            RecursiveIteratorIterator::LEAVES_ONLY
+            RecursiveIteratorIterator::SELF_FIRST
         );
         foreach ($iterator as $entry) {
             $absolute = $entry->getPathname();
@@ -650,28 +768,39 @@ function inspectLegacyRoot(string $projectRoot, string $relativeRoot, string $ty
                 break;
             }
             if ($entry->isLink()) {
-                $unsafeReason = pathWithin($absolute, $root)
-                    ? 'symlink legado não suportado'
-                    : 'symlink legado aponta para fora da raiz do projeto';
-                break;
-            }
-            if (! $entry->isFile()) {
+                $target = realpath($absolute);
+                if ($target === false || ! pathWithin($target, $projectRoot)) {
+                    $unsafeReason = 'symlink legado aponta para fora da raiz do projeto';
+                    break;
+                }
+                $entryTypeName = 'symlink';
+            } elseif ($entry->isDir()) {
+                $entryTypeName = 'directory';
+            } elseif ($entry->isFile()) {
+                $entryTypeName = 'file';
+            } else {
                 $unsafeReason = 'membro legado com tipo não suportado';
                 break;
             }
-            $sha256 = hashFile($absolute);
-            if ($sha256 === null) {
-                $unsafeReason = 'não foi possível calcular SHA-256 do membro legado';
+            $mode = entryMode($absolute);
+            $sha256 = entryHash($absolute, $entryTypeName);
+            if ($mode === null || $sha256 === null) {
+                $unsafeReason = 'não foi possível calcular os metadados do membro legado';
                 break;
             }
-            $members[] = [
+            $member = [
                 'path' => $memberPath,
                 'relative_path' => $memberRelativePath,
-                'type' => 'file',
+                'type' => $entryTypeName,
+                'mode' => $mode,
                 'sha256' => $sha256,
             ];
+            if ($entryTypeName === 'symlink') {
+                $member['link_target'] = entryLinkTarget($absolute, $entryTypeName);
+            }
+            $members[] = $member;
         }
-    } catch (UnexpectedValueException $exception) {
+    } catch (UnexpectedValueException|RuntimeException $exception) {
         $unsafeReason = 'não foi possível enumerar a árvore legada';
     }
 
@@ -702,10 +831,6 @@ function inspectLegacyRoot(string $projectRoot, string $relativeRoot, string $ty
         ];
     }
 
-    $fingerprintInput = implode("\n", array_map(
-        static fn (array $member): string => $member['relative_path'].'\0'.$member['type'].'\0'.$member['sha256'],
-        $members
-    ));
     $signatureId = 'bc_harness_legacy_directory_v1';
 
     return [
@@ -715,7 +840,8 @@ function inspectLegacyRoot(string $projectRoot, string $relativeRoot, string $ty
         'family' => 'bc-harness',
         'signature_id' => $signatureId,
         'members' => $members,
-        'tree_fingerprint' => hash('sha256', $fingerprintInput),
+        'root_mode' => $rootMode,
+        'tree_fingerprint' => legacyTreeFingerprint($members, $rootMode),
         'reason' => 'composição install.sh + ralph.patch + ralph.sh.upstream reconhecida',
     ];
 }
@@ -810,6 +936,14 @@ function detectExistingRalphInstallation(string $root, ?array $methodManifest): 
     ));
     $legacyDetection = detectLegacyInstallations($root);
     $legacyInstallation = $legacyDetection['installations'][0] ?? null;
+    if ($legacyInstallation !== null) {
+        $signals[] = [
+            'id' => 'legacy_directory_root',
+            'path' => $legacyInstallation['path'],
+            'kind' => 'legacy_directory',
+            'sha256' => $legacyInstallation['tree_fingerprint'],
+        ];
+    }
     $hasExternalSignals = $signals !== [];
     if ($legacyInstallation !== null) {
         $status = 'detected';
@@ -861,6 +995,7 @@ function detectExistingRalphInstallation(string $root, ?array $methodManifest): 
             'legacy_root' => $legacyInstallation['path'] ?? null,
             'legacy_type' => $legacyInstallation['type'] ?? null,
             'members' => $legacyInstallation['members'] ?? [],
+            'root_mode' => $legacyInstallation['root_mode'] ?? null,
             'tree_fingerprint' => $legacyInstallation['tree_fingerprint'] ?? null,
             'legacy_candidates' => $legacyDetection['candidates'],
         ],
@@ -1466,18 +1601,183 @@ function updateEvolutionState(array &$state, string $status, ?string $failure = 
 }
 
 /** @param array<string, mixed> $state */
+function recordEvolutionMove(array &$state, string $phase, string $action, string $path, string $status): void
+{
+    $state['journal'][] = [
+        'sequence' => count($state['journal'] ?? []) + 1,
+        'phase' => $phase,
+        'action' => $action,
+        'path' => $path,
+        'status' => $status,
+        'timestamp' => gmdate('Y-m-d\TH:i:s\Z'),
+    ];
+    writeJsonStrict((string) $state['state_path'], $state);
+}
+
+/** @param array<string, mixed> $state */
+/** @param array<string, mixed> $state */
+function legacyTreeMembers(array $state, string $treePath): array
+{
+    return array_values(array_filter(
+        $state['backup']['files'] ?? [],
+        static fn (array $member): bool => ($member['tree_path'] ?? null) === $treePath
+    ));
+}
+
+/** @param array<string, mixed> $state */
+function updateLegacyTreeMembers(array &$state, string $treePath, string $status): void
+{
+    foreach ($state['backup']['files'] as $index => $member) {
+        if (($member['tree_path'] ?? null) === $treePath) {
+            $state['backup']['files'][$index]['status'] = $status;
+        }
+    }
+}
+
+/** @param array<string, mixed> $state */
+function validateLegacyTree(array $state, array $tree, bool $backup): array
+{
+    $root = (string) $state['project']['root'];
+    $base = $root.'/'.($backup ? (string) $tree['backup_path'] : (string) $tree['path']);
+    $members = legacyTreeMembers($state, (string) $tree['path']);
+    $drift = [];
+    foreach (orderedLegacyMembers($members) as $member) {
+        $relative = (string) $member['relative_path'];
+        $path = $base.'/'.$relative;
+        if (! entryExists($path)) {
+            $drift[] = ['path' => $member['path'], 'expected' => $member['sha256'], 'actual' => null, 'status' => 'missing'];
+            continue;
+        }
+        if (! entryMatches($path, $member)) {
+            $drift[] = [
+                'path' => $member['path'],
+                'expected' => $member['sha256'],
+                'actual' => entryHash($path),
+                'status' => 'modified',
+            ];
+        }
+    }
+    $rootMode = entryMode($base);
+    if ($rootMode !== ($tree['root_mode'] ?? null)) {
+        $drift[] = ['path' => $tree['path'], 'expected_mode' => $tree['root_mode'] ?? null, 'actual_mode' => $rootMode, 'status' => 'modified'];
+    }
+    if ($drift === [] && legacyTreeFingerprint($members, $tree['root_mode'] ?? null) !== ($tree['tree_fingerprint'] ?? null)) {
+        $drift[] = ['path' => $tree['path'], 'status' => 'fingerprint_mismatch'];
+    }
+
+    return $drift;
+}
+
+/** @param array<string, mixed> $state */
+function quarantineLegacyTree(array &$state, array $tree): void
+{
+    $root = (string) $state['project']['root'];
+    $source = $root.'/'.$tree['path'];
+    $backup = $root.'/'.$tree['backup_path'];
+    if (($tree['status'] ?? null) === 'quarantined' && entryExists($backup)) {
+        return;
+    }
+    if (! entryExists($source)) {
+        if (entryExists($backup) && validateLegacyTree($state, $tree, true) === []) {
+            $index = null;
+            foreach ($state['backup']['trees'] as $candidateIndex => $candidate) {
+                if (($candidate['path'] ?? null) === $tree['path']) {
+                    $index = $candidateIndex;
+                    break;
+                }
+            }
+            if ($index === null) {
+                throw new RuntimeException('árvore legada não está registrada no estado: '.$tree['path']);
+            }
+            $state['backup']['trees'][$index]['status'] = 'quarantined';
+            updateLegacyTreeMembers($state, $tree['path'], 'quarantined');
+            writeJsonStrict((string) $state['state_path'], $state);
+            return;
+        }
+        throw new RuntimeException('raiz legada ausente durante a quarentena: '.$tree['path']);
+    }
+    if (validateLegacyTree($state, $tree, false) !== []) {
+        throw new RuntimeException('a árvore legada mudou entre o plan e o apply: '.$tree['path']);
+    }
+    if (! is_dir(dirname($backup)) && ! mkdir(dirname($backup), 0700, true) && ! is_dir(dirname($backup))) {
+        throw new RuntimeException('não foi possível preparar o backup recursivo de '.$tree['path']);
+    }
+    $index = null;
+    foreach ($state['backup']['trees'] as $candidateIndex => $candidate) {
+        if (($candidate['path'] ?? null) === $tree['path']) {
+            $index = $candidateIndex;
+            break;
+        }
+    }
+    if ($index === null) {
+        throw new RuntimeException('árvore legada não está registrada no estado: '.$tree['path']);
+    }
+    $state['backup']['trees'][$index]['status'] = 'quarantining';
+    updateLegacyTreeMembers($state, $tree['path'], 'quarantining');
+    writeJsonStrict((string) $state['state_path'], $state);
+    recordEvolutionMove($state, 'quarantine', 'move_tree', $tree['path'], 'before');
+    if (! rename($source, $backup)) {
+        throw new RuntimeException('não foi possível isolar a árvore legada '.$tree['path']);
+    }
+    $state['backup']['trees'][$index]['status'] = 'quarantined';
+    updateLegacyTreeMembers($state, $tree['path'], 'quarantined');
+    recordEvolutionMove($state, 'quarantine', 'move_tree', $tree['path'], 'after');
+}
+
+/** @param array<string, mixed> $state */
 function restoreEvolutionSignals(array &$state): void
 {
     $root = (string) $state['project']['root'];
+    foreach (array_reverse(array_keys($state['backup']['trees'] ?? [])) as $treeIndex) {
+        $tree = $state['backup']['trees'][$treeIndex];
+        if (in_array(($tree['status'] ?? null), ['pending', 'restored'], true)) {
+            continue;
+        }
+        $source = $root.'/'.$tree['path'];
+        $backup = $root.'/'.$tree['backup_path'];
+        if (($tree['status'] ?? null) === 'restoring' && ! entryExists($backup) && entryExists($source)) {
+            if (validateLegacyTree($state, $tree, false) !== []) {
+                throw new RuntimeException('restauração interrompida com árvore divergente em '.$tree['path']);
+            }
+            $state['backup']['trees'][$treeIndex]['status'] = 'restored';
+            updateLegacyTreeMembers($state, $tree['path'], 'restored');
+            writeJsonStrict((string) $state['state_path'], $state);
+            continue;
+        }
+        if (validateLegacyTree($state, $tree, true) !== []) {
+            throw new RuntimeException('backup recursivo ausente ou divergente em '.$tree['path']);
+        }
+        if (entryExists($source)) {
+            throw new RuntimeException('restauração recusada: destino ocupado '.$tree['path']);
+        }
+        $state['backup']['trees'][$treeIndex]['status'] = 'restoring';
+        updateLegacyTreeMembers($state, $tree['path'], 'restoring');
+        writeJsonStrict((string) $state['state_path'], $state);
+        recordEvolutionMove($state, 'restore', 'move_tree', $tree['path'], 'before');
+        if (! rename($backup, $source)) {
+            throw new RuntimeException('não foi possível restaurar '.$tree['path']);
+        }
+        if (validateLegacyTree($state, $tree, false) !== []) {
+            throw new RuntimeException('restauração produziu árvore divergente em '.$tree['path']);
+        }
+        $state['backup']['trees'][$treeIndex]['status'] = 'restored';
+        updateLegacyTreeMembers($state, $tree['path'], 'restored');
+        recordEvolutionMove($state, 'restore', 'move_tree', $tree['path'], 'after');
+    }
     foreach (array_reverse(array_keys($state['backup']['files'] ?? [])) as $index) {
         $file = &$state['backup']['files'][$index];
+        if (isset($file['tree_path'])) {
+            unset($file);
+            continue;
+        }
         if (! in_array(($file['status'] ?? null), ['quarantining', 'quarantined', 'restoring'], true)) {
+            unset($file);
             continue;
         }
         $destination = $root.'/'.$file['path'];
         $backupPath = $root.'/'.$file['backup_path'];
-        if (($file['status'] ?? null) === 'restoring' && is_file($destination) && ! is_file($backupPath)) {
-            if (hashFile($destination) !== ($file['sha256'] ?? null)) {
+        if (($file['status'] ?? null) === 'restoring' && entryExists($destination) && ! entryExists($backupPath)) {
+            if (! entryMatches($destination, $file)) {
                 throw new RuntimeException('restauração interrompida com conteúdo divergente em '.$file['path']);
             }
             $file['status'] = 'restored';
@@ -1485,10 +1785,10 @@ function restoreEvolutionSignals(array &$state): void
             unset($file);
             continue;
         }
-        if (! is_file($backupPath)) {
+        if (! entryExists($backupPath)) {
             throw new RuntimeException('backup ausente para '.$file['path']);
         }
-        if (is_file($destination)) {
+        if (entryExists($destination)) {
             throw new RuntimeException('restauração recusada: destino ocupado '.$file['path']);
         }
         if (! is_dir(dirname($destination)) && ! mkdir(dirname($destination), 0700, true) && ! is_dir(dirname($destination))) {
@@ -1496,11 +1796,15 @@ function restoreEvolutionSignals(array &$state): void
         }
         $file['status'] = 'restoring';
         writeJsonStrict((string) $state['state_path'], $state);
+        recordEvolutionMove($state, 'restore', 'move_entry', $file['path'], 'before');
         if (! rename($backupPath, $destination)) {
             throw new RuntimeException('não foi possível restaurar '.$file['path']);
         }
+        if (! entryMatches($destination, $file)) {
+            throw new RuntimeException('restauração produziu conteúdo divergente em '.$file['path']);
+        }
         $file['status'] = 'restored';
-        writeJsonStrict((string) $state['state_path'], $state);
+        recordEvolutionMove($state, 'restore', 'move_entry', $file['path'], 'after');
         unset($file);
     }
 }
@@ -1553,6 +1857,11 @@ function evolveApply(string $root, array $detected, string $requestedProvider, b
                 'classification' => $external['classification'],
                 'confidence' => $external['confidence'],
                 'signals' => $external['signals'],
+                'legacy_root' => $external['legacy_root'] ?? null,
+                'legacy_type' => $external['legacy_type'] ?? null,
+                'root_mode' => $external['root_mode'] ?? null,
+                'tree_fingerprint' => $external['tree_fingerprint'] ?? null,
+                'members' => $external['members'] ?? [],
             ],
             'migration' => [
                 'mode' => 'quarantine_only',
@@ -1563,6 +1872,7 @@ function evolveApply(string $root, array $detected, string $requestedProvider, b
             'backup' => [
                 'directory' => '.ralph/evolutions/'.$evolutionId.'/backup',
                 'files' => [],
+                'trees' => [],
                 'preserved_runtime_paths' => [],
             ],
             'installation' => [
@@ -1571,15 +1881,53 @@ function evolveApply(string $root, array $detected, string $requestedProvider, b
                 'manifest_hash' => null,
             ],
             'rollback' => ['available' => true, 'status' => 'not_started'],
+            'journal' => [],
+            'staging' => [
+                'path' => '.ralph/evolutions/'.$evolutionId.'/backup',
+                'status' => 'quarantine_staging',
+            ],
         ];
+        $legacyRoot = (string) ($external['legacy_root'] ?? '');
+        if (($external['legacy_type'] ?? null) === 'legacy_directory' && $legacyRoot !== '') {
+            $treeBackupPath = '.ralph/evolutions/'.$evolutionId.'/backup/'.$legacyRoot;
+            $state['backup']['trees'][] = [
+                'path' => $legacyRoot,
+                'backup_path' => $treeBackupPath,
+                'root_mode' => $external['root_mode'] ?? null,
+                'tree_fingerprint' => $external['tree_fingerprint'] ?? null,
+                'status' => 'pending',
+            ];
+            foreach ($external['members'] ?? [] as $member) {
+                $relativeMember = (string) ($member['relative_path'] ?? '');
+                if (! isSafeRelativePath($relativeMember)) {
+                    throw new RuntimeException('membro legado inválido no inventário: '.$relativeMember);
+                }
+                $state['backup']['files'][] = [
+                    'path' => $legacyRoot.'/'.$relativeMember,
+                    'relative_path' => $relativeMember,
+                    'tree_path' => $legacyRoot,
+                    'type' => $member['type'] ?? null,
+                    'mode' => $member['mode'] ?? null,
+                    'sha256' => $member['sha256'] ?? null,
+                    'link_target' => $member['link_target'] ?? null,
+                    'backup_path' => $treeBackupPath.'/'.$relativeMember,
+                    'status' => 'pending',
+                ];
+            }
+        }
         foreach ($external['signals'] as $signal) {
             $relative = (string) $signal['path'];
+            if (($signal['kind'] ?? null) === 'legacy_directory') {
+                continue;
+            }
             if (signalIsRuntime($signal)) {
                 $state['backup']['preserved_runtime_paths'][] = ['path' => $relative, 'sha256' => $signal['sha256']];
                 continue;
             }
             $state['backup']['files'][] = [
                 'path' => $relative,
+                'type' => 'file',
+                'mode' => entryMode($root.'/'.$relative),
                 'sha256' => $signal['sha256'],
                 'backup_path' => '.ralph/evolutions/'.$evolutionId.'/backup/'.$relative,
                 'status' => 'pending',
@@ -1587,9 +1935,15 @@ function evolveApply(string $root, array $detected, string $requestedProvider, b
         }
         writeJsonStrict($state['state_path'], $state);
 
+        foreach ($state['backup']['trees'] as $tree) {
+            quarantineLegacyTree($state, $tree);
+        }
         foreach ($state['backup']['files'] as $index => $file) {
+            if (isset($file['tree_path'])) {
+                continue;
+            }
             $source = $root.'/'.$file['path'];
-            if (hashFile($source) !== $file['sha256']) {
+            if (! entryExists($source) || ! entryMatches($source, $file)) {
                 throw new RuntimeException('o sinal mudou entre o plan e o apply: '.$file['path']);
             }
             $backupPath = $root.'/'.$file['backup_path'];
@@ -1598,11 +1952,12 @@ function evolveApply(string $root, array $detected, string $requestedProvider, b
             }
             $state['backup']['files'][$index]['status'] = 'quarantining';
             writeJsonStrict($state['state_path'], $state);
+            recordEvolutionMove($state, 'quarantine', 'move_entry', $file['path'], 'before');
             if (! rename($source, $backupPath)) {
                 throw new RuntimeException('não foi possível isolar '.$file['path']);
             }
             $state['backup']['files'][$index]['status'] = 'quarantined';
-            writeJsonStrict($state['state_path'], $state);
+            recordEvolutionMove($state, 'quarantine', 'move_entry', $file['path'], 'after');
         }
 
         updateEvolutionState($state, 'installing');
@@ -1624,6 +1979,8 @@ function evolveApply(string $root, array $detected, string $requestedProvider, b
         $state['installation']['manifest_hash'] = hashFile($root.'/.ralph/install-manifest.json');
         $state['installation']['provider'] = $installResult['provider'] ?? null;
         updateEvolutionState($state, 'awaiting_acceptance');
+        $state['staging']['status'] = 'retained_for_rollback';
+        writeJsonStrict($state['state_path'], $state);
         $result = [
             'status' => 'awaiting_acceptance',
             'evolution_id' => $evolutionId,
@@ -1636,22 +1993,12 @@ function evolveApply(string $root, array $detected, string $requestedProvider, b
         closeInstallationLock($lock);
         printPlan($result);
     } catch (Throwable $exception) {
-        if (is_array($state) && ! $installed) {
+        if (is_array($state)) {
             try {
-                restoreEvolutionSignals($state);
-                updateEvolutionState($state, 'failed', $exception->getMessage());
-            } catch (Throwable $restoreException) {
-                try {
-                    updateEvolutionState($state, 'recovery_required', $exception->getMessage().' | restauração: '.$restoreException->getMessage());
-                } catch (Throwable) {
-                    // O manifesto parcial permanece como evidência para o doctor.
-                }
-            }
-        } elseif (is_array($state)) {
-            try {
+                $state['staging']['status'] = 'retained_after_failure';
                 updateEvolutionState($state, 'recovery_required', $exception->getMessage());
             } catch (Throwable) {
-                // O estado installing exige recuperação explícita se o disco falhar.
+                // O estado parcial permanece como evidência para o doctor.
             }
         }
         closeInstallationLock($lock);
@@ -1721,25 +2068,63 @@ function rollbackPlan(string $root, string $evolutionId): array
     }
     $missingBackup = [];
     $occupiedDestinations = [];
+    $legacyDrift = [];
     $managedPaths = array_fill_keys(array_map(static fn (array $file): string => (string) ($file['path'] ?? ''), $managedFiles), true);
+    foreach ($state['backup']['trees'] ?? [] as $tree) {
+        $status = (string) ($tree['status'] ?? 'pending');
+        $source = $root.'/'.$tree['path'];
+        $backupPath = $root.'/'.$tree['backup_path'];
+        if ($status === 'pending') {
+            if (! entryExists($source) || validateLegacyTree($state, $tree, false) !== []) {
+                $legacyDrift[] = ['path' => $tree['path'], 'status' => 'source_changed_before_quarantine'];
+            }
+            continue;
+        }
+        if ($status === 'restored') {
+            if (! entryExists($source) || validateLegacyTree($state, $tree, false) !== []) {
+                $legacyDrift[] = ['path' => $tree['path'], 'status' => 'restored_tree_drift'];
+            }
+            continue;
+        }
+        $restoringInPlace = $status === 'restoring'
+            && ! entryExists($backupPath)
+            && entryExists($source)
+            && validateLegacyTree($state, $tree, false) === [];
+        if (! $restoringInPlace) {
+            if (! entryExists($backupPath)) {
+                $missingBackup[] = $tree['path'];
+            } elseif (validateLegacyTree($state, $tree, true) !== []) {
+                $legacyDrift[] = ['path' => $tree['path'], 'status' => 'backup_tree_drift'];
+            }
+            if (entryExists($source)) {
+                $occupiedDestinations[] = $tree['path'];
+            }
+        }
+    }
     foreach ($state['backup']['files'] ?? [] as $file) {
+        if (isset($file['tree_path'])) {
+            continue;
+        }
         $status = (string) ($file['status'] ?? 'pending');
         $backupPath = $root.'/'.(string) ($file['backup_path'] ?? '');
         $destination = $root.'/'.(string) ($file['path'] ?? '');
         $restoringInPlace = $status === 'restoring'
-            && ! is_file($backupPath)
-            && is_file($destination)
-            && hashFile($destination) === ($file['sha256'] ?? null);
-        if (! in_array($status, ['pending', 'restored'], true) && ! $restoringInPlace && ! is_file($backupPath)) {
+            && ! entryExists($backupPath)
+            && entryExists($destination)
+            && entryMatches($destination, $file);
+        if (! in_array($status, ['pending', 'restored'], true) && ! $restoringInPlace && ! entryExists($backupPath)) {
             $missingBackup[] = $file['path'] ?? null;
         }
-        if (! in_array($status, ['pending', 'restored'], true) && ! $restoringInPlace && is_file($destination) && ! isset($managedPaths[(string) ($file['path'] ?? '')])) {
+        if (! in_array($status, ['pending', 'restored'], true) && ! $restoringInPlace && entryExists($destination) && ! isset($managedPaths[(string) ($file['path'] ?? '')])) {
             $occupiedDestinations[] = $file['path'] ?? null;
         }
     }
     $statusAllowsRollback = in_array($state['status'] ?? null, ['quarantine_in_progress', 'installing', 'awaiting_acceptance', 'accepted', 'recovery_required'], true);
-    $installationEvidenceAllowsRollback = $managedFilesKnown || ($state['status'] ?? null) === 'quarantine_in_progress';
-    $allowed = $drift === [] && $missingBackup === [] && $occupiedDestinations === []
+    $installationEvidenceAllowsRollback = $managedFilesKnown
+        || in_array($state['status'] ?? null, ['quarantine_in_progress', 'installing'], true)
+        || (($state['status'] ?? null) === 'recovery_required'
+            && (($state['backup']['files'] ?? []) !== [] || ($state['backup']['trees'] ?? []) !== []));
+    $allowed = $drift === [] && $legacyDrift === [] && $missingBackup === [] && $occupiedDestinations === []
         && $statusAllowsRollback && $installationEvidenceAllowsRollback;
 
     return [
@@ -1750,6 +2135,7 @@ function rollbackPlan(string $root, string $evolutionId): array
         'evolution_status' => $state['status'],
         'rollback_allowed' => $allowed,
         'drift' => $drift,
+        'legacy_drift' => $legacyDrift,
         'managed_files' => $managedFiles,
         'managed_files_known' => $managedFilesKnown,
         'missing_backup' => $missingBackup,
@@ -1811,40 +2197,88 @@ function rollbackApply(string $root, string $evolutionId): void
             }
             $state['installation']['managed_files'][$index]['rollback_status'] = 'staging';
             writeJsonStrict((string) $state['state_path'], $state);
+            recordEvolutionMove($state, 'restore', 'move_entry', $relative, 'before');
             if (! rename($source, $destination)) {
                 throw new RuntimeException('não foi possível retirar a instalação nova de '.$relative);
             }
             $state['installation']['managed_files'][$index]['rollback_status'] = 'staged';
-            writeJsonStrict((string) $state['state_path'], $state);
+            recordEvolutionMove($state, 'restore', 'move_entry', $relative, 'after');
             $movedNew[] = $relative;
         }
+        foreach ($state['backup']['trees'] ?? [] as $treeIndex => $tree) {
+            if (in_array(($tree['status'] ?? null), ['pending', 'restored'], true)) {
+                continue;
+            }
+            $backupPath = $root.'/'.$tree['backup_path'];
+            $destination = $root.'/'.$tree['path'];
+            if (($tree['status'] ?? null) === 'restoring' && ! entryExists($backupPath) && entryExists($destination)) {
+                if (validateLegacyTree($state, $tree, false) !== []) {
+                    throw new RuntimeException('restauração interrompida com árvore divergente em '.$tree['path']);
+                }
+                $state['backup']['trees'][$treeIndex]['status'] = 'restored';
+                updateLegacyTreeMembers($state, $tree['path'], 'restored');
+                writeJsonStrict((string) $state['state_path'], $state);
+                continue;
+            }
+            if (validateLegacyTree($state, $tree, true) !== []) {
+                throw new RuntimeException('backup recursivo ausente ou divergente em '.$tree['path']);
+            }
+            if (entryExists($destination)) {
+                throw new RuntimeException('destino legado ocupado durante rollback: '.$tree['path']);
+            }
+            $state['backup']['trees'][$treeIndex]['status'] = 'restoring';
+            updateLegacyTreeMembers($state, $tree['path'], 'restoring');
+            writeJsonStrict((string) $state['state_path'], $state);
+            recordEvolutionMove($state, 'restore', 'move_tree', $tree['path'], 'before');
+            if (! rename($backupPath, $destination)) {
+                throw new RuntimeException('não foi possível restaurar '.$tree['path']);
+            }
+            if (validateLegacyTree($state, $tree, false) !== []) {
+                throw new RuntimeException('restauração produziu árvore divergente em '.$tree['path']);
+            }
+            $state['backup']['trees'][$treeIndex]['status'] = 'restored';
+            updateLegacyTreeMembers($state, $tree['path'], 'restored');
+            recordEvolutionMove($state, 'restore', 'move_tree', $tree['path'], 'after');
+            $restoredOld[] = $tree['path'];
+        }
         foreach ($state['backup']['files'] as $index => $file) {
+            if (isset($file['tree_path'])) {
+                continue;
+            }
             if (in_array(($file['status'] ?? null), ['pending', 'restored'], true)) {
                 continue;
             }
             $backupPath = $root.'/'.$file['backup_path'];
             $destination = $root.'/'.$file['path'];
-            if (($file['status'] ?? null) === 'restoring' && ! is_file($backupPath) && is_file($destination)) {
-                if (hashFile($destination) !== ($file['sha256'] ?? null)) {
+            if (($file['status'] ?? null) === 'restoring' && ! entryExists($backupPath) && entryExists($destination)) {
+                if (! entryMatches($destination, $file)) {
                     throw new RuntimeException('restauração interrompida com conteúdo divergente em '.$file['path']);
                 }
                 $state['backup']['files'][$index]['status'] = 'restored';
                 writeJsonStrict((string) $state['state_path'], $state);
                 continue;
             }
+            if (! entryExists($backupPath)) {
+                throw new RuntimeException('backup ausente durante rollback: '.$file['path']);
+            }
             if (! is_dir(dirname($destination)) && ! mkdir(dirname($destination), 0700, true) && ! is_dir(dirname($destination))) {
                 throw new RuntimeException('não foi possível preparar restauração de '.$file['path']);
             }
             $state['backup']['files'][$index]['status'] = 'restoring';
             writeJsonStrict((string) $state['state_path'], $state);
+            recordEvolutionMove($state, 'restore', 'move_entry', $file['path'], 'before');
             if (! rename($backupPath, $destination)) {
                 throw new RuntimeException('não foi possível restaurar '.$file['path']);
             }
+            if (! entryMatches($destination, $file)) {
+                throw new RuntimeException('restauração produziu conteúdo divergente em '.$file['path']);
+            }
             $restoredOld[] = $file['path'];
             $state['backup']['files'][$index]['status'] = 'restored';
-            writeJsonStrict((string) $state['state_path'], $state);
+            recordEvolutionMove($state, 'restore', 'move_entry', $file['path'], 'after');
         }
         $state['rollback'] = ['available' => false, 'status' => 'applied', 'applied_at' => gmdate('Y-m-d\TH:i:s\Z')];
+        $state['staging'] = ['path' => '.ralph/evolutions/'.$evolutionId.'/rollback-stage', 'status' => 'removed_after_rollback'];
         updateEvolutionState($state, 'rolled_back');
         removeTree($stage);
         closeInstallationLock($lock);
@@ -1876,15 +2310,8 @@ function rollbackApply(string $root, string $evolutionId): void
                     }
                 }
             }
-            foreach (array_reverse($movedNew) as $relative) {
-                $staged = $stage.'/'.$relative;
-                $destination = $root.'/'.$relative;
-                if (is_file($staged) && ! is_file($destination)) {
-                    @mkdir(dirname($destination), 0700, true);
-                    if (! @rename($staged, $destination)) {
-                        $recoveryIncomplete = true;
-                    }
-                }
+            if ($movedNew !== []) {
+                $recoveryIncomplete = true;
             }
         }
         if (is_array($state)) {
@@ -1897,9 +2324,7 @@ function rollbackApply(string $root, string $evolutionId): void
                 // Mantém a falha no stderr quando a escrita do estado também falha.
             }
         }
-        if (! $recoveryIncomplete) {
-            removeTree((string) $stage);
-        }
+        // O staging fica disponível para a próxima tentativa de recuperação.
         closeInstallationLock($lock);
         fail('rollback não concluído: '.$exception->getMessage(), 4);
     }

@@ -101,3 +101,5 @@
 2026-08-10T00:00:00-03:00 | fix | Detecção legada rejeita raiz inválida, traversal e symlink externo; vendor e node_modules permanecem fora do escopo.
 2026-08-10T00:00:00-03:00 | fix | Schema de detecção passou a aceitar explicitamente external_ralph_legacy; fixture versionada e teste dos 17 sinais preservam o contrato sanitizado.
 2026-08-10T00:00:00-03:00 | fix | Fixtures de scripts/ralph.sh passaram a remover hook e contexto de fase herdados do supervisor, evitando falsos negativos na prova de auto-descoberta e guardrails.
+2026-08-10T00:00:00-03:00 | fix | Evolução legada passou a quarentenar a árvore recursiva completa com tipos, permissões, symlinks internos, fingerprint e validação de drift por membro.
+2026-08-10T00:00:00-03:00 | decision | Movimentos de quarentena e restauração registram journal before/after; falha intermediária mantém backup/staging e exige recuperação explícita.

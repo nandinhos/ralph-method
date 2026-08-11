@@ -17,7 +17,8 @@
 | detecção de instalação | saída transitória de `ralph-init plan` | `ralph-init`, sem persistência implícita |
 | relatório de remoção | `.ralph/uninstall-report.json` | `ralph-init` |
 | estado de evolução | `.ralph/evolutions/EVL-YYYYMMDD-NNNN/evolution.json` | `ralph-init evolve/rollback` |
-| backup de evolução | `.ralph/evolutions/<evolution_id>/backup/` | `ralph-init`, com hashes e sem importação de estado |
+| backup de evolução | `.ralph/evolutions/<evolution_id>/backup/` | `ralph-init`, com árvore recursiva, tipos, permissões, hashes e sem importação de estado |
+| journal/staging de evolução | `evolution.json` e `.ralph/evolutions/<evolution_id>/rollback-stage/` | `ralph-init`, antes/depois de cada movimento e recuperação explícita |
 | lock de instalação | `.ralph/install.lock` | `ralph-init`, preservado para coordenação local |
 | feedback do loop | `.git/ralph-control/feedback/events.jsonl` | `ralph.sh` |
 | métricas derivadas | stdout de `bin/ralph-metrics` | consumidor do projeto/orquestrador, sem persistência implícita |
@@ -39,8 +40,10 @@
 - backup e rollback de uma instalação externa exigirão manifesto próprio,
   hashes antes/depois e confirmação explícita; não são efeito colateral do
   `apply` comum. A evolução implementada usa o modo `quarantine_only`: move
-  somente sinais detectados, preserva ledger/workflow e instala o método novo
-  com aceite pendente.
+  a árvore legada recursiva ou somente sinais detectados, preserva
+  ledger/workflow e instala o método novo com aceite pendente. O rollback
+  valida cada membro, tipo, modo e fingerprint e mantém staging quando a
+  restauração é interrompida.
 - `.ralph/providers.json` registra somente path, versão, capacidades, status,
   suporte do runner, provider-alvo, códigos de saída e timestamps dos probes;
   não registra saída bruta,

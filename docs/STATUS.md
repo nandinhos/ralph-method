@@ -57,7 +57,8 @@ registrados em [`docs/backlog.md`](backlog.md) com prioridade nenhuma.
 A v0.7.0 adicionou uma camada de detecção somente leitura para identificar
 Ralph externo antes do `apply`. A v0.8.0 transforma a evolução em uma operação
 explícita: `evolve --plan/--apply` cria um backup numerado com hashes, isola os
-sinais detectados, instala o método de forma transacional e aguarda aceite;
+sinais detectados — inclusive árvores `legacy_directory` recursivas com tipos,
+permissões e journal before/after — instala o método de forma transacional e aguarda aceite;
 `rollback --plan/--apply` remove a instalação nova somente quando não há drift
 e restaura o legado. Ledger, workflow, prompts e credenciais continuam fora da
 migração. A prova automatizada cobre idempotência, drift, runtime preservado e

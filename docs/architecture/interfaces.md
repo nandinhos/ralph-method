@@ -108,8 +108,9 @@ exige a composição `install.sh`, `ralph.patch` e `ralph.sh.upstream`; quando
 confirmada, o plano usa `classification=external_ralph_legacy`, recomenda
 `evolve` e mantém `apply_allowed=false` e `migration_supported=false`. O
 fingerprint é calculado a partir dos caminhos relativos à raiz, tipos e
-SHA-256 ordenados dos membros. Raízes absolutas, traversal e symlinks fora do
-projeto são rejeitados; `vendor` e `node_modules` não são varridos.
+SHA-256 ordenados dos membros, incluindo tipo e permissões; raízes absolutas,
+traversal e symlinks fora do projeto são rejeitados; `vendor` e `node_modules`
+não são varridos.
 
 O caminho de evolução é deliberadamente explícito:
 

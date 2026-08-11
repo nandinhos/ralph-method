@@ -3420,8 +3420,10 @@ function beginFailedRetry(array $arguments): array
         $feature = featureFrom($projection, $featureKey);
         $result = $feature['result'] ?? [];
         $gateFailure = in_array('rejected', array_values($feature['gates'] ?? []), true);
+        $verifiedDebugging = ($feature['state'] ?? null) === 'debugging_verified'
+            && (($feature['debugging']['validation']['status'] ?? null) === 'passed');
         $failedBlock = ($feature['state'] ?? null) === 'debugging_verified'
-            && ((int) ($result['exit_code'] ?? 0) !== 0 || $gateFailure);
+            && ((int) ($result['exit_code'] ?? 0) !== 0 || $gateFailure || $verifiedDebugging);
         if (! $failedBlock && ($feature['state'] ?? null) !== 'recovery_required') {
             fail('retry exige falha encaminhada ao systematic debugging ou recovery_required');
         }

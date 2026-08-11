@@ -241,6 +241,14 @@ legacy_project="$TMP/ralph-legado-bc-harness"
 new_project "$legacy_project"
 mkdir -p "$legacy_project/harness"
 cp -R "$ROOT/tests/fixtures/bc-harness-legacy/harness/ralph" "$legacy_project/harness/"
+mkdir -p "$legacy_project/harness/ralph/nested"
+printf '%s\n' 'conteúdo aninhado' > "$legacy_project/harness/ralph/nested/member.txt"
+mkdir -p "$legacy_project/shared"
+printf '%s\n' 'alvo interno' > "$legacy_project/shared/target.txt"
+ln -s ../../shared/target.txt "$legacy_project/harness/ralph/internal-link"
+chmod 0750 "$legacy_project/harness/ralph"
+chmod 0710 "$legacy_project/harness/ralph/nested"
+chmod 0701 "$legacy_project/harness/ralph/nested/member.txt"
 legacy_plan="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" plan --project "$legacy_project")"
 legacy_plan_repeat="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" plan --project "$legacy_project")"
 LEGACY_JSON="$legacy_plan" LEGACY_REPEAT_JSON="$legacy_plan_repeat" DETECTION_SCHEMA="$ROOT/schemas/ralph-installation-detection.schema.json" php -r '
@@ -262,14 +270,21 @@ LEGACY_JSON="$legacy_plan" LEGACY_REPEAT_JSON="$legacy_plan_repeat" DETECTION_SC
         || ($external["migration_supported"] ?? true) !== false
         || ! preg_match("/^[a-f0-9]{64}$/", (string) ($external["tree_fingerprint"] ?? ""))
         || ($external["tree_fingerprint"] ?? null) !== ($repeatExternal["tree_fingerprint"] ?? null)
-        || count($external["members"] ?? []) !== 5) {
+        || ($external["root_mode"] ?? null) !== "0750"
+        || count($external["members"] ?? []) !== 8) {
+        exit(1);
+    }
+    $types = array_column($external["members"], "type", "relative_path");
+    if (($types["nested"] ?? null) !== "directory"
+        || ($types["nested/member.txt"] ?? null) !== "file"
+        || ($types["internal-link"] ?? null) !== "symlink") {
         exit(1);
     }
     foreach ($external["members"] as $member) {
         if (! preg_match("/^[a-f0-9]{64}$/", (string) ($member["sha256"] ?? ""))
             || ! preg_match("/^(?!\\/)(?!.*\\.\\.)[^\\n]+$/", (string) ($member["path"] ?? ""))
             || ! preg_match("/^(?!\\/)(?!.*\\.\\.)[^\\n]+$/", (string) ($member["relative_path"] ?? ""))
-            || ($member["type"] ?? null) !== "file"
+            || ! preg_match("/^[0-7]{4}$/", (string) ($member["mode"] ?? ""))
             || isset($member["content"])) {
             exit(1);
         }
@@ -279,6 +294,112 @@ LEGACY_JSON="$legacy_plan" LEGACY_REPEAT_JSON="$legacy_plan_repeat" DETECTION_SC
 legacy_apply_exit=0
 RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" apply --project "$legacy_project" --provider auto >/dev/null 2>&1 || legacy_apply_exit=$?
 [ "$legacy_apply_exit" -eq 3 ] || fail 'instalação bc-harness legada não bloqueou apply'
+
+# A evolução da raiz legada move a árvore completa antes de publicar o método.
+legacy_evolution_project="$TMP/ralph-evolucao-legada"
+new_project "$legacy_evolution_project"
+mkdir -p "$legacy_evolution_project/harness" "$legacy_evolution_project/shared" "$legacy_evolution_project/.git/ralph-control"
+cp -R "$legacy_project/harness/ralph" "$legacy_evolution_project/harness/"
+printf '%s\n' 'alvo interno' > "$legacy_evolution_project/shared/target.txt"
+printf '%s\n' '{"legacy":true}' > "$legacy_evolution_project/.git/ralph-control/events.jsonl"
+printf '%s\n' '{"workflow":"legacy"}' > "$legacy_evolution_project/.git/ralph-control/workflow.json"
+printf '%s\n' 'prompt legado' > "$legacy_evolution_project/legacy-prompt.md"
+printf '%s\n' 'RALPH_LEGACY_SECRET=preservar' > "$legacy_evolution_project/.env"
+legacy_runtime_hash="$(php -r 'echo hash_file("sha256", $argv[1]);' "$legacy_evolution_project/.git/ralph-control/events.jsonl")"
+legacy_evolution_plan="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" evolve --project "$legacy_evolution_project")"
+LEGACY_EVOLUTION_PLAN="$legacy_evolution_plan" php -r '
+    $plan = json_decode(getenv("LEGACY_EVOLUTION_PLAN"), true, 512, JSON_THROW_ON_ERROR);
+    exit(($plan["status"] ?? null) === "ready"
+        && ($plan["ralph_installation"]["external"]["legacy_type"] ?? null) === "legacy_directory"
+        && count($plan["backup"]["signals_to_quarantine"] ?? []) === 1 ? 0 : 1);
+'
+legacy_evolution_output="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" evolve --project "$legacy_evolution_project" --apply --provider auto)"
+legacy_evolution_id="$(EVOLUTION_APPLY_JSON="$legacy_evolution_output" php -r '$result = json_decode(getenv("EVOLUTION_APPLY_JSON"), true, 512, JSON_THROW_ON_ERROR); echo $result["evolution_id"];')"
+legacy_backup_root="$legacy_evolution_project/.ralph/evolutions/$legacy_evolution_id/backup/harness/ralph"
+assert_not_file "$legacy_evolution_project/harness/ralph/install.sh"
+assert_file "$legacy_backup_root/nested/member.txt"
+assert_file "$legacy_evolution_project/.ralph/install-manifest.json"
+assert_file "$legacy_evolution_project/.git/ralph-control/events.jsonl"
+assert_file "$legacy_evolution_project/.git/ralph-control/workflow.json"
+assert_file "$legacy_evolution_project/legacy-prompt.md"
+assert_file "$legacy_evolution_project/.env"
+[ "$(php -r 'echo hash_file("sha256", $argv[1]);' "$legacy_evolution_project/.git/ralph-control/events.jsonl")" = "$legacy_runtime_hash" ] || fail 'evolução legada alterou o runtime externo'
+LEGACY_EVOLUTION_JSON="$legacy_evolution_output" LEGACY_EVOLUTION_STATE="$legacy_evolution_project/.ralph/evolutions/$legacy_evolution_id/evolution.json" EVOLUTION_SCHEMA="$ROOT/schemas/ralph-evolution.schema.json" php -r '
+    $result = json_decode(getenv("LEGACY_EVOLUTION_JSON"), true, 512, JSON_THROW_ON_ERROR);
+    $state = json_decode(file_get_contents(getenv("LEGACY_EVOLUTION_STATE")), true, 512, JSON_THROW_ON_ERROR);
+    $schema = json_decode(file_get_contents(getenv("EVOLUTION_SCHEMA")), true, 512, JSON_THROW_ON_ERROR);
+    $journal = $state["journal"] ?? [];
+    $statuses = array_column($state["backup"]["files"] ?? [], "status");
+    exit(($result["status"] ?? null) === "awaiting_acceptance"
+        && ($state["schema_version"] ?? null) === "1.1.0"
+        && ($schema["properties"]["schema_version"]["const"] ?? null) === "1.1.0"
+        && ($state["backup"]["trees"][0]["status"] ?? null) === "quarantined"
+        && count($state["backup"]["trees"] ?? []) === 1
+        && count($state["backup"]["files"] ?? []) === 8
+        && count($journal) >= 2
+        && ($journal[0]["status"] ?? null) === "before"
+        && ($journal[1]["status"] ?? null) === "after"
+        && count(array_filter($statuses, static fn (string $status): bool => $status !== "quarantined")) === 0 ? 0 : 1);
+'
+legacy_repeat="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" evolve --project "$legacy_evolution_project" --apply --provider auto)"
+LEGACY_REPEAT="$legacy_repeat" LEGACY_ID="$legacy_evolution_id" php -r '
+    $result = json_decode(getenv("LEGACY_REPEAT"), true, 512, JSON_THROW_ON_ERROR);
+    exit(($result["status"] ?? null) === "already_pending" && ($result["evolution_id"] ?? null) === getenv("LEGACY_ID") ? 0 : 1);
+'
+RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" rollback --project "$legacy_evolution_project" --evolution "$legacy_evolution_id" --apply >/dev/null
+assert_file "$legacy_evolution_project/harness/ralph/nested/member.txt"
+[ "$(stat -c '%a' "$legacy_evolution_project/harness/ralph")" = "750" ] || fail 'rollback não preservou modo da raiz legada'
+[ "$(stat -c '%a' "$legacy_evolution_project/harness/ralph/nested")" = "710" ] || fail 'rollback não preservou modo do diretório legado'
+[ "$(stat -c '%a' "$legacy_evolution_project/harness/ralph/nested/member.txt")" = "701" ] || fail 'rollback não preservou modo do arquivo legado'
+[ "$(readlink "$legacy_evolution_project/harness/ralph/internal-link")" = '../../shared/target.txt' ] || fail 'rollback não preservou symlink interno'
+assert_not_file "$legacy_evolution_project/.ralph/install-manifest.json"
+
+# Drift em um único membro da árvore bloqueia rollback sem apagar a instalação nova.
+legacy_drift_project="$TMP/ralph-evolucao-legada-drift"
+new_project "$legacy_drift_project"
+mkdir -p "$legacy_drift_project/harness" "$legacy_drift_project/shared"
+cp -R "$legacy_project/harness/ralph" "$legacy_drift_project/harness/"
+printf '%s\n' 'alvo interno' > "$legacy_drift_project/shared/target.txt"
+legacy_drift_output="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" evolve --project "$legacy_drift_project" --apply --provider auto)"
+legacy_drift_id="$(EVOLUTION_APPLY_JSON="$legacy_drift_output" php -r '$result = json_decode(getenv("EVOLUTION_APPLY_JSON"), true, 512, JSON_THROW_ON_ERROR); echo $result["evolution_id"];')"
+printf '%s\n' 'drift' > "$legacy_drift_project/.ralph/evolutions/$legacy_drift_id/backup/harness/ralph/nested/member.txt"
+legacy_drift_plan="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" rollback --project "$legacy_drift_project" --evolution "$legacy_drift_id")"
+LEGACY_DRIFT_PLAN="$legacy_drift_plan" php -r '
+    $plan = json_decode(getenv("LEGACY_DRIFT_PLAN"), true, 512, JSON_THROW_ON_ERROR);
+    exit(($plan["status"] ?? null) === "blocked"
+        && ($plan["rollback_allowed"] ?? true) === false
+        && count($plan["legacy_drift"] ?? []) > 0 ? 0 : 1);
+'
+
+# Uma interrupção depois do movimento da árvore, mas antes do journal final,
+# é retomada sem duplicar backup nem perder os membros restaurados.
+legacy_interrupted_project="$TMP/ralph-evolucao-legada-interrompida"
+new_project "$legacy_interrupted_project"
+mkdir -p "$legacy_interrupted_project/harness" "$legacy_interrupted_project/shared"
+cp -R "$legacy_project/harness/ralph" "$legacy_interrupted_project/harness/"
+printf '%s\n' 'alvo interno' > "$legacy_interrupted_project/shared/target.txt"
+legacy_interrupted_output="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" evolve --project "$legacy_interrupted_project" --apply --provider auto)"
+legacy_interrupted_id="$(EVOLUTION_APPLY_JSON="$legacy_interrupted_output" php -r '$result = json_decode(getenv("EVOLUTION_APPLY_JSON"), true, 512, JSON_THROW_ON_ERROR); echo $result["evolution_id"];')"
+legacy_interrupted_state="$legacy_interrupted_project/.ralph/evolutions/$legacy_interrupted_id/evolution.json"
+mv "$legacy_interrupted_project/.ralph/evolutions/$legacy_interrupted_id/backup/harness/ralph" "$legacy_interrupted_project/harness/ralph"
+EVOLUTION_STATE_PATH="$legacy_interrupted_state" php -r '
+    $path = getenv("EVOLUTION_STATE_PATH");
+    $state = json_decode(file_get_contents($path), true, 512, JSON_THROW_ON_ERROR);
+    $state["status"] = "recovery_required";
+    $state["backup"]["trees"][0]["status"] = "restoring";
+    foreach ($state["backup"]["files"] as $index => $member) {
+        $state["backup"]["files"][$index]["status"] = "restoring";
+    }
+    file_put_contents($path, json_encode($state, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT)."\n");
+'
+legacy_interrupted_plan="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" rollback --project "$legacy_interrupted_project" --evolution "$legacy_interrupted_id")"
+LEGACY_INTERRUPTED_PLAN="$legacy_interrupted_plan" php -r '
+    $plan = json_decode(getenv("LEGACY_INTERRUPTED_PLAN"), true, 512, JSON_THROW_ON_ERROR);
+    exit(($plan["status"] ?? null) === "ready" && ($plan["rollback_allowed"] ?? false) === true ? 0 : 1);
+'
+RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" rollback --project "$legacy_interrupted_project" --evolution "$legacy_interrupted_id" --apply >/dev/null
+assert_file "$legacy_interrupted_project/harness/ralph/nested/member.txt"
+assert_not_file "$legacy_interrupted_project/.ralph/install-manifest.json"
 
 # Os 17 sinais canônicos permanecem estáveis e continuam sendo inventariados
 # somente por seus paths relativos, tipo e SHA-256.

@@ -44,11 +44,21 @@ O estado fica em `.ralph/evolutions/<id>/evolution.json`, o backup fica em
 `.git/ralph-control/events.jsonl` e `.git/ralph-control/workflow.json`
 permanecem no lugar e são apenas registrados como preservados.
 
+Quando a origem é `legacy_directory`, a quarentena move a raiz inteira para o
+backup, mantendo subdiretórios, arquivos, permissões e symlinks internos sem
+seguir nenhum symlink durante o inventário. Cada membro recebe tipo, modo,
+SHA-256 e, quando aplicável, o alvo do symlink; a árvore também recebe um
+fingerprint composto e o estado mantém um journal com o evento `before` e
+`after` de cada movimento. O backup e o staging permanecem disponíveis para
+recuperação explícita após uma falha intermediária.
+
 O rollback só é autorizado quando:
 
 - o manifesto novo existe e seus arquivos possuem os hashes instalados;
 - nenhum arquivo gerenciado está ausente ou modificado;
 - todo backup necessário existe;
+- cada membro da árvore legada mantém tipo, permissões, hash e fingerprint
+  compatíveis antes da restauração;
 - nenhum destino legado não gerenciado está ocupado;
 - a evolução está em `awaiting_acceptance`, `accepted` ou
   `recovery_required`.
@@ -72,6 +82,7 @@ estado `recovery_required` para ação explícita.
 - o estado legado não é traduzido para o Ralph Method;
 - o backup fica local no projeto e exige gestão de espaço;
 - falhas de filesystem podem exigir recuperação manual;
+- o journal e o staging podem permanecer até que o rollback seja concluído;
 - adapters de origem continuam sendo uma evolução posterior.
 
 ## Dono
