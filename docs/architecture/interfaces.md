@@ -82,6 +82,10 @@ workflow, handoffs e relatórios não pertencem ao uninstall e são preservados.
 Todo `plan` também devolve `ralph_installation`, validável por
 `schemas/ralph-installation-detection.schema.json`:
 
+O schema `1.1.0` inclui a classificação `external_ralph_legacy` e os campos
+sanitizados da raiz legada; classificações emitidas pelo detector precisam
+permanecer aceitas pelo contrato antes de qualquer evolução do instalador.
+
 | Campo | Valores | Decisão |
 |---|---|---|
 | `method.status` | `managed`, `not_installed`, `invalid` | informa se o manifesto pertence ao Ralph Method |

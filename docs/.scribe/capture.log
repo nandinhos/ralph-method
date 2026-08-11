@@ -99,3 +99,5 @@
 2026-08-10T02:22:26-03:00 | decision | Evolução v0.8.0 permanece quarantine_only: aceite explícito, nenhum estado legado importado e nenhum adapter semântico por origem até contrato específico comprovado.
 2026-08-10T00:00:00-03:00 | decision | Detector legado limitado à raiz aprovada harness/ralph; assinatura completa bc-harness expõe somente metadados, membros e hashes.
 2026-08-10T00:00:00-03:00 | fix | Detecção legada rejeita raiz inválida, traversal e symlink externo; vendor e node_modules permanecem fora do escopo.
+2026-08-10T00:00:00-03:00 | fix | Schema de detecção passou a aceitar explicitamente external_ralph_legacy; fixture versionada e teste dos 17 sinais preservam o contrato sanitizado.
+2026-08-10T00:00:00-03:00 | fix | Fixtures de scripts/ralph.sh passaram a remover hook e contexto de fase herdados do supervisor, evitando falsos negativos na prova de auto-descoberta e guardrails.

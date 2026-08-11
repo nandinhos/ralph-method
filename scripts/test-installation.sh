@@ -239,20 +239,20 @@ NEUTRAL_JSON="$neutral_plan" php -r '
 # metadados sanitizados da árvore, sem importar conteúdo dos arquivos.
 legacy_project="$TMP/ralph-legado-bc-harness"
 new_project "$legacy_project"
-mkdir -p "$legacy_project/harness/ralph"
-printf '%s\n' '#!/usr/bin/env bash' 'echo install' > "$legacy_project/harness/ralph/install.sh"
-printf '%s\n' '--- a/ralph.sh' '+++ b/ralph.sh' > "$legacy_project/harness/ralph/ralph.patch"
-printf '%s\n' '#!/usr/bin/env bash' 'echo upstream' > "$legacy_project/harness/ralph/ralph.sh.upstream"
-printf '%s\n' '# documentação legada' > "$legacy_project/harness/ralph/README.md"
+mkdir -p "$legacy_project/harness"
+cp -R "$ROOT/tests/fixtures/bc-harness-legacy/harness/ralph" "$legacy_project/harness/"
 legacy_plan="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" plan --project "$legacy_project")"
 legacy_plan_repeat="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" plan --project "$legacy_project")"
-LEGACY_JSON="$legacy_plan" LEGACY_REPEAT_JSON="$legacy_plan_repeat" php -r '
+LEGACY_JSON="$legacy_plan" LEGACY_REPEAT_JSON="$legacy_plan_repeat" DETECTION_SCHEMA="$ROOT/schemas/ralph-installation-detection.schema.json" php -r '
     $plan = json_decode(getenv("LEGACY_JSON"), true, 512, JSON_THROW_ON_ERROR);
     $repeat = json_decode(getenv("LEGACY_REPEAT_JSON"), true, 512, JSON_THROW_ON_ERROR);
+    $schema = json_decode(file_get_contents(getenv("DETECTION_SCHEMA")), true, 512, JSON_THROW_ON_ERROR);
     $external = $plan["ralph_installation"]["external"] ?? [];
     $repeatExternal = $repeat["ralph_installation"]["external"] ?? [];
+    $classifications = $schema["properties"]["external"]["properties"]["classification"]["enum"] ?? [];
     if (($external["status"] ?? null) !== "detected"
         || ($external["classification"] ?? null) !== "external_ralph_legacy"
+        || ! in_array("external_ralph_legacy", $classifications, true)
         || ($external["family"] ?? null) !== "bc-harness"
         || ! preg_match("/^bc_harness_[a-z0-9_]+$/", (string) ($external["signature_id"] ?? ""))
         || ($external["legacy_root"] ?? null) !== "harness/ralph"
@@ -262,7 +262,7 @@ LEGACY_JSON="$legacy_plan" LEGACY_REPEAT_JSON="$legacy_plan_repeat" php -r '
         || ($external["migration_supported"] ?? true) !== false
         || ! preg_match("/^[a-f0-9]{64}$/", (string) ($external["tree_fingerprint"] ?? ""))
         || ($external["tree_fingerprint"] ?? null) !== ($repeatExternal["tree_fingerprint"] ?? null)
-        || count($external["members"] ?? []) !== 4) {
+        || count($external["members"] ?? []) !== 5) {
         exit(1);
     }
     foreach ($external["members"] as $member) {
@@ -279,6 +279,58 @@ LEGACY_JSON="$legacy_plan" LEGACY_REPEAT_JSON="$legacy_plan_repeat" php -r '
 legacy_apply_exit=0
 RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" apply --project "$legacy_project" --provider auto >/dev/null 2>&1 || legacy_apply_exit=$?
 [ "$legacy_apply_exit" -eq 3 ] || fail 'instalação bc-harness legada não bloqueou apply'
+
+# Os 17 sinais canônicos permanecem estáveis e continuam sendo inventariados
+# somente por seus paths relativos, tipo e SHA-256.
+canonical_project="$TMP/ralph-sinais-canonicos"
+new_project "$canonical_project"
+mkdir -p "$canonical_project/.ralph" "$canonical_project/bin" "$canonical_project/scripts" "$canonical_project/.git/ralph-control"
+for canonical_path in \
+  ralph.sh \
+  .ralph/ralph.sh \
+  Ralphfile \
+  ralph.yml \
+  ralph.yaml \
+  ralph.json \
+  ralph.toml \
+  .ralph.yml \
+  .ralph.yaml \
+  .ralph.json \
+  .ralph.toml \
+  bin/ralph-control \
+  bin/ralph-block \
+  scripts/ralph.sh \
+  .ralph/install-manifest.json \
+  .git/ralph-control/events.jsonl \
+  .git/ralph-control/workflow.json; do
+  printf '%s\n' "sinal canônico" > "$canonical_project/$canonical_path"
+done
+canonical_plan="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" plan --project "$canonical_project")"
+CANONICAL_JSON="$canonical_plan" php -r '
+    $plan = json_decode(getenv("CANONICAL_JSON"), true, 512, JSON_THROW_ON_ERROR);
+    $signals = $plan["ralph_installation"]["external"]["signals"] ?? [];
+    $ids = array_column($signals, "id");
+    $expected = [
+        "root_ralph_script", "hidden_ralph_script", "ralphfile",
+        "root_ralph_yaml", "root_ralph_yaml_long", "root_ralph_json",
+        "root_ralph_toml", "hidden_ralph_yaml", "hidden_ralph_yaml_long",
+        "hidden_ralph_json", "hidden_ralph_toml", "ralph_control_binary",
+        "ralph_block_binary", "ralph_loop_script", "ralph_install_manifest",
+        "ralph_ledger_events", "ralph_workflow_state",
+    ];
+    sort($ids);
+    sort($expected);
+    if ($ids !== $expected) {
+        exit(1);
+    }
+    foreach ($signals as $signal) {
+        if (($signal["path"] ?? "") === "" || ($signal["kind"] ?? "") === ""
+            || ! preg_match("/^[a-f0-9]{64}$/", (string) ($signal["sha256"] ?? ""))) {
+            exit(1);
+        }
+    }
+    exit(0);
+'
 
 # Caminhos parecidos dentro de dependências não fazem parte do escopo aprovado.
 false_positive_project="$TMP/ralph-falso-positivo"

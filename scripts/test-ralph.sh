@@ -342,7 +342,13 @@ run_ralph() {
     RALPH_CLAUDE_VERIFY_EFFORT="${CASE_CLAUDE_VERIFY_EFFORT:-}" \
     RALPH_HOOK_TIMEOUT="${CASE_HOOK_TIMEOUT:-}" \
     RALPH_HOOK_KILL_AFTER="${CASE_HOOK_KILL_AFTER:-}" \
-      bash "$RALPH" "$@" > "$dir/out.log" 2>&1
+      env -u RALPH_HOOK \
+        -u RALPH_PHASE_TITLE \
+        -u RALPH_PHASE_NUM \
+        -u RALPH_PHASE_TOTAL \
+        -u RALPH_PHASE_ATTEMPT \
+        -u RALPH_PHASE_MAX_ATTEMPTS \
+        bash "$RALPH" "$@" > "$dir/out.log" 2>&1
   ) || rc=$?
   echo "$rc"
 }

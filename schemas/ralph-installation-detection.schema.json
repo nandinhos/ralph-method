@@ -38,7 +38,7 @@
       ],
       "properties": {
         "status": {"enum": ["not_found", "detected", "ambiguous"]},
-        "classification": {"enum": ["none", "external_ralph", "unknown_ralph_like"]},
+        "classification": {"enum": ["none", "external_ralph", "external_ralph_legacy", "unknown_ralph_like"]},
         "confidence": {"enum": ["none", "low", "medium", "high"]},
         "signals": {
           "type": "array",

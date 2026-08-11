@@ -1,0 +1,5 @@
+--- a/ralph.sh
++++ b/ralph.sh
+@@
+-echo upstream
++echo legacy
