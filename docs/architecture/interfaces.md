@@ -89,12 +89,23 @@ Todo `plan` também devolve `ralph_installation`, validável por
 | `external.confidence` | `none`, `low`, `medium`, `high` | indica força do inventário, não semântica do legado |
 | `external.apply_allowed` | booleano | somente `true` permite o `apply` comum |
 | `external.signals` | id, caminho relativo, tipo e SHA-256 | comprova o que foi encontrado sem expor conteúdo |
+| `external.family` / `signature_id` | linhagem e assinatura reconhecidas | identifica somente a composição legada aprovada |
+| `external.members` / `tree_fingerprint` | membros relativos, tipos, hashes e fingerprint | permite auditoria determinística sem armazenar conteúdo |
+| `external.legacy_candidates` | raízes aprovadas candidatas ou rejeitadas | informa caminhos sem transformar arquivos parecidos em instalação |
 
 Sinais canônicos como `Ralphfile`, `ralph.sh`, `bin/ralph-control` ou
 `scripts/ralph.sh` produzem `detected` com confiança alta. Um marcador
 genérico isolado pode produzir `ambiguous`; por segurança também bloqueia o
 `apply`. Em ambos os casos o exit code é `3`, nenhum arquivo é movido e a
 instalação externa permanece intacta.
+
+A assinatura legada `bc-harness` é procurada somente em `harness/ralph`. Ela
+exige a composição `install.sh`, `ralph.patch` e `ralph.sh.upstream`; quando
+confirmada, o plano usa `classification=external_ralph_legacy`, recomenda
+`evolve` e mantém `apply_allowed=false` e `migration_supported=false`. O
+fingerprint é calculado a partir dos caminhos relativos à raiz, tipos e
+SHA-256 ordenados dos membros. Raízes absolutas, traversal e symlinks fora do
+projeto são rejeitados; `vendor` e `node_modules` não são varridos.
 
 O caminho de evolução é deliberadamente explícito:
 

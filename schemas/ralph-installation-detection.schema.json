@@ -5,7 +5,7 @@
   "type": "object",
   "required": ["schema_version", "method", "external"],
   "properties": {
-    "schema_version": {"const": "1.0.0"},
+    "schema_version": {"const": "1.1.0"},
     "method": {
       "type": "object",
       "required": ["status", "manifest_present", "manifest_path", "method_version"],
@@ -27,7 +27,14 @@
         "recommended_action",
         "apply_allowed",
         "migration_supported",
-        "reason"
+        "reason",
+        "family",
+        "signature_id",
+        "legacy_root",
+        "legacy_type",
+        "members",
+        "tree_fingerprint",
+        "legacy_candidates"
       ],
       "properties": {
         "status": {"enum": ["not_found", "detected", "ambiguous"]},
@@ -47,10 +54,44 @@
             "additionalProperties": false
           }
         },
-        "recommended_action": {"enum": ["proceed", "review_before_apply"]},
+        "recommended_action": {"enum": ["proceed", "review_before_apply", "evolve"]},
         "apply_allowed": {"type": "boolean"},
         "migration_supported": {"const": false},
-        "reason": {"type": "string", "minLength": 1}
+        "reason": {"type": "string", "minLength": 1},
+        "family": {"type": ["string", "null"]},
+        "signature_id": {"type": ["string", "null"], "pattern": "^[a-z0-9_\\-]+$"},
+        "legacy_root": {"type": ["string", "null"], "pattern": "^(?!/)(?!.*\\.\\.)[^\\n]+$"},
+        "legacy_type": {"type": ["string", "null"], "enum": ["legacy_directory", null]},
+        "members": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "relative_path", "type", "sha256"],
+            "properties": {
+              "path": {"type": "string", "pattern": "^(?!/)(?!.*\\.\\.)[^\\n]+$"},
+              "relative_path": {"type": "string", "pattern": "^(?!/)(?!.*\\.\\.)[^\\n]+$"},
+              "type": {"const": "file"},
+              "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+            },
+            "additionalProperties": false
+          }
+        },
+        "tree_fingerprint": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"},
+        "legacy_candidates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "type", "status"],
+            "properties": {
+              "path": {"type": "string", "pattern": "^(?!/)(?!.*\\.\\.)[^\\n]+$"},
+              "type": {"const": "legacy_directory"},
+              "status": {"enum": ["candidate", "detected", "rejected"]},
+              "reason": {"type": "string", "minLength": 1},
+              "signature_id": {"type": "string", "pattern": "^[a-z0-9_\\-]+$"}
+            },
+            "additionalProperties": false
+          }
+        }
       },
       "additionalProperties": false
     }

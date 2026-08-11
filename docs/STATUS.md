@@ -69,6 +69,11 @@ campo confirmou o contrato `quarantine_only` sem importação de estado legado.
 O timeout observado na revisão adversarial foi isolado como falha de contexto
 de checkout do subagente, não como falha do detector; a correção e a
 reprodução estão em [`incidente 0011`](incidents/0011-timeout-revisao-adversarial-contexto.md).
+O detector também reconhece, de forma limitada à raiz aprovada `harness/ralph`,
+a assinatura `bc-harness` formada por `install.sh`, `ralph.patch` e
+`ralph.sh.upstream`. O plano expõe família, assinatura, membros, SHA-256 e
+fingerprint determinístico sem conteúdo bruto, classifica a origem como
+`external_ralph_legacy` e recomenda `evolve`.
 
 ## Componentes extraídos
 

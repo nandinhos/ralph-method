@@ -235,6 +235,111 @@ NEUTRAL_JSON="$neutral_plan" php -r '
         && ($plan["ralph_installation"]["external"]["apply_allowed"] ?? false) === true ? 0 : 1);
 '
 
+# A instalação legada real é reconhecida somente na raiz aprovada e expõe
+# metadados sanitizados da árvore, sem importar conteúdo dos arquivos.
+legacy_project="$TMP/ralph-legado-bc-harness"
+new_project "$legacy_project"
+mkdir -p "$legacy_project/harness/ralph"
+printf '%s\n' '#!/usr/bin/env bash' 'echo install' > "$legacy_project/harness/ralph/install.sh"
+printf '%s\n' '--- a/ralph.sh' '+++ b/ralph.sh' > "$legacy_project/harness/ralph/ralph.patch"
+printf '%s\n' '#!/usr/bin/env bash' 'echo upstream' > "$legacy_project/harness/ralph/ralph.sh.upstream"
+printf '%s\n' '# documentação legada' > "$legacy_project/harness/ralph/README.md"
+legacy_plan="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" plan --project "$legacy_project")"
+legacy_plan_repeat="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" plan --project "$legacy_project")"
+LEGACY_JSON="$legacy_plan" LEGACY_REPEAT_JSON="$legacy_plan_repeat" php -r '
+    $plan = json_decode(getenv("LEGACY_JSON"), true, 512, JSON_THROW_ON_ERROR);
+    $repeat = json_decode(getenv("LEGACY_REPEAT_JSON"), true, 512, JSON_THROW_ON_ERROR);
+    $external = $plan["ralph_installation"]["external"] ?? [];
+    $repeatExternal = $repeat["ralph_installation"]["external"] ?? [];
+    if (($external["status"] ?? null) !== "detected"
+        || ($external["classification"] ?? null) !== "external_ralph_legacy"
+        || ($external["family"] ?? null) !== "bc-harness"
+        || ! preg_match("/^bc_harness_[a-z0-9_]+$/", (string) ($external["signature_id"] ?? ""))
+        || ($external["legacy_root"] ?? null) !== "harness/ralph"
+        || ($external["legacy_type"] ?? null) !== "legacy_directory"
+        || ($external["recommended_action"] ?? null) !== "evolve"
+        || ($external["apply_allowed"] ?? true) !== false
+        || ($external["migration_supported"] ?? true) !== false
+        || ! preg_match("/^[a-f0-9]{64}$/", (string) ($external["tree_fingerprint"] ?? ""))
+        || ($external["tree_fingerprint"] ?? null) !== ($repeatExternal["tree_fingerprint"] ?? null)
+        || count($external["members"] ?? []) !== 4) {
+        exit(1);
+    }
+    foreach ($external["members"] as $member) {
+        if (! preg_match("/^[a-f0-9]{64}$/", (string) ($member["sha256"] ?? ""))
+            || ! preg_match("/^(?!\\/)(?!.*\\.\\.)[^\\n]+$/", (string) ($member["path"] ?? ""))
+            || ! preg_match("/^(?!\\/)(?!.*\\.\\.)[^\\n]+$/", (string) ($member["relative_path"] ?? ""))
+            || ($member["type"] ?? null) !== "file"
+            || isset($member["content"])) {
+            exit(1);
+        }
+    }
+    exit(0);
+'
+legacy_apply_exit=0
+RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" apply --project "$legacy_project" --provider auto >/dev/null 2>&1 || legacy_apply_exit=$?
+[ "$legacy_apply_exit" -eq 3 ] || fail 'instalação bc-harness legada não bloqueou apply'
+
+# Caminhos parecidos dentro de dependências não fazem parte do escopo aprovado.
+false_positive_project="$TMP/ralph-falso-positivo"
+new_project "$false_positive_project"
+for dependency_root in \
+  "$false_positive_project/vendor/fake-package/harness/ralph" \
+  "$false_positive_project/node_modules/fake-package/harness/ralph"; do
+  mkdir -p "$dependency_root"
+  printf '%s\n' 'install' > "$dependency_root/install.sh"
+  printf '%s\n' 'patch' > "$dependency_root/ralph.patch"
+  printf '%s\n' 'upstream' > "$dependency_root/ralph.sh.upstream"
+done
+false_positive_plan="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" plan --project "$false_positive_project")"
+FALSE_POSITIVE_JSON="$false_positive_plan" php -r '
+    $plan = json_decode(getenv("FALSE_POSITIVE_JSON"), true, 512, JSON_THROW_ON_ERROR);
+    $external = $plan["ralph_installation"]["external"] ?? [];
+    if (($external["status"] ?? null) !== "not_found"
+        || ($external["classification"] ?? null) !== "none"
+        || ($external["apply_allowed"] ?? false) !== true
+        || ($external["legacy_candidates"] ?? []) !== []) {
+        exit(1);
+    }
+    exit(0);
+'
+
+# Uma raiz aprovada incompleta aparece como candidata, mas não vira instalação.
+candidate_project="$TMP/ralph-candidato-incompleto"
+new_project "$candidate_project"
+mkdir -p "$candidate_project/harness/ralph"
+printf '%s\n' 'install' > "$candidate_project/harness/ralph/install.sh"
+candidate_plan="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" plan --project "$candidate_project")"
+CANDIDATE_JSON="$candidate_plan" php -r '
+    $plan = json_decode(getenv("CANDIDATE_JSON"), true, 512, JSON_THROW_ON_ERROR);
+    $external = $plan["ralph_installation"]["external"] ?? [];
+    $candidate = $external["legacy_candidates"][0] ?? [];
+    exit(($external["status"] ?? null) === "not_found"
+        && ($external["classification"] ?? null) === "none"
+        && ($external["apply_allowed"] ?? false) === true
+        && ($candidate["path"] ?? null) === "harness/ralph"
+        && ($candidate["status"] ?? null) === "candidate" ? 0 : 1);
+'
+
+# Uma raiz aprovada apontando para fora do projeto é rejeitada sem ser seguida.
+symlink_project="$TMP/ralph-symlink-externo"
+new_project "$symlink_project"
+mkdir -p "$TMP/ralph-alvo-externo"
+printf '%s\n' 'install' > "$TMP/ralph-alvo-externo/install.sh"
+printf '%s\n' 'patch' > "$TMP/ralph-alvo-externo/ralph.patch"
+printf '%s\n' 'upstream' > "$TMP/ralph-alvo-externo/ralph.sh.upstream"
+mkdir -p "$symlink_project/harness"
+ln -s "$TMP/ralph-alvo-externo" "$symlink_project/harness/ralph"
+symlink_plan="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" plan --project "$symlink_project")"
+SYMLINK_JSON="$symlink_plan" php -r '
+    $plan = json_decode(getenv("SYMLINK_JSON"), true, 512, JSON_THROW_ON_ERROR);
+    $external = $plan["ralph_installation"]["external"] ?? [];
+    $candidate = $external["legacy_candidates"][0] ?? [];
+    exit(($external["status"] ?? null) === "not_found"
+        && ($external["apply_allowed"] ?? false) === true
+        && ($candidate["status"] ?? null) === "rejected" ? 0 : 1);
+'
+
 # Um marcador genérico isolado é ambíguo, mas ainda bloqueia por segurança.
 ambiguous_project="$TMP/ralph-ambiguo"
 new_project "$ambiguous_project"

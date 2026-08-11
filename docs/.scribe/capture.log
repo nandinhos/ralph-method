@@ -97,3 +97,5 @@
 2026-08-10T02:22:26-03:00 | verification | CI portátil da v0.8.0 terminou verde: 25 scripts de shell, instalação, reprodução, feedback, providers, multiprovider, método, conhecimento, métricas, adapters e regressão completa.
 2026-08-10T02:22:26-03:00 | verification | OpenCode 1.18.15 conduziu EVL-20260810-0001 em fixture isolada; plan, apply, idempotência, rollback e verificação independente de hashes terminaram verdes.
 2026-08-10T02:22:26-03:00 | decision | Evolução v0.8.0 permanece quarantine_only: aceite explícito, nenhum estado legado importado e nenhum adapter semântico por origem até contrato específico comprovado.
+2026-08-10T00:00:00-03:00 | decision | Detector legado limitado à raiz aprovada harness/ralph; assinatura completa bc-harness expõe somente metadados, membros e hashes.
+2026-08-10T00:00:00-03:00 | fix | Detecção legada rejeita raiz inválida, traversal e symlink externo; vendor e node_modules permanecem fora do escopo.

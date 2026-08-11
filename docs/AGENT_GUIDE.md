@@ -91,6 +91,14 @@ arquivos e reporte os campos `classification`, `confidence`, `signals` e
 `reason`; não copie conteúdo, não apague o ledger e não tente traduzir
 prompts, workflow ou credenciais por inferência.
 
+Quando `ralph_installation.external.classification` for
+`external_ralph_legacy`, confira `family`, `signature_id`, `legacy_root`,
+`members` e `tree_fingerprint`. Nesta linha, a assinatura `bc-harness` só é
+reconhecida em `harness/ralph` quando contém `install.sh`, `ralph.patch` e
+`ralph.sh.upstream`; `legacy_candidates` informa raízes aprovadas incompletas
+ou rejeitadas sem transformar arquivos parecidos em instalação. O plano
+recomenda `evolve`, mantém `apply_allowed=false` e não expõe conteúdo bruto.
+
 A evolução deve ser solicitada como operação explícita, com inventário aprovado,
 backup com hashes, instalação transacional, aceite e manifesto de rollback. O
 modo atual é `quarantine_only`: nenhum ledger, workflow, prompt, credencial ou

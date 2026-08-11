@@ -53,6 +53,10 @@ tag anotada `v0.6.1` identifica este fechamento documental e de portabilidade.
 - adicionado `doctor` com status explícito para instalação externa;
 - documentada a evolução futura com backup, rollback e adapter de origem, sem
   migração genérica de ledger, prompts, workflow ou credenciais.
+- reconhecida a instalação legada `bc-harness` somente em `harness/ralph`, com
+  assinatura, membros, hashes e fingerprint determinístico no schema `1.1.0`;
+- mantidos `vendor` e `node_modules` fora da varredura, com rejeição de raiz
+  inválida, traversal e symlink externo.
 
 Esta versão foi validada na branch `dev`, promovida para `main` e identificada
 pela tag anotada `v0.8.0`.

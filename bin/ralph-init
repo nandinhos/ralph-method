@@ -5,7 +5,7 @@ declare(strict_types=1);
 
 const RALPH_METHOD_VERSION = '0.8.0';
 const RALPH_INSTALL_SCHEMA_VERSION = '1.0.0';
-const RALPH_INSTALL_DETECTION_SCHEMA_VERSION = '1.0.0';
+const RALPH_INSTALL_DETECTION_SCHEMA_VERSION = '1.1.0';
 const RALPH_EVOLUTION_SCHEMA_VERSION = '1.0.0';
 
 $sourceRoot = realpath(getenv('RALPH_METHOD_SOURCE') ?: dirname(__DIR__)) ?: dirname(__DIR__);
@@ -576,6 +576,173 @@ function hashFile(string $path): ?string
     return is_file($path) ? hash_file('sha256', $path) ?: null : null;
 }
 
+function isSafeRelativePath(string $path): bool
+{
+    if ($path === '' || str_starts_with($path, '/') || str_contains($path, "\\") || str_contains($path, "\0")) {
+        return false;
+    }
+    foreach (explode('/', $path) as $segment) {
+        if ($segment === '' || $segment === '.' || $segment === '..') {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+function pathWithin(string $path, string $root): bool
+{
+    $resolvedPath = realpath($path);
+    $resolvedRoot = realpath($root);
+    if ($resolvedPath === false || $resolvedRoot === false) {
+        return false;
+    }
+
+    return $resolvedPath === $resolvedRoot || str_starts_with($resolvedPath, $resolvedRoot.'/');
+}
+
+/** @return list<array{path: string, type: string}> */
+function approvedLegacyRoots(): array
+{
+    return [
+        ['path' => 'harness/ralph', 'type' => 'legacy_directory'],
+    ];
+}
+
+/** @return array<string, mixed> */
+function inspectLegacyRoot(string $projectRoot, string $relativeRoot, string $type): array
+{
+    if (! isSafeRelativePath($relativeRoot)) {
+        return [
+            'path' => $relativeRoot,
+            'type' => $type,
+            'status' => 'rejected',
+            'reason' => 'raiz legada fora do formato relativo permitido',
+        ];
+    }
+
+    $root = $projectRoot.'/'.$relativeRoot;
+    if (! file_exists($root) && ! is_link($root)) {
+        return ['status' => 'absent'];
+    }
+    if (is_link($root) || ! is_dir($root) || ! pathWithin($root, $projectRoot)) {
+        return [
+            'path' => $relativeRoot,
+            'type' => $type,
+            'status' => 'rejected',
+            'reason' => 'raiz legada inválida ou symlink fora do projeto',
+        ];
+    }
+
+    $members = [];
+    $unsafeReason = null;
+    try {
+        $iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::LEAVES_ONLY
+        );
+        foreach ($iterator as $entry) {
+            $absolute = $entry->getPathname();
+            $memberPath = str_replace(DIRECTORY_SEPARATOR, '/', substr($absolute, strlen($projectRoot) + 1));
+            $memberRelativePath = str_replace(DIRECTORY_SEPARATOR, '/', substr($absolute, strlen($root) + 1));
+            if (! isSafeRelativePath($memberPath) || ! isSafeRelativePath($memberRelativePath)) {
+                $unsafeReason = 'membro legado com caminho absoluto ou traversal';
+                break;
+            }
+            if ($entry->isLink()) {
+                $unsafeReason = pathWithin($absolute, $root)
+                    ? 'symlink legado não suportado'
+                    : 'symlink legado aponta para fora da raiz do projeto';
+                break;
+            }
+            if (! $entry->isFile()) {
+                $unsafeReason = 'membro legado com tipo não suportado';
+                break;
+            }
+            $sha256 = hashFile($absolute);
+            if ($sha256 === null) {
+                $unsafeReason = 'não foi possível calcular SHA-256 do membro legado';
+                break;
+            }
+            $members[] = [
+                'path' => $memberPath,
+                'relative_path' => $memberRelativePath,
+                'type' => 'file',
+                'sha256' => $sha256,
+            ];
+        }
+    } catch (UnexpectedValueException $exception) {
+        $unsafeReason = 'não foi possível enumerar a árvore legada';
+    }
+
+    if ($unsafeReason !== null) {
+        return [
+            'path' => $relativeRoot,
+            'type' => $type,
+            'status' => 'rejected',
+            'reason' => $unsafeReason,
+        ];
+    }
+
+    usort($members, static fn (array $left, array $right): int => strcmp($left['relative_path'], $right['relative_path']));
+    $memberNames = array_fill_keys(array_map(static fn (array $member): string => $member['relative_path'], $members), true);
+    $requiredMembers = ['install.sh', 'ralph.patch', 'ralph.sh.upstream'];
+    $matchingMembers = array_values(array_intersect($requiredMembers, array_keys($memberNames)));
+    $candidate = $members !== [];
+    if (! $candidate) {
+        return ['status' => 'absent'];
+    }
+
+    if (count($matchingMembers) !== count($requiredMembers)) {
+        return [
+            'path' => $relativeRoot,
+            'type' => $type,
+            'status' => 'candidate',
+            'reason' => 'raiz aprovada contém arquivos, mas não a composição legada completa',
+        ];
+    }
+
+    $fingerprintInput = implode("\n", array_map(
+        static fn (array $member): string => $member['relative_path'].'\0'.$member['type'].'\0'.$member['sha256'],
+        $members
+    ));
+    $signatureId = 'bc_harness_legacy_directory_v1';
+
+    return [
+        'path' => $relativeRoot,
+        'type' => $type,
+        'status' => 'detected',
+        'family' => 'bc-harness',
+        'signature_id' => $signatureId,
+        'members' => $members,
+        'tree_fingerprint' => hash('sha256', $fingerprintInput),
+        'reason' => 'composição install.sh + ralph.patch + ralph.sh.upstream reconhecida',
+    ];
+}
+
+/** @return array{installations: list<array<string, mixed>>, candidates: list<array<string, mixed>>} */
+function detectLegacyInstallations(string $projectRoot): array
+{
+    $installations = [];
+    $candidates = [];
+    foreach (approvedLegacyRoots() as $definition) {
+        $inspection = inspectLegacyRoot($projectRoot, $definition['path'], $definition['type']);
+        if (($inspection['status'] ?? null) === 'detected') {
+            $installations[] = $inspection;
+            $candidates[] = [
+                'path' => $inspection['path'],
+                'type' => $inspection['type'],
+                'status' => 'detected',
+                'signature_id' => $inspection['signature_id'],
+            ];
+        } elseif (in_array($inspection['status'] ?? null, ['candidate', 'rejected'], true)) {
+            $candidates[] = $inspection;
+        }
+    }
+
+    return ['installations' => $installations, 'candidates' => $candidates];
+}
+
 /**
  * @param array<string, mixed>|null $methodManifest
  * @return array<string, mixed>
@@ -641,8 +808,16 @@ function detectExistingRalphInstallation(string $root, ?array $methodManifest): 
             'ralph_install_manifest',
         ], true)
     ));
+    $legacyDetection = detectLegacyInstallations($root);
+    $legacyInstallation = $legacyDetection['installations'][0] ?? null;
     $hasExternalSignals = $signals !== [];
-    if (! $hasExternalSignals) {
+    if ($legacyInstallation !== null) {
+        $status = 'detected';
+        $classification = 'external_ralph_legacy';
+        $confidence = 'high';
+        $recommendedAction = 'evolve';
+        $reason = 'foi reconhecida uma instalação legada bc-harness em uma raiz aprovada';
+    } elseif (! $hasExternalSignals) {
         $status = 'not_found';
         $classification = 'none';
         $confidence = 'none';
@@ -681,6 +856,13 @@ function detectExistingRalphInstallation(string $root, ?array $methodManifest): 
             'apply_allowed' => $status === 'not_found',
             'migration_supported' => false,
             'reason' => $reason,
+            'family' => $legacyInstallation['family'] ?? null,
+            'signature_id' => $legacyInstallation['signature_id'] ?? null,
+            'legacy_root' => $legacyInstallation['path'] ?? null,
+            'legacy_type' => $legacyInstallation['type'] ?? null,
+            'members' => $legacyInstallation['members'] ?? [],
+            'tree_fingerprint' => $legacyInstallation['tree_fingerprint'] ?? null,
+            'legacy_candidates' => $legacyDetection['candidates'],
         ],
     ];
 }

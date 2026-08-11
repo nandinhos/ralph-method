@@ -2266,6 +2266,31 @@ function superviseWorkflow(array $arguments): void
             }
             $feature = featureFrom($projection, $cursor);
 
+            if (($feature['state'] ?? null) === 'debugging_running') {
+                $stale = markStaleDebuggingFeature($workflowId, $cursor, $staleAfter);
+                fwrite(STDERR, supervisorFeedback(supervisorSnapshot($arguments, $workflowId, $staleAfter, $activityStaleAfter))."\n");
+                if (($stale['status'] ?? null) === 'recovery_required') {
+                    printJson([
+                        'status' => 'recovery_required',
+                        'workflow_id' => $workflowId,
+                        'feature_key' => $cursor,
+                        'reason' => 'systematic debugging sem processo terminal após timeout explícito',
+                        'age_seconds' => $stale['age_seconds'] ?? null,
+                    ]);
+
+                    return;
+                }
+                printJson([
+                    'status' => 'debugging_running',
+                    'workflow_id' => $workflowId,
+                    'feature_key' => $cursor,
+                    'execution_active' => true,
+                    'age_seconds' => $stale['age_seconds'] ?? null,
+                ]);
+
+                return;
+            }
+
             if (($feature['state'] ?? null) === 'released') {
                 $self = escapeshellarg(PHP_BINARY).' '.escapeshellarg(__FILE__);
                 $exit = 0;
@@ -3216,6 +3241,46 @@ function markStaleRunningFeature(string $workflowId, string $featureKey): array
     });
 }
 
+function markStaleDebuggingFeature(string $workflowId, string $featureKey, int $staleAfter): array
+{
+    return withLock(function () use ($workflowId, $featureKey, $staleAfter): array {
+        $workflow = loadWorkflowForId($workflowId);
+        $events = readEvents();
+        $feature = featureFrom(project($workflow, $events), $featureKey);
+        if (($feature['state'] ?? null) !== 'debugging_running') {
+            return ['status' => (string) ($feature['state'] ?? 'unknown'), 'execution_active' => false];
+        }
+
+        $started = null;
+        foreach (array_reverse($events) as $event) {
+            if (($event['type'] ?? null) === 'debugging.started'
+                && ($event['feature_key'] ?? null) === $featureKey
+                && (int) ($event['attempt'] ?? -1) === (int) ($feature['attempt'] ?? -2)) {
+                $started = $event;
+                break;
+            }
+        }
+        $startedAt = is_array($started) ? strtotime((string) ($started['timestamp'] ?? '')) : false;
+        $age = $startedAt === false ? $staleAfter : max(0, time() - $startedAt);
+        if ($age < $staleAfter) {
+            return ['status' => 'debugging_running', 'execution_active' => true, 'age_seconds' => $age];
+        }
+
+        appendEvent(eventContext([
+            'workflow' => $workflowId,
+            'actor' => 'ralph-control',
+            'actor-type' => 'controller',
+        ], $feature, 'recovery.required', 'Systematic debugging ficou sem evento terminal; recovery explícito exigido', [
+            'reason' => 'stale_debugging_attempt',
+            'attempt' => $feature['attempt'],
+            'age_seconds' => $age,
+            'stale_after' => $staleAfter,
+        ]));
+
+        return ['status' => 'recovery_required', 'execution_active' => false, 'attempt' => $feature['attempt'], 'age_seconds' => $age];
+    });
+}
+
 function continueWorkflow(array $arguments): void
 {
     $workflowId = required($arguments, 'workflow');
@@ -3250,6 +3315,33 @@ function continueWorkflow(array $arguments): void
 
             return;
         }
+    }
+    if (($feature['state'] ?? null) === 'debugging_running') {
+        $stale = markStaleDebuggingFeature($workflowId, $cursor, max(1, (int) ($arguments['stale-after'] ?? 180)));
+        if (($stale['status'] ?? null) === 'recovery_required') {
+            printJson([
+                'status' => 'recovery_required',
+                'workflow_id' => $workflowId,
+                'feature_key' => $cursor,
+                'reason' => 'systematic debugging sem processo terminal após timeout explícito',
+                'age_seconds' => $stale['age_seconds'] ?? null,
+            ]);
+
+            return;
+        }
+        if (($stale['execution_active'] ?? false) === true) {
+            printJson([
+                'status' => 'debugging_running',
+                'workflow_id' => $workflowId,
+                'feature_key' => $cursor,
+                'execution_active' => true,
+                'age_seconds' => $stale['age_seconds'] ?? null,
+            ]);
+
+            return;
+        }
+        $projection = project(loadWorkflowForId($workflowId), readEvents());
+        $feature = featureFrom($projection, $cursor);
     }
     if (($feature['state'] ?? null) === 'released') {
         $self = escapeshellarg(PHP_BINARY).' '.escapeshellarg(__FILE__);
