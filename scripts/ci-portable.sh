@@ -16,6 +16,7 @@ checks=(
   scripts/test-provider-readiness.sh
   scripts/test-multiprovider.sh
   scripts/test-ralph-method.sh
+  scripts/test-ralph-reconciliation.sh
   scripts/test-ralph-knowledge.sh
   scripts/test-ralph-metrics.sh
   scripts/test-ralph.sh

@@ -109,3 +109,4 @@
 2026-08-11T00:00:00-03:00 | fix | A cobertura de evolução adicionou interrupção real do processo durante a quarentena, com SIGKILL antes da instalação e recuperação por rollback.
 2026-08-11T00:00:00-03:00 | fix | A prova de interrupção durante staging passou a ceder o scheduler após SIGCONT; sem isso, o processo era parado novamente antes de persistir o estado de quarentena.
 2026-08-11 — FEATURE-092: corrigido o sanitizador do controlador para que previews de captura truncados no meio de UTF-8 não interrompam o evento terminal `block.finished`; adicionada regressão com byte inválido e sequência multibyte incompleta.
+2026-08-11 — FEATURE-092: reconciliador do ralph-control passou a separar retries transitórios dos resultados normativos; somente um sucesso `impl` e um sucesso `verify` autorizam a continuidade, preservando falhas no ledger.

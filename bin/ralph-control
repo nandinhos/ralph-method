@@ -579,7 +579,7 @@ function recordedRunnerContextModes(string $workflowId, string $featureKey, int 
     $modes = [];
     foreach (readEvents() as $event) {
         if (! is_array($event)
-            || ! in_array($event['type'] ?? null, ['delegation.completed', 'delegation.failed', 'delegation.reconciled'], true)
+            || ! in_array($event['type'] ?? null, ['delegation.completed', 'delegation.reconciled'], true)
             || ($event['workflow_id'] ?? null) !== $workflowId
             || ($event['feature_key'] ?? null) !== $featureKey
             || (int) ($event['attempt'] ?? -1) !== $attempt) {
@@ -630,6 +630,35 @@ function runnerResults(array $before, array $recorded, string $workflowId, strin
     }
 
     return $results;
+}
+
+/** @param list<array{path: string, result: array<string, mixed>}> $entries @return list<array{path: string, result: array<string, mixed>}> */
+function normativeRunnerResults(array $entries): array
+{
+    $successful = ['impl' => [], 'verify' => []];
+    $latest = [];
+    foreach ($entries as $entry) {
+        $mode = $entry['result']['execution_mode'] ?? null;
+        if (! is_string($mode) || ! in_array($mode, ['impl', 'verify'], true)) {
+            continue;
+        }
+        $latest[$mode] ??= $entry;
+        if (($entry['result']['status'] ?? null) === 'completed'
+            && ($entry['result']['exit_code'] ?? null) === 0) {
+            $successful[$mode][] = $entry;
+        }
+    }
+
+    $selected = [];
+    foreach (['impl', 'verify'] as $mode) {
+        if ($successful[$mode] !== []) {
+            $selected[] = $successful[$mode][0];
+        } elseif (isset($latest[$mode])) {
+            $selected[] = $latest[$mode];
+        }
+    }
+
+    return $selected;
 }
 
 function validateRunnerPolicyEvidence(array $result): void
@@ -4147,21 +4176,51 @@ function runControlled(array $arguments): void
     $runnerResultEntries = runnerResults($runnerResultBefore, $recordedRunnerIds, $workflowId, $featureKey, $attempt);
     if ($generatedRalph && $engine === 'opencode' && $exitCode === 0) {
         $contextModes = recordedRunnerContextModes($workflowId, $featureKey, $attempt);
+        $successfulCounts = ['impl' => 0, 'verify' => 0];
+        $normativeError = null;
         foreach ($runnerResultEntries as $runnerResultEntry) {
-            $resultExecutionId = $runnerResultEntry['result']['execution_id'] ?? null;
-            $resultMode = $runnerResultEntry['result']['execution_mode'] ?? null;
-            if (! is_string($resultExecutionId) || ! is_string($resultMode) || isset($contextModes[$resultExecutionId])) {
-                fail('resultado OpenCode normativo duplicado ou sem modo único');
+            $result = $runnerResultEntry['result'];
+            $resultMode = $result['execution_mode'] ?? null;
+            if (! is_string($resultMode) || ! in_array($resultMode, ['impl', 'verify'], true)) {
+                $normativeError = 'resultado OpenCode normativo duplicado ou sem modo único';
+                break;
             }
-            $contextModes[$resultExecutionId] = $resultMode;
+            if (($result['status'] ?? null) === 'completed' && ($result['exit_code'] ?? null) === 0) {
+                $successfulCounts[$resultMode]++;
+            }
+        }
+        $normativeRunnerEntries = normativeRunnerResults($runnerResultEntries);
+        if ($normativeError === null) {
+            foreach ($normativeRunnerEntries as $runnerResultEntry) {
+                $resultExecutionId = $runnerResultEntry['result']['execution_id'] ?? null;
+                $resultMode = $runnerResultEntry['result']['execution_mode'] ?? null;
+                if (! is_string($resultExecutionId) || ! is_string($resultMode) || isset($contextModes[$resultExecutionId])) {
+                    $normativeError = 'resultado OpenCode normativo duplicado ou sem modo único';
+                    break;
+                }
+                if (($successfulCounts[$resultMode] ?? 0) !== 1
+                    || ($runnerResultEntry['result']['status'] ?? null) !== 'completed'
+                    || ($runnerResultEntry['result']['exit_code'] ?? null) !== 0) {
+                    $normativeError = 'resultado OpenCode normativo sem exatamente um sucesso por modo';
+                    break;
+                }
+                $contextModes[$resultExecutionId] = $resultMode;
+            }
         }
         $modeCounts = array_count_values(array_values($contextModes));
-        if (count($contextModes) !== 2 || ($modeCounts['impl'] ?? 0) !== 1 || ($modeCounts['verify'] ?? 0) !== 1) {
+        if ($normativeError !== null
+            || count($contextModes) !== 2
+            || ($modeCounts['impl'] ?? 0) !== 1
+            || ($modeCounts['verify'] ?? 0) !== 1) {
+            $normativeError ??= 'execução OpenCode normativa exige exatamente uma delegação impl e uma verify';
             appendEvent(eventContext($arguments, $feature, 'recovery.required', 'Execução OpenCode normativa sem exatamente uma implementação e uma revisão', [
                 'execution_modes' => $contextModes,
                 'runner_result_paths' => array_values(array_map(static fn (array $entry): string => $entry['path'], $runnerResultEntries)),
+                'normative_runner_result_paths' => array_values(array_map(static fn (array $entry): string => $entry['path'], $normativeRunnerEntries)),
+                'successful_counts' => $successfulCounts,
+                'reason' => $normativeError,
             ]));
-            fail('execução OpenCode normativa exige exatamente uma delegação impl e uma verify');
+            fail($normativeError);
         }
     }
     foreach ($runnerResultEntries as $runnerResult) {
