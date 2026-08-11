@@ -371,6 +371,24 @@ LEGACY_DRIFT_PLAN="$legacy_drift_plan" php -r '
         && count($plan["legacy_drift"] ?? []) > 0 ? 0 : 1);
 '
 
+# Uma entrada nova no backup também é drift; o rollback não valida apenas os
+# membros conhecidos pelo inventário original.
+legacy_extra_project="$TMP/ralph-evolucao-legada-extra"
+new_project "$legacy_extra_project"
+mkdir -p "$legacy_extra_project/harness" "$legacy_extra_project/shared"
+cp -R "$legacy_project/harness/ralph" "$legacy_extra_project/harness/"
+printf '%s\n' 'alvo interno' > "$legacy_extra_project/shared/target.txt"
+legacy_extra_output="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" evolve --project "$legacy_extra_project" --apply --provider auto)"
+legacy_extra_id="$(EVOLUTION_APPLY_JSON="$legacy_extra_output" php -r '$result = json_decode(getenv("EVOLUTION_APPLY_JSON"), true, 512, JSON_THROW_ON_ERROR); echo $result["evolution_id"];')"
+printf '%s\n' 'membro inesperado' > "$legacy_extra_project/.ralph/evolutions/$legacy_extra_id/backup/harness/ralph/unexpected.txt"
+legacy_extra_plan="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" rollback --project "$legacy_extra_project" --evolution "$legacy_extra_id")"
+LEGACY_EXTRA_PLAN="$legacy_extra_plan" php -r '
+    $plan = json_decode(getenv("LEGACY_EXTRA_PLAN"), true, 512, JSON_THROW_ON_ERROR);
+    exit(($plan["status"] ?? null) === "blocked"
+        && ($plan["rollback_allowed"] ?? true) === false
+        && count($plan["legacy_drift"] ?? []) > 0 ? 0 : 1);
+'
+
 # Uma interrupção depois do movimento da árvore, mas antes do journal final,
 # é retomada sem duplicar backup nem perder os membros restaurados.
 legacy_interrupted_project="$TMP/ralph-evolucao-legada-interrompida"
@@ -400,6 +418,112 @@ LEGACY_INTERRUPTED_PLAN="$legacy_interrupted_plan" php -r '
 RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" rollback --project "$legacy_interrupted_project" --evolution "$legacy_interrupted_id" --apply >/dev/null
 assert_file "$legacy_interrupted_project/harness/ralph/nested/member.txt"
 assert_not_file "$legacy_interrupted_project/.ralph/install-manifest.json"
+LEGACY_INTERRUPTED_STATE="$legacy_interrupted_state" php -r '
+    $state = json_decode(file_get_contents(getenv("LEGACY_INTERRUPTED_STATE")), true, 512, JSON_THROW_ON_ERROR);
+    foreach ($state["journal"] ?? [] as $entry) {
+        if (($entry["phase"] ?? null) === "restore"
+            && ($entry["action"] ?? null) === "move_tree"
+            && ($entry["path"] ?? null) === "harness/ralph"
+            && ($entry["status"] ?? null) === "after") {
+            exit(0);
+        }
+    }
+    exit(1);
+'
+
+# Interrompe o processo real durante a quarentena, depois do movimento da
+# árvore e antes de a instalação nova ser publicada. O rollback deve recuperar
+# o estado persistido sem depender de uma edição artificial do evolution.json.
+staging_interrupted_project="$TMP/ralph-evolucao-interrompida-staging"
+new_project "$staging_interrupted_project"
+mkdir -p "$staging_interrupted_project/harness" "$staging_interrupted_project/shared" "$staging_interrupted_project/bin" "$staging_interrupted_project/scripts" "$staging_interrupted_project/.ralph"
+cp -R "$legacy_project/harness/ralph" "$staging_interrupted_project/harness/"
+printf '%s\n' 'alvo interno' > "$staging_interrupted_project/shared/target.txt"
+printf '%s\n' '# Ralph externo interrompido durante staging' > "$staging_interrupted_project/ralph.sh"
+printf '%s\n' 'manifesto legado' > "$staging_interrupted_project/Ralphfile"
+printf '%s\n' 'configuração legada' > "$staging_interrupted_project/ralph.yml"
+printf '%s\n' 'configuração legada' > "$staging_interrupted_project/ralph.yaml"
+printf '%s\n' '{"legacy":true}' > "$staging_interrupted_project/ralph.json"
+printf '%s\n' 'configuração legada' > "$staging_interrupted_project/ralph.toml"
+printf '%s\n' 'configuração legada' > "$staging_interrupted_project/.ralph/ralph.sh"
+printf '%s\n' 'configuração legada' > "$staging_interrupted_project/.ralph.yml"
+printf '%s\n' 'configuração legada' > "$staging_interrupted_project/.ralph.yaml"
+printf '%s\n' '{"legacy":true}' > "$staging_interrupted_project/.ralph.json"
+printf '%s\n' 'configuração legada' > "$staging_interrupted_project/.ralph.toml"
+printf '%s\n' 'binário legado' > "$staging_interrupted_project/bin/ralph-control"
+printf '%s\n' 'bloco legado' > "$staging_interrupted_project/bin/ralph-block"
+printf '%s\n' 'loop legado' > "$staging_interrupted_project/scripts/ralph.sh"
+staging_interrupted_output="$TMP/ralph-evolucao-interrompida-staging.log"
+RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" evolve --project "$staging_interrupted_project" --apply --provider auto >"$staging_interrupted_output" 2>&1 &
+staging_interrupted_pid=$!
+staging_interrupted_state=""
+staging_interrupted=0
+for _ in $(seq 1 1000); do
+  if ! kill -STOP "$staging_interrupted_pid" 2>/dev/null; then
+    break
+  fi
+  staging_interrupted_state="$(find "$staging_interrupted_project/.ralph/evolutions" -name evolution.json -print -quit 2>/dev/null || true)"
+  if [ -n "$staging_interrupted_state" ] && STAGING_INTERRUPTED_STATE="$staging_interrupted_state" php -r '
+      $state = json_decode(file_get_contents(getenv("STAGING_INTERRUPTED_STATE")), true, 512, JSON_THROW_ON_ERROR);
+      foreach ($state["journal"] ?? [] as $entry) {
+          if (($entry["phase"] ?? null) === "quarantine"
+              && ($entry["action"] ?? null) === "move_tree"
+              && ($entry["path"] ?? null) === "harness/ralph"
+              && ($entry["status"] ?? null) === "after"
+              && ($state["status"] ?? null) === "quarantine_in_progress") {
+              exit(0);
+          }
+      }
+      exit(1);
+  '; then
+    if kill -0 "$staging_interrupted_pid" 2>/dev/null; then
+      kill -KILL "$staging_interrupted_pid" 2>/dev/null || true
+      wait "$staging_interrupted_pid" 2>/dev/null || true
+      staging_interrupted=1
+      break
+    fi
+  fi
+  kill -CONT "$staging_interrupted_pid" 2>/dev/null || true
+  sleep 0.001
+  if ! kill -0 "$staging_interrupted_pid" 2>/dev/null; then
+    break
+  fi
+done
+if [ "$staging_interrupted" -ne 1 ]; then
+  kill -KILL "$staging_interrupted_pid" 2>/dev/null || true
+  wait "$staging_interrupted_pid" 2>/dev/null || true
+  fail 'não foi possível interromper o processo durante a quarentena'
+fi
+[ -n "$staging_interrupted_state" ] || fail 'a interrupção não deixou estado de evolução persistido'
+assert_not_file "$staging_interrupted_project/.ralph/install-manifest.json"
+staging_interrupted_id="$(basename "$(dirname "$staging_interrupted_state")")"
+assert_file "$staging_interrupted_project/.ralph/evolutions/$staging_interrupted_id/backup/harness/ralph/nested/member.txt"
+STAGING_INTERRUPTED_STATE="$staging_interrupted_state" php -r '
+    $state = json_decode(file_get_contents(getenv("STAGING_INTERRUPTED_STATE")), true, 512, JSON_THROW_ON_ERROR);
+    $staged = false;
+    foreach ($state["journal"] ?? [] as $entry) {
+        if (($entry["phase"] ?? null) === "quarantine"
+            && ($entry["action"] ?? null) === "move_tree"
+            && ($entry["path"] ?? null) === "harness/ralph"
+            && ($entry["status"] ?? null) === "after") {
+            $staged = true;
+            break;
+        }
+    }
+    exit(($state["status"] ?? null) === "quarantine_in_progress" && $staged ? 0 : 1);
+'
+staging_interrupted_plan="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" rollback --project "$staging_interrupted_project" --evolution "$staging_interrupted_id")"
+STAGING_INTERRUPTED_PLAN="$staging_interrupted_plan" php -r '
+    $plan = json_decode(getenv("STAGING_INTERRUPTED_PLAN"), true, 512, JSON_THROW_ON_ERROR);
+    exit(($plan["status"] ?? null) === "ready"
+        && ($plan["rollback_allowed"] ?? false) === true
+        && ($plan["evolution_status"] ?? null) === "quarantine_in_progress" ? 0 : 1);
+'
+RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" rollback --project "$staging_interrupted_project" --evolution "$staging_interrupted_id" --apply >/dev/null
+assert_file "$staging_interrupted_project/harness/ralph/nested/member.txt"
+assert_file "$staging_interrupted_project/ralph.sh"
+assert_file "$staging_interrupted_project/Ralphfile"
+assert_not_file "$staging_interrupted_project/.ralph/install-manifest.json"
 
 # Os 17 sinais canônicos permanecem estáveis e continuam sendo inventariados
 # somente por seus paths relativos, tipo e SHA-256.
@@ -506,6 +630,25 @@ ln -s "$TMP/ralph-alvo-externo" "$symlink_project/harness/ralph"
 symlink_plan="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" plan --project "$symlink_project")"
 SYMLINK_JSON="$symlink_plan" php -r '
     $plan = json_decode(getenv("SYMLINK_JSON"), true, 512, JSON_THROW_ON_ERROR);
+    $external = $plan["ralph_installation"]["external"] ?? [];
+    $candidate = $external["legacy_candidates"][0] ?? [];
+    exit(($external["status"] ?? null) === "not_found"
+        && ($external["apply_allowed"] ?? false) === true
+        && ($candidate["status"] ?? null) === "rejected" ? 0 : 1);
+'
+
+# Um membro symlink apontando para fora também rejeita a raiz sem seguir o alvo.
+member_symlink_project="$TMP/ralph-membro-symlink-externo"
+new_project "$member_symlink_project"
+mkdir -p "$member_symlink_project/harness/ralph" "$TMP/ralph-membro-alvo-externo"
+printf '%s\n' 'install' > "$member_symlink_project/harness/ralph/install.sh"
+printf '%s\n' 'patch' > "$member_symlink_project/harness/ralph/ralph.patch"
+printf '%s\n' 'upstream' > "$member_symlink_project/harness/ralph/ralph.sh.upstream"
+printf '%s\n' 'fora' > "$TMP/ralph-membro-alvo-externo/secret.txt"
+ln -s "$TMP/ralph-membro-alvo-externo/secret.txt" "$member_symlink_project/harness/ralph/external-link"
+member_symlink_plan="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" plan --project "$member_symlink_project")"
+MEMBER_SYMLINK_JSON="$member_symlink_plan" php -r '
+    $plan = json_decode(getenv("MEMBER_SYMLINK_JSON"), true, 512, JSON_THROW_ON_ERROR);
     $external = $plan["ralph_installation"]["external"] ?? [];
     $candidate = $external["legacy_candidates"][0] ?? [];
     exit(($external["status"] ?? null) === "not_found"

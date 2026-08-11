@@ -710,6 +710,70 @@ function pathWithin(string $path, string $root): bool
     return $resolvedPath === $resolvedRoot || str_starts_with($resolvedPath, $resolvedRoot.'/');
 }
 
+/** @return array{members: list<array<string, mixed>>, root_mode: ?string, error: ?string} */
+function enumerateLegacyTree(string $projectRoot, string $absoluteRoot, string $relativeRoot, bool $rejectExternalSymlinks): array
+{
+    if (! isSafeRelativePath($relativeRoot) || ! is_dir($absoluteRoot) || is_link($absoluteRoot)) {
+        return ['members' => [], 'root_mode' => null, 'error' => 'raiz legada inválida'];
+    }
+    $rootMode = entryMode($absoluteRoot);
+    if ($rootMode === null) {
+        return ['members' => [], 'root_mode' => null, 'error' => 'não foi possível ler as permissões da raiz legada'];
+    }
+    $members = [];
+    try {
+        $iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($absoluteRoot, FilesystemIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::SELF_FIRST
+        );
+        foreach ($iterator as $entry) {
+            $absolute = $entry->getPathname();
+            $memberRelativePath = str_replace(DIRECTORY_SEPARATOR, '/', substr($absolute, strlen($absoluteRoot) + 1));
+            $memberPath = $relativeRoot.'/'.$memberRelativePath;
+            if (! isSafeRelativePath($memberPath) || ! isSafeRelativePath($memberRelativePath)) {
+                return ['members' => [], 'root_mode' => $rootMode, 'error' => 'membro legado com caminho absoluto ou traversal'];
+            }
+            if ($entry->isLink()) {
+                if ($rejectExternalSymlinks) {
+                    $target = realpath($absolute);
+                    if ($target === false || ! pathWithin($target, $projectRoot)) {
+                        return ['members' => [], 'root_mode' => $rootMode, 'error' => 'symlink legado aponta para fora da raiz do projeto'];
+                    }
+                }
+                $type = 'symlink';
+            } elseif ($entry->isDir()) {
+                $type = 'directory';
+            } elseif ($entry->isFile()) {
+                $type = 'file';
+            } else {
+                return ['members' => [], 'root_mode' => $rootMode, 'error' => 'membro legado com tipo não suportado'];
+            }
+            $mode = entryMode($absolute);
+            $sha256 = entryHash($absolute, $type);
+            if ($mode === null || $sha256 === null) {
+                return ['members' => [], 'root_mode' => $rootMode, 'error' => 'não foi possível calcular os metadados do membro legado'];
+            }
+            $member = [
+                'path' => $memberPath,
+                'relative_path' => $memberRelativePath,
+                'type' => $type,
+                'mode' => $mode,
+                'sha256' => $sha256,
+            ];
+            if ($type === 'symlink') {
+                $member['link_target'] = entryLinkTarget($absolute, $type);
+            }
+            $members[] = $member;
+        }
+    } catch (UnexpectedValueException|RuntimeException) {
+        return ['members' => [], 'root_mode' => $rootMode, 'error' => 'não foi possível enumerar a árvore legada'];
+    }
+
+    usort($members, static fn (array $left, array $right): int => strcmp((string) $left['relative_path'], (string) $right['relative_path']));
+
+    return ['members' => $members, 'root_mode' => $rootMode, 'error' => null];
+}
+
 /** @return list<array{path: string, type: string}> */
 function approvedLegacyRoots(): array
 {
@@ -743,77 +807,17 @@ function inspectLegacyRoot(string $projectRoot, string $relativeRoot, string $ty
         ];
     }
 
-    $members = [];
-    $rootMode = entryMode($root);
-    if ($rootMode === null) {
+    $inventory = enumerateLegacyTree($projectRoot, $root, $relativeRoot, true);
+    if ($inventory['error'] !== null) {
         return [
             'path' => $relativeRoot,
             'type' => $type,
             'status' => 'rejected',
-            'reason' => 'não foi possível ler as permissões da raiz legada',
+            'reason' => $inventory['error'],
         ];
     }
-    $unsafeReason = null;
-    try {
-        $iterator = new RecursiveIteratorIterator(
-            new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS),
-            RecursiveIteratorIterator::SELF_FIRST
-        );
-        foreach ($iterator as $entry) {
-            $absolute = $entry->getPathname();
-            $memberPath = str_replace(DIRECTORY_SEPARATOR, '/', substr($absolute, strlen($projectRoot) + 1));
-            $memberRelativePath = str_replace(DIRECTORY_SEPARATOR, '/', substr($absolute, strlen($root) + 1));
-            if (! isSafeRelativePath($memberPath) || ! isSafeRelativePath($memberRelativePath)) {
-                $unsafeReason = 'membro legado com caminho absoluto ou traversal';
-                break;
-            }
-            if ($entry->isLink()) {
-                $target = realpath($absolute);
-                if ($target === false || ! pathWithin($target, $projectRoot)) {
-                    $unsafeReason = 'symlink legado aponta para fora da raiz do projeto';
-                    break;
-                }
-                $entryTypeName = 'symlink';
-            } elseif ($entry->isDir()) {
-                $entryTypeName = 'directory';
-            } elseif ($entry->isFile()) {
-                $entryTypeName = 'file';
-            } else {
-                $unsafeReason = 'membro legado com tipo não suportado';
-                break;
-            }
-            $mode = entryMode($absolute);
-            $sha256 = entryHash($absolute, $entryTypeName);
-            if ($mode === null || $sha256 === null) {
-                $unsafeReason = 'não foi possível calcular os metadados do membro legado';
-                break;
-            }
-            $member = [
-                'path' => $memberPath,
-                'relative_path' => $memberRelativePath,
-                'type' => $entryTypeName,
-                'mode' => $mode,
-                'sha256' => $sha256,
-            ];
-            if ($entryTypeName === 'symlink') {
-                $member['link_target'] = entryLinkTarget($absolute, $entryTypeName);
-            }
-            $members[] = $member;
-        }
-    } catch (UnexpectedValueException|RuntimeException $exception) {
-        $unsafeReason = 'não foi possível enumerar a árvore legada';
-    }
-
-    if ($unsafeReason !== null) {
-        return [
-            'path' => $relativeRoot,
-            'type' => $type,
-            'status' => 'rejected',
-            'reason' => $unsafeReason,
-        ];
-    }
-
-    usort($members, static fn (array $left, array $right): int => strcmp($left['relative_path'], $right['relative_path']));
+    $members = $inventory['members'];
+    $rootMode = $inventory['root_mode'];
     $memberNames = array_fill_keys(array_map(static fn (array $member): string => $member['relative_path'], $members), true);
     $requiredMembers = ['install.sh', 'ralph.patch', 'ralph.sh.upstream'];
     $matchingMembers = array_values(array_intersect($requiredMembers, array_keys($memberNames)));
@@ -1603,6 +1607,14 @@ function updateEvolutionState(array &$state, string $status, ?string $failure = 
 /** @param array<string, mixed> $state */
 function recordEvolutionMove(array &$state, string $phase, string $action, string $path, string $status): void
 {
+    foreach ($state['journal'] ?? [] as $entry) {
+        if (($entry['phase'] ?? null) === $phase
+            && ($entry['action'] ?? null) === $action
+            && ($entry['path'] ?? null) === $path
+            && ($entry['status'] ?? null) === $status) {
+            return;
+        }
+    }
     $state['journal'][] = [
         'sequence' => count($state['journal'] ?? []) + 1,
         'phase' => $phase,
@@ -1641,27 +1653,46 @@ function validateLegacyTree(array $state, array $tree, bool $backup): array
     $base = $root.'/'.($backup ? (string) $tree['backup_path'] : (string) $tree['path']);
     $members = legacyTreeMembers($state, (string) $tree['path']);
     $drift = [];
-    foreach (orderedLegacyMembers($members) as $member) {
+    $inventory = enumerateLegacyTree($root, $base, (string) $tree['path'], ! $backup);
+    if ($inventory['error'] !== null) {
+        return [['path' => $tree['path'], 'status' => 'invalid_tree', 'reason' => $inventory['error']]];
+    }
+    $expectedByRelativePath = [];
+    foreach ($members as $member) {
+        $expectedByRelativePath[(string) $member['relative_path']] = $member;
+    }
+    $actualByRelativePath = [];
+    foreach ($inventory['members'] as $member) {
         $relative = (string) $member['relative_path'];
-        $path = $base.'/'.$relative;
-        if (! entryExists($path)) {
-            $drift[] = ['path' => $member['path'], 'expected' => $member['sha256'], 'actual' => null, 'status' => 'missing'];
+        $actualByRelativePath[$relative] = $member;
+        if (! isset($expectedByRelativePath[$relative])) {
+            $drift[] = ['path' => $tree['path'].'/'.$relative, 'status' => 'unexpected_member'];
             continue;
         }
-        if (! entryMatches($path, $member)) {
+        $expected = $expectedByRelativePath[$relative];
+        if ($member['type'] !== ($expected['type'] ?? null)
+            || $member['mode'] !== ($expected['mode'] ?? null)
+            || $member['sha256'] !== ($expected['sha256'] ?? null)
+            || ($member['link_target'] ?? null) !== ($expected['link_target'] ?? null)) {
             $drift[] = [
-                'path' => $member['path'],
-                'expected' => $member['sha256'],
-                'actual' => entryHash($path),
+                'path' => $expected['path'],
+                'expected' => $expected['sha256'],
+                'actual' => $member['sha256'],
                 'status' => 'modified',
             ];
         }
     }
-    $rootMode = entryMode($base);
+    foreach ($members as $member) {
+        $relative = (string) $member['relative_path'];
+        if (! isset($actualByRelativePath[$relative])) {
+            $drift[] = ['path' => $member['path'], 'expected' => $member['sha256'], 'actual' => null, 'status' => 'missing'];
+        }
+    }
+    $rootMode = $inventory['root_mode'];
     if ($rootMode !== ($tree['root_mode'] ?? null)) {
         $drift[] = ['path' => $tree['path'], 'expected_mode' => $tree['root_mode'] ?? null, 'actual_mode' => $rootMode, 'status' => 'modified'];
     }
-    if ($drift === [] && legacyTreeFingerprint($members, $tree['root_mode'] ?? null) !== ($tree['tree_fingerprint'] ?? null)) {
+    if (legacyTreeFingerprint($inventory['members'], $rootMode) !== ($tree['tree_fingerprint'] ?? null)) {
         $drift[] = ['path' => $tree['path'], 'status' => 'fingerprint_mismatch'];
     }
 
@@ -1739,6 +1770,7 @@ function restoreEvolutionSignals(array &$state): void
             if (validateLegacyTree($state, $tree, false) !== []) {
                 throw new RuntimeException('restauração interrompida com árvore divergente em '.$tree['path']);
             }
+            recordEvolutionMove($state, 'restore', 'move_tree', $tree['path'], 'after');
             $state['backup']['trees'][$treeIndex]['status'] = 'restored';
             updateLegacyTreeMembers($state, $tree['path'], 'restored');
             writeJsonStrict((string) $state['state_path'], $state);
@@ -1780,6 +1812,7 @@ function restoreEvolutionSignals(array &$state): void
             if (! entryMatches($destination, $file)) {
                 throw new RuntimeException('restauração interrompida com conteúdo divergente em '.$file['path']);
             }
+            recordEvolutionMove($state, 'restore', 'move_entry', $file['path'], 'after');
             $file['status'] = 'restored';
             writeJsonStrict((string) $state['state_path'], $state);
             unset($file);
@@ -1895,6 +1928,7 @@ function evolveApply(string $root, array $detected, string $requestedProvider, b
                 'backup_path' => $treeBackupPath,
                 'root_mode' => $external['root_mode'] ?? null,
                 'tree_fingerprint' => $external['tree_fingerprint'] ?? null,
+                'member_count' => count($external['members'] ?? []),
                 'status' => 'pending',
             ];
             foreach ($external['members'] ?? [] as $member) {
@@ -2188,6 +2222,7 @@ function rollbackApply(string $root, string $evolutionId): void
                     throw new RuntimeException('staging divergente durante rollback de '.$relative);
                 }
                 $state['installation']['managed_files'][$index]['rollback_status'] = 'staged';
+                recordEvolutionMove($state, 'restore', 'move_entry', $relative, 'after');
                 writeJsonStrict((string) $state['state_path'], $state);
                 $movedNew[] = $relative;
                 continue;
@@ -2215,6 +2250,7 @@ function rollbackApply(string $root, string $evolutionId): void
                 if (validateLegacyTree($state, $tree, false) !== []) {
                     throw new RuntimeException('restauração interrompida com árvore divergente em '.$tree['path']);
                 }
+                recordEvolutionMove($state, 'restore', 'move_tree', $tree['path'], 'after');
                 $state['backup']['trees'][$treeIndex]['status'] = 'restored';
                 updateLegacyTreeMembers($state, $tree['path'], 'restored');
                 writeJsonStrict((string) $state['state_path'], $state);
@@ -2254,6 +2290,7 @@ function rollbackApply(string $root, string $evolutionId): void
                 if (! entryMatches($destination, $file)) {
                     throw new RuntimeException('restauração interrompida com conteúdo divergente em '.$file['path']);
                 }
+                recordEvolutionMove($state, 'restore', 'move_entry', $file['path'], 'after');
                 $state['backup']['files'][$index]['status'] = 'restored';
                 writeJsonStrict((string) $state['state_path'], $state);
                 continue;

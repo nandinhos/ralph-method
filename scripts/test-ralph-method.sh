@@ -330,6 +330,7 @@ git -C "$supervise_tmp" commit -qm base
 touch "$TMP/supervisor-proof.json"
 set +e
 supervise_output="$(cd "$supervise_tmp" && \
+  RALPH_DEBUG_COMMAND='' \
   RALPH_SUPERVISE_ARGS_FILE="$TMP/supervisor-args.log" \
   RALPH_OPENCODE_VERIFY_POLICY_PROOF="$TMP/supervisor-proof.json" \
   RALPH_OPENCODE_VERIFY_AGENT=ralph-review \

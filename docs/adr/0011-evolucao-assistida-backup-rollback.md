@@ -57,8 +57,9 @@ O rollback só é autorizado quando:
 - o manifesto novo existe e seus arquivos possuem os hashes instalados;
 - nenhum arquivo gerenciado está ausente ou modificado;
 - todo backup necessário existe;
-- cada membro da árvore legada mantém tipo, permissões, hash e fingerprint
-  compatíveis antes da restauração;
+- o inventário efetivo da árvore legada tem exatamente os membros registrados
+  (sem ausências nem entradas extras), mantendo tipo, permissões, hash e
+  fingerprint compatíveis antes da restauração;
 - nenhum destino legado não gerenciado está ocupado;
 - a evolução está em `awaiting_acceptance`, `accepted` ou
   `recovery_required`.

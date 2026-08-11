@@ -42,8 +42,9 @@
   `apply` comum. A evolução implementada usa o modo `quarantine_only`: move
   a árvore legada recursiva ou somente sinais detectados, preserva
   ledger/workflow e instala o método novo com aceite pendente. O rollback
-  valida cada membro, tipo, modo e fingerprint e mantém staging quando a
-  restauração é interrompida.
+  compara o inventário efetivo completo — sem aceitar membro extra ou ausente —
+  e valida cada membro, tipo, modo, link, hash e fingerprint; o staging é
+  mantido quando a restauração é interrompida.
 - `.ralph/providers.json` registra somente path, versão, capacidades, status,
   suporte do runner, provider-alvo, códigos de saída e timestamps dos probes;
   não registra saída bruta,

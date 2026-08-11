@@ -103,3 +103,8 @@
 2026-08-10T00:00:00-03:00 | fix | Fixtures de scripts/ralph.sh passaram a remover hook e contexto de fase herdados do supervisor, evitando falsos negativos na prova de auto-descoberta e guardrails.
 2026-08-10T00:00:00-03:00 | fix | Evolução legada passou a quarentenar a árvore recursiva completa com tipos, permissões, symlinks internos, fingerprint e validação de drift por membro.
 2026-08-10T00:00:00-03:00 | decision | Movimentos de quarentena e restauração registram journal before/after; falha intermediária mantém backup/staging e exige recuperação explícita.
+2026-08-10T00:00:00-03:00 | decision | Validação de legacy_directory deve comparar o inventário efetivo completo com os membros registrados, incluindo entradas extras, para bloquear rollback por qualquer drift.
+2026-08-10T00:00:00-03:00 | fix | Fixture do supervisor passou a remover RALPH_DEBUG_COMMAND herdado do harness para validar deterministicamente o ramo sem comando de debugging.
+2026-08-10T00:00:00-03:00 | review | Revisão adversarial externa foi iniciada em duas lentes, mas ambos os probes hermes excederam o tempo sem evidência; revisão local refute-first permanece necessária e sem finding aberto conhecido.
+2026-08-11T00:00:00-03:00 | fix | A cobertura de evolução adicionou interrupção real do processo durante a quarentena, com SIGKILL antes da instalação e recuperação por rollback.
+2026-08-11T00:00:00-03:00 | fix | A prova de interrupção durante staging passou a ceder o scheduler após SIGCONT; sem isso, o processo era parado novamente antes de persistir o estado de quarentena.
