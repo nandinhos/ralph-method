@@ -1,6 +1,7 @@
 .ralph/runtime/
 .ralph/reports/
 .ralph/evolutions/
+.ralph/knowledge-candidates/
 .ralph/install.lock
 .phases/
 .DS_Store
