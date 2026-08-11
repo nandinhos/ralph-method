@@ -1776,6 +1776,16 @@ function restoreEvolutionSignals(array &$state): void
             writeJsonStrict((string) $state['state_path'], $state);
             continue;
         }
+        if (($tree['status'] ?? null) === 'quarantining' && ! entryExists($backup) && entryExists($source)) {
+            if (validateLegacyTree($state, $tree, false) !== []) {
+                throw new RuntimeException('quarentena interrompida com árvore divergente em '.$tree['path']);
+            }
+            $state['backup']['trees'][$treeIndex]['status'] = 'restored';
+            updateLegacyTreeMembers($state, $tree['path'], 'restored');
+            recordEvolutionMove($state, 'restore', 'move_tree', $tree['path'], 'after');
+            writeJsonStrict((string) $state['state_path'], $state);
+            continue;
+        }
         if (validateLegacyTree($state, $tree, true) !== []) {
             throw new RuntimeException('backup recursivo ausente ou divergente em '.$tree['path']);
         }
@@ -1814,6 +1824,16 @@ function restoreEvolutionSignals(array &$state): void
             }
             recordEvolutionMove($state, 'restore', 'move_entry', $file['path'], 'after');
             $file['status'] = 'restored';
+            writeJsonStrict((string) $state['state_path'], $state);
+            unset($file);
+            continue;
+        }
+        if (($file['status'] ?? null) === 'quarantining' && entryExists($destination) && ! entryExists($backupPath)) {
+            if (! entryMatches($destination, $file)) {
+                throw new RuntimeException('quarentena interrompida com conteúdo divergente em '.$file['path']);
+            }
+            $file['status'] = 'restored';
+            recordEvolutionMove($state, 'restore', 'move_entry', $file['path'], 'after');
             writeJsonStrict((string) $state['state_path'], $state);
             unset($file);
             continue;
@@ -2124,7 +2144,11 @@ function rollbackPlan(string $root, string $evolutionId): array
             && ! entryExists($backupPath)
             && entryExists($source)
             && validateLegacyTree($state, $tree, false) === [];
-        if (! $restoringInPlace) {
+        $quarantineIncomplete = $status === 'quarantining'
+            && ! entryExists($backupPath)
+            && entryExists($source)
+            && validateLegacyTree($state, $tree, false) === [];
+        if (! $restoringInPlace && ! $quarantineIncomplete) {
             if (! entryExists($backupPath)) {
                 $missingBackup[] = $tree['path'];
             } elseif (validateLegacyTree($state, $tree, true) !== []) {
@@ -2142,14 +2166,14 @@ function rollbackPlan(string $root, string $evolutionId): array
         $status = (string) ($file['status'] ?? 'pending');
         $backupPath = $root.'/'.(string) ($file['backup_path'] ?? '');
         $destination = $root.'/'.(string) ($file['path'] ?? '');
-        $restoringInPlace = $status === 'restoring'
+        $inPlace = in_array($status, ['restoring', 'quarantining'], true)
             && ! entryExists($backupPath)
             && entryExists($destination)
             && entryMatches($destination, $file);
-        if (! in_array($status, ['pending', 'restored'], true) && ! $restoringInPlace && ! entryExists($backupPath)) {
+        if (! in_array($status, ['pending', 'restored'], true) && ! $inPlace && ! entryExists($backupPath)) {
             $missingBackup[] = $file['path'] ?? null;
         }
-        if (! in_array($status, ['pending', 'restored'], true) && ! $restoringInPlace && entryExists($destination) && ! isset($managedPaths[(string) ($file['path'] ?? '')])) {
+        if (! in_array($status, ['pending', 'restored'], true) && ! $inPlace && entryExists($destination) && ! isset($managedPaths[(string) ($file['path'] ?? '')])) {
             $occupiedDestinations[] = $file['path'] ?? null;
         }
     }
@@ -2256,6 +2280,16 @@ function rollbackApply(string $root, string $evolutionId): void
                 writeJsonStrict((string) $state['state_path'], $state);
                 continue;
             }
+            if (($tree['status'] ?? null) === 'quarantining' && ! entryExists($backupPath) && entryExists($destination)) {
+                if (validateLegacyTree($state, $tree, false) !== []) {
+                    throw new RuntimeException('quarentena interrompida com árvore divergente em '.$tree['path']);
+                }
+                $state['backup']['trees'][$treeIndex]['status'] = 'restored';
+                updateLegacyTreeMembers($state, $tree['path'], 'restored');
+                recordEvolutionMove($state, 'restore', 'move_tree', $tree['path'], 'after');
+                writeJsonStrict((string) $state['state_path'], $state);
+                continue;
+            }
             if (validateLegacyTree($state, $tree, true) !== []) {
                 throw new RuntimeException('backup recursivo ausente ou divergente em '.$tree['path']);
             }
@@ -2292,6 +2326,15 @@ function rollbackApply(string $root, string $evolutionId): void
                 }
                 recordEvolutionMove($state, 'restore', 'move_entry', $file['path'], 'after');
                 $state['backup']['files'][$index]['status'] = 'restored';
+                writeJsonStrict((string) $state['state_path'], $state);
+                continue;
+            }
+            if (($file['status'] ?? null) === 'quarantining' && ! entryExists($backupPath) && entryExists($destination)) {
+                if (! entryMatches($destination, $file)) {
+                    throw new RuntimeException('quarentena interrompida com conteúdo divergente em '.$file['path']);
+                }
+                $state['backup']['files'][$index]['status'] = 'restored';
+                recordEvolutionMove($state, 'restore', 'move_entry', $file['path'], 'after');
                 writeJsonStrict((string) $state['state_path'], $state);
                 continue;
             }
