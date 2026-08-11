@@ -1983,6 +1983,9 @@ function supervisorStartRun(array $arguments, string $workflowId, string $featur
     if (is_string($arguments['engine'] ?? null) && trim((string) $arguments['engine']) !== '') {
         $runCommand .= ' --engine '.escapeshellarg((string) $arguments['engine']);
     }
+    if (is_string($arguments['test-cmd'] ?? null) && trim((string) $arguments['test-cmd']) !== '') {
+        $runCommand .= ' --test-cmd '.escapeshellarg((string) $arguments['test-cmd']);
+    }
     if (is_string($arguments['command'] ?? null) && trim((string) $arguments['command']) !== '') {
         $runCommand .= ' --command '.escapeshellarg((string) $arguments['command']);
     }

@@ -334,12 +334,14 @@ supervise_output="$(cd "$supervise_tmp" && \
   RALPH_OPENCODE_VERIFY_POLICY_PROOF="$TMP/supervisor-proof.json" \
   RALPH_OPENCODE_VERIFY_AGENT=ralph-review \
   control supervise --workflow wf_supervise --engine opencode --interval 1 \
+    --test-cmd fixture-quality-gate \
     --stale-after 5 --activity-stale-after 5 --max-retries 0 --heartbeat-interval 1 2>&1)"
 supervise_exit=$?
 set -e
 assert_eq '0' "$supervise_exit" 'supervisor terminou com recovery explícito'
 printf '%s' "$supervise_output" | grep -q '"status": "debugging_required"' || fail 'supervisor não encaminhou a falha para systematic debugging'
 grep -q -- '--engine opencode' "$TMP/supervisor-args.log" || fail 'supervisor não propagou engine opencode ao Ralph configurado'
+grep -q -- '--test-cmd fixture-quality-gate' "$TMP/supervisor-args.log" || fail 'supervisor não propagou o gate de qualidade ao Ralph configurado'
 grep -q -- '--no-verify' "$TMP/supervisor-args.log" || fail 'execução OpenCode supervisionada não separou implementação da revisão'
 
 printf '%s' '{"evento":"incompleto"' >> "$TMP/.git/ralph-control/events.jsonl"
