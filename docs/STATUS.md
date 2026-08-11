@@ -28,6 +28,10 @@ no run remoto `31341326999`. O postmortem e a resolução estão em
 A primeira entrega adiciona exclusividade por feature durante o bloco controlado,
 protege o ledger com `workflow.lock` e comprova a rejeição de duas execuções
 simultâneas no teste de método. Essa evolução agora faz parte de `main`.
+A aprovação também distingue uma feature já presente no `HEAD` de uma
+implementação que produziu commit: o primeiro caso passa pelos gates sem criar
+commit vazio e fica marcado no ledger como `implementation_mode=already_present`.
+Resultado stale antes da promoção exige recovery explícito.
 O handoff e a memória de engenharia são uma camada não bloqueante: a entrega
 pode continuar enquanto a curadoria aguarda revisão, sem perder o candidato
 rastreável. A v0.6.0 adiciona cache episódico sanitizado, decisão explícita de

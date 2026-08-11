@@ -270,6 +270,25 @@ que o nome do artefato é compatível: `verify` vira `technical_review` e `impl`
 vira `implementation`; ambos permanecem delegações distintas no
 `ralph-trace`.
 
+## Aprovação da implementação
+
+Após os cinco gates, `ralph-control approve` revalida o resultado contra o
+checkout atual e exige working tree limpa. O caminho normal continua exigindo
+que `base_commit` seja o pai imediato do `HEAD` e que exista exatamente um
+commit novo.
+
+Uma execução que comprova que a feature já estava implementada pode ser
+aprovada sem commit vazio quando `base_commit`, `base_tree_hash`,
+`implementation_commit`, `result_commit` e `result_tree_hash` correspondem ao
+checkout atual. O evento `feature.approved` registra
+`implementation_mode=already_present` e `no_op=true`; isso diferencia a
+idempotência de uma implementação que produziu commit.
+
+Se o resultado ficar stale antes da promoção, o controlador registra
+`recovery.required` com os hashes divergentes e bloqueia a aprovação. A
+retomada precisa passar por `recover` e uma nova tentativa; nenhum gate antigo
+é promovido silenciosamente contra outro checkout.
+
 ## Política de fallback
 
 O padrão é `none`. Fallback precisa estar declarado no manifesto e sempre ser

@@ -3042,6 +3042,13 @@ function approveFeature(array $arguments): void
         $result = $feature['result'] ?? [];
         $repository = currentRepository();
         if (($result['result_commit'] ?? null) !== $repository['commit'] || ($result['result_tree_hash'] ?? null) !== $repository['tree_hash']) {
+            appendEvent(eventContext($arguments, $feature, 'recovery.required', 'Resultado do bloco ficou stale antes da aprovação; recovery explícito exigido', [
+                'reason' => 'stale_result_at_approval',
+                'result_commit' => $result['result_commit'] ?? null,
+                'result_tree_hash' => $result['result_tree_hash'] ?? null,
+                'current_commit' => $repository['commit'],
+                'current_tree_hash' => $repository['tree_hash'],
+            ]));
             fail('resultado do bloco ficou stale em relação ao checkout atual');
         }
         if (! $repository['working_tree_clean']) {
@@ -3050,15 +3057,22 @@ function approveFeature(array $arguments): void
         if (($result['exit_code'] ?? 1) !== 0) {
             fail('exit code do bloco não é zero');
         }
-        if (($result['base_commit'] ?? '') !== commitParent($repository['commit'])) {
-            fail('commit da feature não tem o base_commit da tentativa como pai imediato');
-        }
-        if (git('rev-list --count '.escapeshellarg((string) $result['base_commit']).'..'.escapeshellarg($repository['commit'])) !== '1') {
-            fail('a tentativa precisa produzir exatamente um commit de implementação');
+        $alreadyPresent = ($result['base_commit'] ?? null) === $repository['commit']
+            && ($result['base_tree_hash'] ?? null) === $repository['tree_hash']
+            && ($result['implementation_commit'] ?? null) === $repository['commit'];
+        if (! $alreadyPresent) {
+            if (($result['base_commit'] ?? '') !== commitParent($repository['commit'])) {
+                fail('commit da feature não tem o base_commit da tentativa como pai imediato');
+            }
+            if (git('rev-list --count '.escapeshellarg((string) $result['base_commit']).'..'.escapeshellarg($repository['commit'])) !== '1') {
+                fail('a tentativa precisa produzir exatamente um commit de implementação');
+            }
         }
         appendEvent(eventContext($arguments, $feature, 'feature.approved', 'Todos os cinco gates foram aprovados', [
             'gates' => $feature['gates'],
             'implementation_commit' => $repository['commit'],
+            'implementation_mode' => $alreadyPresent ? 'already_present' : 'new_commit',
+            'no_op' => $alreadyPresent,
         ]));
     });
     printJson(['status' => 'approved', 'feature_key' => $featureKey]);
