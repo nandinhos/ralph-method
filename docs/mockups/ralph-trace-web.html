@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RALPH-METHOD · Trace cockpit</title>
+  <style>
+    :root {
+      --bg: #071014;
+      --panel: rgba(15, 29, 34, .82);
+      --panel-strong: #10252b;
+      --line: rgba(173, 219, 213, .12);
+      --text: #effaf7;
+      --muted: #87a39f;
+      --lime: #b9f55b;
+      --cyan: #68e5db;
+      --violet: #a98bff;
+      --amber: #ffc76b;
+      --red: #ff7f91;
+      --shadow: 0 24px 70px rgba(0, 0, 0, .32);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      min-height: 100vh;
+      margin: 0;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 80% -10%, rgba(104, 229, 219, .15), transparent 34rem),
+        radial-gradient(circle at -10% 50%, rgba(169, 139, 255, .12), transparent 30rem),
+        var(--bg);
+      font: 14px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: .01em;
+    }
+
+    button { font: inherit; }
+    .shell { width: min(1480px, calc(100% - 48px)); margin: 0 auto; padding: 28px 0 56px; }
+    .topbar, .brand, .top-actions, .status, .metric-label, .section-title, .feature-meta, .event, .event-main, .gate, .tree-node, .memory-item { display: flex; align-items: center; }
+    .topbar { justify-content: space-between; gap: 24px; margin-bottom: 32px; }
+    .brand { gap: 13px; }
+    .brand-mark { position: relative; display: grid; place-items: center; width: 44px; height: 44px; border: 1px solid rgba(185, 245, 91, .55); border-radius: 14px; color: var(--lime); background: linear-gradient(145deg, rgba(185, 245, 91, .18), rgba(104, 229, 219, .04)); box-shadow: 0 0 32px rgba(185, 245, 91, .14); font-size: 21px; font-weight: 900; }
+    .brand-mark::after { position: absolute; inset: 6px; border: 1px solid rgba(104, 229, 219, .42); border-radius: 10px; content: ""; transform: rotate(45deg); }
+    .brand-name { font-size: 16px; font-weight: 850; letter-spacing: .2em; }
+    .brand-name span { color: var(--cyan); }
+    .eyebrow { margin: 0 0 2px; color: var(--muted); font-size: 10px; font-weight: 750; letter-spacing: .16em; text-transform: uppercase; }
+    .top-actions { gap: 10px; }
+    .button { border: 1px solid var(--line); border-radius: 10px; padding: 9px 13px; color: var(--text); background: rgba(255, 255, 255, .035); cursor: pointer; }
+    .button:hover, .button.active { border-color: rgba(104, 229, 219, .5); background: rgba(104, 229, 219, .1); }
+    .button.primary { border-color: rgba(185, 245, 91, .45); color: #071014; background: var(--lime); font-weight: 800; }
+    .status { gap: 8px; border: 1px solid rgba(185, 245, 91, .2); border-radius: 99px; padding: 7px 11px; color: var(--lime); background: rgba(185, 245, 91, .07); font-size: 12px; font-weight: 750; }
+    .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 0 5px rgba(185, 245, 91, .12), 0 0 18px var(--lime); }
+
+    .hero { display: grid; grid-template-columns: 1.35fr .65fr; gap: 18px; margin-bottom: 18px; }
+    .hero-copy, .hero-side, .card { border: 1px solid var(--line); border-radius: 20px; background: linear-gradient(145deg, rgba(20, 42, 48, .84), rgba(10, 22, 27, .9)); box-shadow: var(--shadow); }
+    .hero-copy { position: relative; min-height: 226px; overflow: hidden; padding: 31px; }
+    .hero-copy::after { position: absolute; right: -70px; bottom: -120px; width: 330px; height: 330px; border: 1px solid rgba(104, 229, 219, .18); border-radius: 50%; box-shadow: 0 0 0 22px rgba(104, 229, 219, .025), 0 0 0 44px rgba(104, 229, 219, .025), 0 0 0 66px rgba(104, 229, 219, .025); content: ""; }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { max-width: 720px; margin-bottom: 10px; font-size: clamp(30px, 4vw, 58px); line-height: .98; letter-spacing: -.06em; }
+    h1 em { color: var(--lime); font-style: normal; }
+    .hero-copy p { max-width: 620px; margin-bottom: 22px; color: var(--muted); font-size: 15px; }
+    .hero-side { display: grid; place-items: center; padding: 24px; }
+    .ring { position: relative; display: grid; place-items: center; width: 154px; height: 154px; border: 1px solid rgba(104, 229, 219, .25); border-radius: 50%; background: conic-gradient(var(--lime) 0 68%, rgba(255, 255, 255, .06) 68% 100%); box-shadow: 0 0 50px rgba(104, 229, 219, .1); }
+    .ring::before { position: absolute; inset: 10px; border-radius: 50%; background: var(--panel-strong); content: ""; }
+    .ring-value { position: relative; z-index: 1; text-align: center; }
+    .ring-value strong { display: block; font-size: 38px; line-height: 1; letter-spacing: -.08em; }
+    .ring-value span { color: var(--muted); font-size: 10px; letter-spacing: .15em; text-transform: uppercase; }
+
+    .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 18px; }
+    .metric { padding: 17px 18px; }
+    .metric-label { justify-content: space-between; color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+    .metric-value { margin: 7px 0 1px; font-size: 27px; font-weight: 800; letter-spacing: -.06em; }
+    .metric-note { color: var(--muted); font-size: 11px; }
+    .positive { color: var(--lime); }
+    .warning { color: var(--amber); }
+    .accent { color: var(--cyan); }
+
+    .grid { display: grid; grid-template-columns: 1.16fr .84fr; gap: 18px; }
+    .card { padding: 22px; }
+    .section-title { justify-content: space-between; gap: 12px; margin-bottom: 18px; }
+    .section-title h2 { margin: 0; font-size: 15px; letter-spacing: -.02em; }
+    .section-title span { color: var(--muted); font-size: 11px; }
+    .feature-card { border: 1px solid rgba(104, 229, 219, .2); border-radius: 15px; padding: 17px; background: rgba(104, 229, 219, .045); }
+    .feature-meta { justify-content: space-between; gap: 15px; }
+    .feature-key { color: var(--cyan); font-size: 11px; font-weight: 800; letter-spacing: .11em; }
+    .feature-title { margin: 8px 0 15px; font-size: 18px; font-weight: 750; }
+    .progress-track { height: 8px; overflow: hidden; border-radius: 99px; background: rgba(255, 255, 255, .08); }
+    .progress-bar { width: 68%; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--cyan), var(--lime)); box-shadow: 0 0 20px rgba(185, 245, 91, .35); }
+    .feature-footer { display: flex; justify-content: space-between; margin-top: 10px; color: var(--muted); font-size: 11px; }
+
+    .gates { display: grid; gap: 9px; }
+    .gate { justify-content: space-between; gap: 12px; border: 1px solid var(--line); border-radius: 12px; padding: 12px 13px; background: rgba(255, 255, 255, .025); }
+    .gate-left { display: flex; align-items: center; gap: 10px; }
+    .gate-dot { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 8px; color: #071014; background: var(--lime); font-size: 12px; font-weight: 900; }
+    .gate-dot.pending { color: var(--amber); background: rgba(255, 199, 107, .15); }
+    .gate-name { font-size: 12px; font-weight: 750; }
+    .gate-detail { color: var(--muted); font-size: 10px; }
+    .gate-badge { color: var(--lime); font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+    .gate-badge.pending { color: var(--amber); }
+
+    .timeline { position: relative; display: grid; gap: 0; }
+    .event { position: relative; gap: 14px; min-height: 57px; padding-left: 1px; }
+    .event::before { position: absolute; top: 27px; left: 7px; bottom: -4px; width: 1px; background: var(--line); content: ""; }
+    .event:last-child::before { display: none; }
+    .event-marker { position: relative; z-index: 1; width: 15px; height: 15px; border: 3px solid var(--panel-strong); border-radius: 50%; background: var(--cyan); box-shadow: 0 0 0 1px var(--cyan); }
+    .event-marker.green { background: var(--lime); box-shadow: 0 0 0 1px var(--lime); }
+    .event-main { justify-content: space-between; flex: 1; gap: 10px; }
+    .event-name { font-size: 12px; font-weight: 700; }
+    .event-detail, .event-time { color: var(--muted); font-size: 11px; }
+    .event-time { white-space: nowrap; }
+
+    .tree { display: grid; gap: 10px; }
+    .tree-node { gap: 10px; border: 1px solid var(--line); border-radius: 12px; padding: 11px 13px; background: rgba(255, 255, 255, .025); }
+    .tree-node.child { margin-left: 24px; border-left: 2px solid var(--violet); }
+    .tree-icon { display: grid; place-items: center; width: 25px; height: 25px; border-radius: 8px; color: var(--violet); background: rgba(169, 139, 255, .14); font-size: 11px; font-weight: 900; }
+    .tree-node strong { display: block; font-size: 12px; }
+    .tree-node small { color: var(--muted); font-size: 10px; }
+    .tree-state { margin-left: auto; color: var(--lime); font-size: 10px; font-weight: 800; text-transform: uppercase; }
+
+    .memory-list { display: grid; gap: 10px; }
+    .memory-item { align-items: flex-start; gap: 11px; border-bottom: 1px solid var(--line); padding-bottom: 11px; }
+    .memory-item:last-child { border-bottom: 0; padding-bottom: 0; }
+    .memory-icon { color: var(--amber); font-size: 16px; }
+    .memory-item strong { display: block; margin-bottom: 3px; font-size: 12px; }
+    .memory-item small { color: var(--muted); font-size: 10px; }
+    .footer-note { margin-top: 20px; color: var(--muted); font-size: 11px; text-align: center; }
+    code { border: 1px solid var(--line); border-radius: 5px; padding: 2px 5px; color: var(--cyan); background: rgba(104, 229, 219, .06); }
+
+    @media (max-width: 980px) {
+      .hero, .grid { grid-template-columns: 1fr; }
+      .hero-side { min-height: 220px; }
+    }
+    @media (max-width: 680px) {
+      .shell { width: min(100% - 28px, 1480px); padding-top: 18px; }
+      .topbar { align-items: flex-start; flex-direction: column; }
+      .top-actions { width: 100%; flex-wrap: wrap; }
+      .metrics { grid-template-columns: repeat(2, 1fr); }
+      .hero-copy, .card { padding: 17px; }
+      h1 { font-size: 38px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark">R</div>
+        <div>
+          <p class="eyebrow">Control plane · trace cockpit</p>
+          <div class="brand-name">RALPH-<span>METHOD</span></div>
+        </div>
+      </div>
+      <div class="top-actions">
+        <div class="status"><i class="pulse"></i> execução saudável</div>
+        <button class="button active" data-filter="all">Tudo</button>
+        <button class="button" data-filter="events">Eventos</button>
+        <button class="button" data-filter="gates">Gates</button>
+        <button class="button primary" id="refresh">Atualizar snapshot</button>
+      </div>
+    </header>
+
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">Workflow · wf_detector_bc_legacy_20260810_001</p>
+        <h1>O desenvolvimento em <em>movimento.</em></h1>
+        <p>Uma visão premium, somente leitura, para acompanhar features, gates, delegações e recuperação sem misturar apresentação com autoridade operacional.</p>
+        <div class="feature-meta">
+          <div><span class="eyebrow">Branch</span><code>feat/detector-bc-legacy</code></div>
+          <div><span class="eyebrow">Último evento</span><strong>há 8 segundos</strong></div>
+        </div>
+      </div>
+      <div class="hero-side">
+        <div class="ring"><div class="ring-value"><strong>68%</strong><span>workflow</span></div></div>
+      </div>
+    </section>
+
+    <section class="metrics">
+      <article class="card metric"><div class="metric-label"><span>Features</span><span class="positive">+1</span></div><div class="metric-value">2 <small>/ 3</small></div><div class="metric-note">uma em execução</div></article>
+      <article class="card metric"><div class="metric-label"><span>Gates verdes</span><span class="positive">5/5</span></div><div class="metric-value positive">10</div><div class="metric-note">nas features liberadas</div></article>
+      <article class="card metric"><div class="metric-label"><span>Tempo ativo</span><span class="accent">ao vivo</span></div><div class="metric-value">01:42:18</div><div class="metric-note">desde o início do workflow</div></article>
+      <article class="card metric"><div class="metric-label"><span>Recovery</span><span class="warning">atenção</span></div><div class="metric-value warning">2</div><div class="metric-note">incidentes documentados</div></article>
+    </section>
+
+    <section class="grid">
+      <div class="card">
+        <div class="section-title"><h2>Feature atual</h2><span>attempt 5 · OpenCode</span></div>
+        <div class="feature-card">
+          <div class="feature-meta"><span class="feature-key">FEATURE-092</span><span class="status"><i class="pulse"></i> aguardando gates</span></div>
+          <div class="feature-title">Evoluir e restaurar diretório legado por hashes</div>
+          <div class="progress-track"><div class="progress-bar"></div></div>
+          <div class="feature-footer"><span>implementação concluída</span><strong class="accent">68%</strong></div>
+        </div>
+        <div class="section-title" style="margin: 25px 0 13px"><h2>Sequência autorizada</h2><span>sem avanço manual</span></div>
+        <div class="tree">
+          <div class="tree-node"><span class="tree-icon">✓</span><div><strong>FEATURE-091 · Detectar instalação legada</strong><small>released · 18m 42s · Codex</small></div><span class="tree-state">liberada</span></div>
+          <div class="tree-node child"><span class="tree-icon">→</span><div><strong>FEATURE-092 · Evoluir e restaurar</strong><small>running · 09m 11s · OpenCode</small></div><span class="tree-state">atual</span></div>
+          <div class="tree-node"><span class="tree-icon">○</span><div><strong>FEATURE-093 · Regressão e release</strong><small>aguarda aprovação da anterior</small></div><span class="tree-state" style="color:var(--muted)">pendente</span></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-title"><h2>Cinco gates</h2><span>decisão do ralph-control</span></div>
+        <div class="gates">
+          <div class="gate"><div class="gate-left"><span class="gate-dot">✓</span><div><div class="gate-name">Validation</div><div class="gate-detail">RPT-2026-0046 · 2s</div></div></div><span class="gate-badge">passed</span></div>
+          <div class="gate"><div class="gate-left"><span class="gate-dot">✓</span><div><div class="gate-name">Quality</div><div class="gate-detail">163 asserts · 2m 14s</div></div></div><span class="gate-badge">passed</span></div>
+          <div class="gate"><div class="gate-left"><span class="gate-dot">✓</span><div><div class="gate-name">Runtime evidence</div><div class="gate-detail">smoke + artifacts · 18s</div></div></div><span class="gate-badge">passed</span></div>
+          <div class="gate"><div class="gate-left"><span class="gate-dot">✓</span><div><div class="gate-name">Technical review</div><div class="gate-detail">ralph-review · read-only</div></div></div><span class="gate-badge">passed</span></div>
+          <div class="gate"><div class="gate-left"><span class="gate-dot pending">○</span><div><div class="gate-name">Curation</div><div class="gate-detail">handoff aguardando geração</div></div></div><span class="gate-badge pending">pending</span></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-title"><h2>Timeline operacional</h2><span>fatos sanitizados</span></div>
+        <div class="timeline" id="timeline">
+          <div class="event" data-kind="events"><span class="event-marker green"></span><div class="event-main"><div><div class="event-name">verification.passed</div><div class="event-detail">15 tarefas confirmadas no código</div></div><span class="event-time">14:50:45</span></div></div>
+          <div class="event" data-kind="gates"><span class="event-marker green"></span><div class="event-main"><div><div class="event-name">gate.quality.passed</div><div class="event-detail">CI portátil · 163 asserts</div></div><span class="event-time">14:49:36</span></div></div>
+          <div class="event" data-kind="events"><span class="event-marker"></span><div class="event-main"><div><div class="event-name">delegation.completed</div><div class="event-detail">OpenCode · implementação</div></div><span class="event-time">14:47:02</span></div></div>
+          <div class="event" data-kind="events"><span class="event-marker"></span><div class="event-main"><div><div class="event-name">feature.claimed</div><div class="event-detail">lease e fencing token adquiridos</div></div><span class="event-time">14:42:49</span></div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-title"><h2>Memória de engenharia</h2><span>não bloqueante</span></div>
+        <div class="memory-list">
+          <div class="memory-item"><span class="memory-icon">✦</span><div><strong>Gate sem diagnóstico exige reprodução limpa</strong><small>LESSON-2026-004 · confiança alta · 2 aplicabilidades</small></div></div>
+          <div class="memory-item"><span class="memory-icon">✦</span><div><strong>Preview de captura deve tolerar UTF-8 incompleto</strong><small>candidato local · origem INC-CAPTURE-LIMIT-092</small></div></div>
+          <div class="memory-item"><span class="memory-icon">↗</span><div><strong>Ver referências e evidências</strong><small>handoff · reports · artifacts · somente leitura</small></div></div>
+        </div>
+        <div class="section-title" style="margin: 25px 0 13px"><h2>Delegação</h2><span>trace normalizado</span></div>
+        <div class="tree">
+          <div class="tree-node"><span class="tree-icon">R</span><div><strong>ralph-control</strong><small>autoridade · não delegável</small></div><span class="tree-state">root</span></div>
+          <div class="tree-node child"><span class="tree-icon">O</span><div><strong>OpenCode · deepseek-v4-flash-free</strong><small>implementação · sessão registrada</small></div><span class="tree-state">ok</span></div>
+          <div class="tree-node child"><span class="tree-icon">V</span><div><strong>ralph-review</strong><small>technical review · read-only</small></div><span class="tree-state">ok</span></div>
+        </div>
+      </div>
+    </section>
+
+    <p class="footer-note">Mockup estático · dados fictícios · a interface real nunca aprova gates, altera leases ou inicia features.</p>
+  </main>
+  <script>
+    const buttons = document.querySelectorAll('[data-filter]');
+    const events = document.querySelectorAll('#timeline .event');
+    buttons.forEach((button) => button.addEventListener('click', () => {
+      buttons.forEach((item) => item.classList.remove('active'));
+      button.classList.add('active');
+      const filter = button.dataset.filter;
+      events.forEach((event) => { event.hidden = filter !== 'all' && event.dataset.kind !== filter; });
+    }));
+    document.querySelector('#refresh').addEventListener('click', (event) => {
+      event.currentTarget.textContent = 'Snapshot atualizado';
+      window.setTimeout(() => { event.currentTarget.textContent = 'Atualizar snapshot'; }, 1600);
+    });
+  </script>
+</body>
+</html>

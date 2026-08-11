@@ -391,7 +391,7 @@ git -C "$utf_tmp" commit -qm base
 (cd "$utf_tmp" && control init --workflow wf_utf8 --manifest workflow.json >/dev/null)
 utf_claim="$(cd "$utf_tmp" && control claim --workflow wf_utf8 --feature FEATURE-UTF8 --actor utf8-test)"
 utf_lease="$(json_field "$utf_claim" lease_token)"
-(cd "$utf_tmp" && control run --workflow wf_utf8 --feature FEATURE-UTF8 --lease "$utf_lease" --command "printf '\\377'" >/dev/null)
+(cd "$utf_tmp" && control run --workflow wf_utf8 --feature FEATURE-UTF8 --lease "$utf_lease" --command "printf '\\377\\342'" >/dev/null)
 (cd "$utf_tmp" && control verify) >/dev/null
 
 printf 'OK: Ralph Method smoke passou.\n'

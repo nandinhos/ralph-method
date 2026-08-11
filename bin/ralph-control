@@ -1105,15 +1105,60 @@ function sanitizeUtf8(string $value): string
     if (@preg_match('//u', $value) === 1) {
         return $value;
     }
-    if (! function_exists('iconv')) {
-        fail('conteúdo textual não está em UTF-8 e iconv não está disponível');
-    }
-    $converted = @iconv('UTF-8', 'UTF-8//IGNORE', $value);
-    if (! is_string($converted)) {
-        fail('não foi possível sanitizar conteúdo textual inválido');
+
+    // O preview da captura pode terminar no meio de um caractere multibyte.
+    // Não rejeite o evento inteiro por causa desse fragmento: preserve UTF-8
+    // válido e descarte somente sequências inválidas, de forma independente
+    // de iconv/mbstring e sem alterar o ledger fora do evento corrente.
+    $length = strlen($value);
+    $sanitized = '';
+    for ($offset = 0; $offset < $length; $offset++) {
+        $first = ord($value[$offset]);
+        if ($first <= 0x7F) {
+            $sanitized .= $value[$offset];
+            continue;
+        }
+
+        $width = 0;
+        $minimum = 0x80;
+        $maximum = 0xBF;
+        if ($first >= 0xC2 && $first <= 0xDF) {
+            $width = 2;
+        } elseif ($first >= 0xE0 && $first <= 0xEF) {
+            $width = 3;
+        } elseif ($first >= 0xF0 && $first <= 0xF4) {
+            $width = 4;
+        }
+
+        if ($width === 0 || $offset + $width > $length) {
+            continue;
+        }
+
+        $valid = true;
+        for ($continuation = 1; $continuation < $width; $continuation++) {
+            $byte = ord($value[$offset + $continuation]);
+            if ($byte < $minimum || $byte > $maximum) {
+                $valid = false;
+                break;
+            }
+        }
+        if ($valid && $width === 3) {
+            $second = ord($value[$offset + 1]);
+            $valid = ($first !== 0xE0 || $second >= 0xA0)
+                && ($first !== 0xED || $second <= 0x9F);
+        } elseif ($valid && $width === 4) {
+            $second = ord($value[$offset + 1]);
+            $valid = ($first !== 0xF0 || $second >= 0x90)
+                && ($first !== 0xF4 || $second <= 0x8F);
+        }
+
+        if ($valid) {
+            $sanitized .= substr($value, $offset, $width);
+            $offset += $width - 1;
+        }
     }
 
-    return $converted;
+    return $sanitized;
 }
 
 function runtimeInit(): void
