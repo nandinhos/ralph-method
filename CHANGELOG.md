@@ -26,6 +26,18 @@ anotada e promoção documentada.
   `docs/reports/0021-regressao-release-detector-legado-2026-08-12.md` e a
   decisão em [`ADR-0010`](docs/adr/0010-deteccao-evolucao-de-ralph-externo.md).
 
+### Revalidação da regressão
+
+- revalidada a regressão (attempt-4) após o hardening do supervisor com novo
+  fencing ([`ADR-0013`](docs/adr/0013-retry-do-supervisor-com-novo-fencing.md))
+  e o fix do falso negativo de SIGPIPE na prontidão de providers;
+- CI portátil verde com 15 checks (incluindo `test-provider-readiness` e
+  `test-ralph-method` com 163 asserts) e confirmações diretas reexecutadas em
+  fixture isolada: instalação neutra permitida, bloqueio do `apply` sobre
+  `harness/ralph/` e o ciclo evolve → aceite → drift → rollback;
+- evidência do reateste em
+  `docs/reports/0023-revalidacao-regressao-release-detector-legado-2026-08-12.md`.
+
 ### Estado da publicação
 
 O commit da fase e a promoção para `main` aguardam a revisão independente; a

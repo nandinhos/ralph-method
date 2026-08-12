@@ -115,7 +115,8 @@ Equipe do Ralph Method.
 
 2026-08-09. Estendido em 2026-08-12 com o reconhecimento da assinatura
 `bc-harness` em `harness/ralph` e a classificação `external_ralph_legacy`
-(validação na regressão `0021`).
+(validação na regressão `0021`). Revalidado em 2026-08-12 após o hardening do
+supervisor (ADR-0013) e o fix de prontidão com SIGPIPE, na regressão `0023`.
 
 ## Gatilho para revisitar
 

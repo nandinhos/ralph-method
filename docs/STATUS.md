@@ -96,6 +96,13 @@ permitida, bloqueio fail-closed do `apply` comum sobre `harness/ralph/` e o
 ciclo evolve → aceite → drift → rollback. A evidência completa está no
 [`Relatório 0021`](reports/0021-regressao-release-detector-legado-2026-08-12.md).
 
+Após o hardening do supervisor (retry com novo fencing, ADR-0013) e o fix do
+falso negativo de SIGPIPE na prontidão de providers, a regressão foi
+revalidada (attempt-4): os mesmos checks verdes, incluindo
+`test-provider-readiness` e `test-ralph-method` com 163 asserts, e o mesmo
+ciclo de confirmações diretas em fixture isolada. A evidência do reateste está
+no [`Relatório 0023`](reports/0023-revalidacao-regressao-release-detector-legado-2026-08-12.md).
+
 ## Componentes extraídos
 
 | Componente | Path | Responsabilidade |

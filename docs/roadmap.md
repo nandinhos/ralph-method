@@ -81,6 +81,9 @@ regressão que prepara a release desta entrega concluiu:
 - [x] `harness/ralph/` bloqueia o `apply` comum com `apply_allowed=false`;
 - [x] evolve → aceite → drift → rollback comprovados em fixture isolada;
 - [x] relatório `0021` e sincronização de ADR, status, roadmap, changelog e guia.
+- [x] revalidada a regressão (attempt-4) após o hardening do supervisor e o fix
+  de SIGPIPE: CI portátil verde e confirmações diretas reexecutadas, com
+  evidência no relatório `0023`.
 
 O commit da fase e a promoção para `main` aguardam a revisão independente
 (regra do `ralph.sh`); a prova real de campo com o projeto-alvo original segue

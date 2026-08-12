@@ -111,7 +111,7 @@ tipo, modo, SHA-256 e alvo do symlink quando aplicável; a árvore recebe um
 fingerprint composto e o journal registra o evento `before`/`after` de cada
 movimento. O ciclo completo evolve → aceite → drift → rollback foi comprovado em
 fixture isolada na regressão `FEATURE-093-REGRESSION-RELEASE`; a evidência está
-no relatório `0021`.
+no relatório `0021` e foi revalidada no relatório `0023`.
 
 ```bash
 RALPH_METHOD_SOURCE="$METHOD_ROOT" "$METHOD_ROOT/bin/ralph-init" evolve --project "$PROJECT_ROOT" --provider auto --verify-providers
