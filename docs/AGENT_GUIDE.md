@@ -1,6 +1,6 @@
 # Guia operacional para agentes de IA — Ralph Method
 
-- guide_version: 1.5.0
+- guide_version: 1.6.0
 - method_version: 0.8.0
 - status: ativo
 - fonte_do_metodo: `VERSION`
@@ -262,6 +262,41 @@ Faça primeiro o plano somente de leitura:
 
 Use `--apply` apenas após revisar os arquivos. O método preserva runtime,
 workflow, handoffs, relatórios e arquivos modificados pelo usuário.
+
+### 0.9 Pós-atualização do harness e diagnóstico de MCP
+
+Após atualizar o Codex CLI, um plugin MCP, o runtime usado por um servidor ou
+o profile do harness, faça uma validação curta antes de retomar o trabalho
+normal. Se o Codex exibir `MCP startup interrupted`, não desabilite o servidor,
+troque provider ou aumente o timeout sem diagnóstico.
+
+1. confirme a versão e a configuração efetiva sem expor ambiente sensível:
+
+   ```bash
+   codex --version
+   codex --profile bc-harness mcp list --json
+   ```
+
+2. para cada servidor nomeado no erro, execute o comando configurado diretamente
+   com um handshake MCP mínimo (`initialize` e, quando aplicável,
+   `tools/list`), usando timeout explícito e sem prompts ou geração;
+3. se o handshake direto falhar, corrija o servidor, dependência,
+   autenticação ou ambiente específico antes de alterar o launcher;
+4. se o handshake direto passar, mas o startup do Codex falhar, confira a
+   resolução do executável (`command -v <executável>`) e use o caminho absoluto
+   no profile, preservando os argumentos, transporte e timeouts já validados;
+5. reinicie o Codex em uma sessão nova e confirme que os MCPs esperados chegam
+   ao estado inicializado, que o prompt aparece e que não há novo aviso de
+   startup interrompido;
+6. registre causa, hipótese, correção e evidência sanitizada no capture log e,
+   se for uma falha nova, em um incidente. Não registre tokens, prompts,
+   respostas completas ou valores de ambiente.
+
+O caminho absoluto é uma mitigação condicional para falha de resolução do
+launcher. Não é uma regra para substituir qualquer `command` por caminho
+absoluto quando o handshake direto também estiver falhando. A decisão completa
+está no [`ADR-0014`](adr/0014-diagnostico-mcp-pos-atualizacao-de-harness.md), e o
+caso que originou a rotina no [`Incidente 0014`](incidents/0014-startup-mcp-pos-atualizacao-codex.md).
 
 ## 1. Princípios que o agente deve respeitar
 
