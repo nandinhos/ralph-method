@@ -66,6 +66,26 @@ resultado está no relatório
 estado legado e os adapters por origem continuam deliberadamente separados
 até que exista um contrato específico e comprovado.
 
+### Detector legado `bc-harness` — regressão e preparação de release
+
+Na branch `feat/detector-bc-legacy`, as features `091-DETECT-BC-LEGACY` e
+`092-EVOLVE-BC-LEGACY` entregaram o reconhecimento da assinatura `bc-harness`
+somente em `harness/ralph` e a evolução de árvores `legacy_directory`. A
+regressão que prepara a release desta entrega concluiu:
+
+- [x] lint dos componentes alterados e `check-shell`/`check-doc-sync` verdes;
+- [x] `test-installation` e `test-reproducibility` verdes;
+- [x] regressão multiprovider e OpenCode verdes;
+- [x] `ci-portable.sh` verde;
+- [x] instalação neutra continua permitida;
+- [x] `harness/ralph/` bloqueia o `apply` comum com `apply_allowed=false`;
+- [x] evolve → aceite → drift → rollback comprovados em fixture isolada;
+- [x] relatório `0021` e sincronização de ADR, status, roadmap, changelog e guia.
+
+O commit da fase e a promoção para `main` aguardam a revisão independente
+(regra do `ralph.sh`); a prova real de campo com o projeto-alvo original segue
+como passo obrigatório antes da publicação desta release.
+
 ## Próxima evolução — memória episódica e taxonomia (`v0.6.0`)
 
 - [x] materializar candidato sanitizado em `.ralph/knowledge-candidates/`;

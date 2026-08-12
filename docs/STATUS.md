@@ -80,6 +80,15 @@ a assinatura `bc-harness` formada por `install.sh`, `ralph.patch` e
 fingerprint determinístico sem conteúdo bruto, classifica a origem como
 `external_ralph_legacy` e recomenda `evolve`.
 
+A regressão da entrega do detector legado (`FEATURE-093-REGRESSION-RELEASE`)
+foi concluída na branch `feat/detector-bc-legacy`: lint dos componentes
+alterados, `check-shell`, `check-doc-sync`, `test-installation`,
+`test-reproducibility`, regressão multiprovider e OpenCode, e `ci-portable`
+verdes. As confirmações diretas em fixture isolada provaram instalação neutra
+permitida, bloqueio fail-closed do `apply` comum sobre `harness/ralph/` e o
+ciclo evolve → aceite → drift → rollback. A evidência completa está no
+[`Relatório 0021`](reports/0021-regressao-release-detector-legado-2026-08-12.md).
+
 ## Componentes extraídos
 
 | Componente | Path | Responsabilidade |

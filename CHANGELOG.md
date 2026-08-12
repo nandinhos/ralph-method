@@ -5,6 +5,33 @@ português do Brasil. A versão no arquivo `VERSION` identifica o bundle em
 desenvolvimento; uma versão só é considerada publicada após commit, tag
 anotada e promoção documentada.
 
+## 0.8.1 — em preparação (regressão do detector legado)
+
+### Detecção e evolução legada `bc-harness`
+
+- validada a regressão das features `091-DETECT-BC-LEGACY` e
+  `092-EVOLVE-BC-LEGACY` na branch `feat/detector-bc-legacy`;
+- confirmado o reconhecimento da assinatura `bc-harness` (`install.sh` +
+  `ralph.patch` + `ralph.sh.upstream`) somente em `harness/ralph`, com
+  `external_ralph_legacy`, família, membros, SHA-256, fingerprint determinístico
+  e `recommended_action=evolve`;
+- confirmado que o `apply` comum permanece bloqueado (`apply_allowed=false`,
+  exit `3`) sobre a raiz legada e que instalações neutras continuam permitidas;
+- comprovado o ciclo evolve → aceite → drift → rollback em fixture isolada,
+  preservando permissões, tipos e symlinks internos da árvore legada;
+- rodados `php -l`, `check-shell`, `check-doc-sync`, `test-installation`,
+  `test-reproducibility`, regressão multiprovider/OpenCode e `ci-portable` com
+  resultado verde;
+- registrada a evidência em
+  `docs/reports/0021-regressao-release-detector-legado-2026-08-12.md` e a
+  decisão em [`ADR-0010`](docs/adr/0010-deteccao-evolucao-de-ralph-externo.md).
+
+### Estado da publicação
+
+O commit da fase e a promoção para `main` aguardam a revisão independente; a
+prova real de campo com o projeto-alvo original permanece obrigatória antes da
+publicação desta release.
+
 ## 0.6.1 — publicada em 2026-08-09
 
 ### Portabilidade e fechamento da release

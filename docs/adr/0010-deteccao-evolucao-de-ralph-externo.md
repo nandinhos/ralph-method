@@ -46,6 +46,25 @@ arquivos identificados. Um sinal canônico, ou dois sinais compatíveis, produz
 `ambiguous`; os dois casos bloqueiam o `apply` comum com exit code `3`. Uma
 pasta `.ralph` sem marcador conhecido não bloqueia por si só.
 
+### Reconhecimento limitado da instalação legada `bc-harness`
+
+O detector também reconhece, somente na raiz aprovada `harness/ralph`, a
+assinatura `bc-harness` formada pela composição `install.sh` + `ralph.patch` +
+`ralph.sh.upstream`. Quando todos os membros estão presentes, o plano emite
+`classification=external_ralph_legacy`, `family=bc-harness`,
+`signature_id` determinístico, `members` com tipo/path/modo/SHA-256, `legacy_type
+=legacy_directory`, `tree_fingerprint` composto e `recommended_action=evolve`,
+sem armazenar conteúdo bruto. `apply_allowed=false` bloqueia o `apply` comum e
+`migration_supported=false` mantém a migração fora do detector.
+
+Raízes aprovadas incompletas aparecem em `legacy_candidates` como `candidate`
+sem virar instalação; raízes inválidas (absoluta, traversal ou symlink externo)
+são rejeitadas como `rejected` e não são seguidas. Caminhos parecidos dentro de
+`vendor` e `node_modules` estão fora do escopo e nunca geram classificação.
+Esta extensão foi validada na regressão `FEATURE-093-REGRESSION-RELEASE`
+(relatório `0021`) e o ciclo completo de evolução de diretório legado está no
+ADR-0011.
+
 Arquivos pertencentes ao manifesto válido do Ralph Method e o runtime
 operacional conhecido do próprio método são ignorados pelo detector. Um
 marcador externo adicional continua sendo reportado, pois não possui
@@ -94,7 +113,9 @@ Equipe do Ralph Method.
 
 ## Data
 
-2026-08-09.
+2026-08-09. Estendido em 2026-08-12 com o reconhecimento da assinatura
+`bc-harness` em `harness/ralph` e a classificação `external_ralph_legacy`
+(validação na regressão `0021`).
 
 ## Gatilho para revisitar
 

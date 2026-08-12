@@ -1,6 +1,6 @@
 # Guia operacional para agentes de IA — Ralph Method
 
-- guide_version: 1.4.0
+- guide_version: 1.5.0
 - method_version: 0.8.0
 - status: ativo
 - fonte_do_metodo: `VERSION`
@@ -103,6 +103,15 @@ A evolução deve ser solicitada como operação explícita, com inventário apr
 backup com hashes, instalação transacional, aceite e manifesto de rollback. O
 modo atual é `quarantine_only`: nenhum ledger, workflow, prompt, credencial ou
 evento legado é importado.
+
+Quando a raiz legada for `legacy_directory`, a evolução move a árvore inteira
+para um backup numerado, preservando subdiretórios, arquivos, permissões e
+symlinks internos sem seguir symlinks durante o inventário. Cada membro registra
+tipo, modo, SHA-256 e alvo do symlink quando aplicável; a árvore recebe um
+fingerprint composto e o journal registra o evento `before`/`after` de cada
+movimento. O ciclo completo evolve → aceite → drift → rollback foi comprovado em
+fixture isolada na regressão `FEATURE-093-REGRESSION-RELEASE`; a evidência está
+no relatório `0021`.
 
 ```bash
 RALPH_METHOD_SOURCE="$METHOD_ROOT" "$METHOD_ROOT/bin/ralph-init" evolve --project "$PROJECT_ROOT" --provider auto --verify-providers
