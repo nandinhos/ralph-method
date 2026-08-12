@@ -61,7 +61,9 @@ assert_json "$without_verification" '
 '
 
 verified="$(env "${common_env[@]}" "$ROOT/bin/ralph-init" plan --project "$project" --provider claude --verify-providers)"
-printf '%s\n' "$verified" | grep -qv 'supersecret' || fail 'saída do probe vazou segredo'
+if grep -q 'supersecret' <<< "$verified"; then
+  fail 'saída do probe vazou segredo'
+fi
 assert_json "$verified" '
     $plan = json_decode(getenv("JSON"), true, 512, JSON_THROW_ON_ERROR);
     $provider = $plan["detection"]["providers"]["claude"] ?? [];
@@ -75,7 +77,9 @@ assert_json "$(cat "$project/.ralph/providers.json")" '
 '
 
 opencode_verified="$(env "${common_env[@]}" "$ROOT/bin/ralph-init" plan --project "$project" --provider opencode --verify-providers)"
-printf '%s\n' "$opencode_verified" | grep -qv 'supersecret' || fail 'saída do probe OpenCode vazou segredo'
+if grep -q 'supersecret' <<< "$opencode_verified"; then
+  fail 'saída do probe OpenCode vazou segredo'
+fi
 assert_json "$opencode_verified" '
     $plan = json_decode(getenv("JSON"), true, 512, JSON_THROW_ON_ERROR);
     $provider = $plan["detection"]["providers"]["opencode"] ?? [];
