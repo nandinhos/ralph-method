@@ -97,6 +97,7 @@ PY
 
 mkdir -p "$PWD/.phases/logs"
 if printf '%s\n' "$*" | grep -q -- '--verify-only'; then
+  sleep 2
   write_result verify completed 0 "$PWD/.phases/logs/phase-01.verify-1.log.result.json"
 else
   write_result impl usage_limited 124 "$PWD/.phases/logs/phase-01.cycle-1.log.result.json"
@@ -164,13 +165,13 @@ run_output="$(cd "$project" && \
   RALPH_OPENCODE_VERIFY_AGENT=ralph-review \
   RALPH_TEST_POLICY_HASH="$policy_hash" \
   control run --workflow wf_reconciliation --feature FEATURE-RECONCILIATION \
-    --lease "$lease" --engine opencode --test-cmd true)"
+    --lease "$lease" --engine opencode --test-cmd true --heartbeat-interval 1)"
 
 printf '%s' "$run_output" | grep -q '"exit_code": 0' || fail 'retry OpenCode não terminou verde'
 
 EVENTS_FILE="$project/.git/ralph-control/events.jsonl" php -r '
     $events = file(getenv("EVENTS_FILE"), FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
-    $counts = ["delegation.failed" => 0, "delegation.completed" => 0, "recovery.required" => 0, "block.finished" => 0];
+    $counts = ["delegation.failed" => 0, "delegation.completed" => 0, "recovery.required" => 0, "block.finished" => 0, "verification_heartbeat" => 0];
     $modes = [];
     foreach ($events as $line) {
         $event = json_decode($line, true, 512, JSON_THROW_ON_ERROR);
@@ -178,13 +179,16 @@ EVENTS_FILE="$project/.git/ralph-control/events.jsonl" php -r '
         if (array_key_exists($type, $counts)) {
             $counts[$type]++;
         }
+        if ($type === "command.heartbeat" && (($event["facts"]["phase"] ?? null) === "verification")) {
+            $counts["verification_heartbeat"]++;
+        }
         if (in_array($type, ["delegation.failed", "delegation.completed"], true)) {
             $facts = $event["facts"] ?? [];
             $modes[] = $facts["execution_mode"] ?? "";
         }
     }
     sort($modes);
-    if ($counts !== ["delegation.failed" => 1, "delegation.completed" => 2, "recovery.required" => 0, "block.finished" => 1]
+    if ($counts["delegation.failed"] !== 1 || $counts["delegation.completed"] !== 2 || $counts["recovery.required"] !== 0 || $counts["block.finished"] !== 1 || $counts["verification_heartbeat"] < 1
         || $modes !== ["impl", "impl", "verify"]) {
         fwrite(STDERR, json_encode(["counts" => $counts, "modes" => $modes])."\n");
         exit(1);

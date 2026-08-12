@@ -289,6 +289,20 @@ Se o resultado ficar stale antes da promoção, o controlador registra
 retomada precisa passar por `recover` e uma nova tentativa; nenhum gate antigo
 é promovido silenciosamente contra outro checkout.
 
+### Recovery do supervisor e heartbeat de verificação
+
+Uma revisão read-only longa não pode ser confundida com inatividade. O
+`runReadOnlyCommand()` aceita um callback opcional e o fluxo OpenCode emite
+`command.heartbeat` com `facts.phase=verification` enquanto o processo está
+vivo. O heartbeat é observabilidade; ele não promove estado nem libera lease.
+
+Quando `supervise` detecta `heartbeat_stale`, `activity_stale`,
+`process_missing` ou término sem evento terminal, o controlador encerra o
+grupo, registra `recovery.required` de forma idempotente e somente então chama
+`beginFailedRetry()`. Essa chamada cria novo `attempt`, novo lease e novo
+fencing token. O supervisor nunca relança a mesma tentativa com a autoridade
+anterior.
+
 ## Política de fallback
 
 O padrão é `none`. Fallback precisa estar declarado no manifesto e sempre ser

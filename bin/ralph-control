@@ -872,8 +872,11 @@ function recordRunnerResult(array $arguments, array $feature, array $result, str
     appendEvent(eventContext($traceArguments, $feature, $status, 'Resultado do adapter OpenCode importado pelo controlador', $facts));
 }
 
-/** @return array{exit_code: int, stdout: string, stderr: string, timed_out: bool, process_tree: array<string, mixed>} */
-function runReadOnlyCommand(string $command, int $timeoutSeconds, array $environment = []): array
+/**
+ * @param callable(array<string, mixed>): void|null $heartbeat
+ * @return array{exit_code: int, stdout: string, stderr: string, timed_out: bool, process_tree: array<string, mixed>}
+ */
+function runReadOnlyCommand(string $command, int $timeoutSeconds, array $environment = [], ?callable $heartbeat = null, int $heartbeatInterval = 15): array
 {
     global $root;
     $pipes = [];
@@ -894,6 +897,8 @@ function runReadOnlyCommand(string $command, int $timeoutSeconds, array $environ
     $stdout = '';
     $stderr = '';
     $startedAt = microtime(true);
+    $lastHeartbeatAt = $startedAt;
+    $lastActivityAt = $startedAt;
     $timedOut = false;
     $exitCodeFromStatus = null;
     do {
@@ -901,11 +906,27 @@ function runReadOnlyCommand(string $command, int $timeoutSeconds, array $environ
         $stderrChunk = stream_get_contents($pipes[2]);
         if (is_string($stdoutChunk)) {
             $stdout .= $stdoutChunk;
+            if ($stdoutChunk !== '') {
+                $lastActivityAt = microtime(true);
+            }
         }
         if (is_string($stderrChunk)) {
             $stderr .= $stderrChunk;
+            if ($stderrChunk !== '') {
+                $lastActivityAt = microtime(true);
+            }
         }
         $status = proc_get_status($process);
+        $now = microtime(true);
+        if ($heartbeat !== null && $now - $lastHeartbeatAt >= max(1, $heartbeatInterval)) {
+            $heartbeat([
+                'pid' => $pid,
+                'process_tree' => processTreeSnapshot($pid),
+                'idle_seconds' => (int) floor($now - $lastActivityAt),
+                'child_running' => (bool) ($status['running'] ?? false),
+            ]);
+            $lastHeartbeatAt = $now;
+        }
         if (! ($status['running'] ?? false)) {
             $exitCodeFromStatus = is_int($status['exitcode'] ?? null) && ($status['exitcode'] ?? -1) >= 0
                 ? $status['exitcode']
@@ -945,12 +966,15 @@ function runReadOnlyCommand(string $command, int $timeoutSeconds, array $environ
     ];
 }
 
-/** @return array{exit_code:int,stdout:string,stderr:string,timed_out:bool,process_tree:array<string,mixed>,artifact_refs:list<string>} */
-function runSeparatedVerification(string $command, array $environment, string $featureKey): array
+/**
+ * @param callable(array<string, mixed>): void|null $heartbeat
+ * @return array{exit_code:int,stdout:string,stderr:string,timed_out:bool,process_tree:array<string,mixed>,artifact_refs:list<string>}
+ */
+function runSeparatedVerification(string $command, array $environment, string $featureKey, ?callable $heartbeat = null, int $heartbeatInterval = 15): array
 {
     global $runtime;
     $timeout = max(1, (int) (getenv('RALPH_OPENCODE_TIMEOUT') ?: 1800)) + 30;
-    $result = runReadOnlyCommand($command, $timeout, $environment);
+    $result = runReadOnlyCommand($command, $timeout, $environment, $heartbeat, $heartbeatInterval);
     $prefix = $runtime.'/artifacts/'.$featureKey.'-verification';
     if (! is_dir(dirname($prefix)) && ! mkdir(dirname($prefix), 0700, true) && ! is_dir(dirname($prefix))) {
         fail('não foi possível criar artefatos da revisão read-only');
@@ -2020,11 +2044,17 @@ function supervisorFeedback(array $snapshot): string
 }
 
 /** @param array<string, mixed> $feature @param array<string, mixed> $snapshot */
-function supervisorRecordRetry(array $arguments, array $feature, int $retry, array $snapshot): void
+function supervisorRecordRequiredRecovery(array $arguments, array $feature, array $snapshot, string $reason): void
 {
-    withLock(function () use ($arguments, $feature, $retry, $snapshot): void {
-        appendEvent(eventContext($arguments, $feature, 'recovery.retry_started', 'Nova tentativa de execução após alerta do monitor', [
-            'retry' => $retry,
+    withLock(function () use ($arguments, $feature, $snapshot, $reason): void {
+        $workflowId = (string) ($arguments['workflow'] ?? '');
+        $featureKey = (string) ($feature['feature_key'] ?? '');
+        $workflow = loadWorkflowForId($workflowId);
+        $currentFeature = featureFrom(project($workflow, readEvents()), $featureKey);
+        appendEvent(eventContext(array_merge($arguments, [
+            'idempotency-key' => 'idem_supervisor_recovery_'.substr(hash('sha256', $workflowId.'|'.$featureKey.'|'.($currentFeature['attempt'] ?? 0).'|'.$reason), 0, 32),
+        ]), $currentFeature, 'recovery.required', 'Supervisão não pôde continuar a tentativa', [
+            'reason' => $reason,
             'health' => $snapshot['health'] ?? 'unknown',
             'last_event' => $snapshot['last_event'] ?? [],
             'processes' => $snapshot['processes'] ?? [],
@@ -2032,17 +2062,17 @@ function supervisorRecordRetry(array $arguments, array $feature, int $retry, arr
     });
 }
 
-/** @param array<string, mixed> $feature @param array<string, mixed> $snapshot */
-function supervisorRecordRequiredRecovery(array $arguments, array $feature, array $snapshot, string $reason): void
+/** @return array{lease_token: string, feature: array<string, mixed>} */
+function supervisorBeginRecoveryRetry(array $arguments, string $workflowId, string $featureKey, array $feature, array $snapshot, int $retry, string $reason): array
 {
-    withLock(function () use ($arguments, $feature, $snapshot, $reason): void {
-        appendEvent(eventContext($arguments, $feature, 'recovery.required', 'Supervisão não pôde continuar a tentativa', [
-            'reason' => $reason,
-            'health' => $snapshot['health'] ?? 'unknown',
-            'last_event' => $snapshot['last_event'] ?? [],
-            'processes' => $snapshot['processes'] ?? [],
-        ]));
-    });
+    supervisorRecordRequiredRecovery($arguments, $feature, $snapshot, $reason);
+
+    return beginFailedRetry(array_merge($arguments, [
+        'actor' => 'supervisor',
+        'feature' => $featureKey,
+        'reason' => "retry {$retry}: {$reason}",
+        'preserve-tree' => true,
+    ]));
 }
 
 /** @return array{process: resource, pid: int} */
@@ -2475,7 +2505,17 @@ function superviseWorkflow(array $arguments): void
                     }
                     proc_close($run['process']);
                     $retry++;
-                    supervisorRecordRetry($arguments, $feature, $retry, $snapshot);
+                    $retryResult = supervisorBeginRecoveryRetry(
+                        $arguments,
+                        $workflowId,
+                        $cursor,
+                        $feature,
+                        $snapshot,
+                        $retry,
+                        'execução stale interrompida antes do evento terminal',
+                    );
+                    $lease = $retryResult['lease_token'];
+                    $feature = $retryResult['feature'];
                     $run = supervisorStartRun($arguments, $workflowId, $cursor, $lease, $heartbeatInterval, $retry);
 
                     continue;
@@ -2539,7 +2579,17 @@ function superviseWorkflow(array $arguments): void
                         return;
                     }
                     $retry++;
-                    supervisorRecordRetry($arguments, $feature, $retry, $snapshot);
+                    $retryResult = supervisorBeginRecoveryRetry(
+                        $arguments,
+                        $workflowId,
+                        $cursor,
+                        $feature,
+                        $snapshot,
+                        $retry,
+                        'processo terminou sem evento terminal',
+                    );
+                    $lease = $retryResult['lease_token'];
+                    $feature = $retryResult['feature'];
                     $run = supervisorStartRun($arguments, $workflowId, $cursor, $lease, $heartbeatInterval, $retry);
 
                     continue;
@@ -4175,7 +4225,18 @@ function runControlled(array $arguments): void
         $verificationEnvironment['RALPH_OPENCODE_VERIFY_POLICY_PROOF'] = (string) $verificationProof;
         $verificationEnvironment['RALPH_OPENCODE_VERIFY_AGENT'] = (string) $verificationAgent;
         $verificationEnvironment['RALPH_OPENCODE_MODEL'] = (string) (getenv('RALPH_OPENCODE_MODEL') ?: '');
-        $verificationResult = runSeparatedVerification((string) $verificationCommand, $verificationEnvironment, $featureKey);
+        $verificationHeartbeat = static function (array $facts) use ($arguments, $workflowId, $featureKey, $lease): void {
+            withLock(function () use ($arguments, $workflowId, $featureKey, $lease, $facts): void {
+                $workflow = loadWorkflowForId($workflowId);
+                $projection = project($workflow, readEvents());
+                $currentFeature = featureFrom($projection, $featureKey);
+                checkLease($currentFeature, $lease);
+                appendEvent(eventContext($arguments, $currentFeature, 'command.heartbeat', 'Heartbeat da revisão read-only do OpenCode', array_merge($facts, [
+                    'phase' => 'verification',
+                ])));
+            });
+        };
+        $verificationResult = runSeparatedVerification((string) $verificationCommand, $verificationEnvironment, $featureKey, $verificationHeartbeat, $heartbeatInterval);
         if ($verificationResult['timed_out'] || ($verificationResult['process_tree']['alive'] ?? false)) {
             $exitCode = 124;
         } else {

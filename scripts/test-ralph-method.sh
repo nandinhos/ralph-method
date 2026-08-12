@@ -345,6 +345,84 @@ grep -q -- '--engine opencode' "$TMP/supervisor-args.log" || fail 'supervisor n�
 grep -q -- '--test-cmd fixture-quality-gate' "$TMP/supervisor-args.log" || fail 'supervisor não propagou o gate de qualidade ao Ralph configurado'
 grep -q -- '--no-verify' "$TMP/supervisor-args.log" || fail 'execução OpenCode supervisionada não separou implementação da revisão'
 
+stale_supervise_tmp="$TMP/supervise-stale-fixture"
+mkdir -p "$stale_supervise_tmp/.ralph"
+git -C "$stale_supervise_tmp" init -q
+git -C "$stale_supervise_tmp" config user.email ralph-method@example.invalid
+git -C "$stale_supervise_tmp" config user.name 'Ralph Method Supervisor Stale Test'
+printf '%s\n' '# Supervisor stale' > "$stale_supervise_tmp/README.md"
+printf '%s\n' '# Plano' > "$stale_supervise_tmp/plan.md"
+printf '%s\n' '{"schema_version":"1.0.0","workflow_id":"wf_supervise_stale","plan_file":"plan.md","knowledge_policy":{"mode":"non_blocking"},"features":[{"feature_key":"FEATURE-001","title":"Retry com novo fencing","position":1}]}' > "$stale_supervise_tmp/workflow.json"
+cat > "$stale_supervise_tmp/fake-ralph.sh" <<'SH'
+#!/usr/bin/env bash
+set -u
+if [ "${RALPH_EXECUTION_ATTEMPT:-0}" -ge 2 ]; then
+  exit 0
+fi
+sleep 30
+SH
+chmod +x "$stale_supervise_tmp/fake-ralph.sh"
+printf '%s\n' "RALPH_BIN=$stale_supervise_tmp/fake-ralph.sh" > "$stale_supervise_tmp/.ralph/codex.env"
+git -C "$stale_supervise_tmp" add .
+git -C "$stale_supervise_tmp" commit -qm base
+(cd "$stale_supervise_tmp" && control init --workflow wf_supervise_stale --manifest workflow.json >/dev/null)
+set +e
+(cd "$stale_supervise_tmp" && \
+  control supervise --workflow wf_supervise_stale --engine codex --interval 1 \
+    --test-cmd true --quality-command true --runtime-evidence-command true \
+    --technical-review-command true --curation-command true \
+    --stale-after 2 --activity-stale-after 2 --max-retries 1 --heartbeat-interval 1 \
+    > "$TMP/stale-supervise.log" 2>&1) &
+stale_supervisor_pid=$!
+set -e
+stale_events="$stale_supervise_tmp/.git/ralph-control/events.jsonl"
+for _ in $(seq 1 80); do
+  if search_file '"type":"command.started"' "$stale_events" 2>/dev/null; then
+    break
+  fi
+  sleep 0.1
+done
+search_file '"type":"command.started"' "$stale_events" || fail 'supervisor stale não iniciou comando controlado'
+stale_run_pid="$(ps -eo pid=,args= | awk '$0 ~ /bin\/ralph-control run --workflow wf_supervise_stale/ {print $1; exit}')"
+[ -n "$stale_run_pid" ] || fail 'não foi possível localizar o processo run do supervisor stale'
+stale_command_pid="$(EVENTS_FILE="$stale_events" php -r '
+  foreach (file(getenv("EVENTS_FILE"), FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $line) {
+      $event = json_decode($line, true, 512, JSON_THROW_ON_ERROR);
+      if (($event["type"] ?? null) === "command.started") {
+          echo $event["facts"]["pid"] ?? "";
+          exit;
+      }
+  }
+')"
+[ -n "$stale_command_pid" ] || fail 'não foi possível localizar o processo controlado stale'
+stale_pgid="$(ps -o pgid= -p "$stale_command_pid" | tr -d ' ')"
+kill -KILL "$stale_run_pid" 2>/dev/null || true
+if [ -n "$stale_pgid" ] && [ "$stale_pgid" != "0" ] && [ "$stale_pgid" != "$$" ]; then
+  kill -KILL -- "-$stale_pgid" 2>/dev/null || true
+fi
+set +e
+wait "$stale_supervisor_pid"
+stale_supervisor_exit=$?
+set -e
+assert_eq '0' "$stale_supervisor_exit" 'supervisor stale concluiu a recuperação automática'
+stale_supervise_output="$(<"$TMP/stale-supervise.log")"
+printf '%s' "$stale_supervise_output" | grep -q '"status": "complete"' || fail 'supervisor stale não concluiu após novo fencing'
+EVENTS_FILE="$stale_events" php -r '
+  $attempts = [];
+  $leases = [];
+  foreach (file(getenv("EVENTS_FILE"), FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $line) {
+      $event = json_decode($line, true, 512, JSON_THROW_ON_ERROR);
+      if (($event["type"] ?? null) === "feature.claimed") {
+          $attempts[] = $event["attempt"] ?? null;
+          $leases[] = $event["lease_token_hash"] ?? null;
+      }
+  }
+  if ($attempts !== [1, 2] || count(array_unique($leases)) !== 2) {
+      fwrite(STDERR, "fencing inválido: ".json_encode([$attempts, $leases])."\n");
+      exit(1);
+  }
+'
+
 printf '%s' '{"evento":"incompleto"' >> "$TMP/.git/ralph-control/events.jsonl"
 repair_output="$(cd "$TMP" && control repair-ledger --workflow wf_test)"
 assert_eq 'recovery_required' "$(json_field "$repair_output" status)" 'repair-ledger recuperou corrupção terminal'

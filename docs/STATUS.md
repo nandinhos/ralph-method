@@ -32,6 +32,13 @@ A aprovação também distingue uma feature já presente no `HEAD` de uma
 implementação que produziu commit: o primeiro caso passa pelos gates sem criar
 commit vazio e fica marcado no ledger como `implementation_mode=already_present`.
 Resultado stale antes da promoção exige recovery explícito.
+O supervisor também emite heartbeat durante a revisão read-only do OpenCode.
+Se uma tentativa ficar stale ou terminar sem evento terminal, o retry registra
+`recovery.required` e só inicia uma nova execução após `beginFailedRetry()`,
+com novo `attempt`, novo lease e novo fencing token. A correção está registrada
+no [`ADR-0013`](adr/0013-retry-do-supervisor-com-novo-fencing.md), no
+[`incidente 0013`](incidents/0013-retry-stale-reutilizava-lease.md) e no
+[`relatório 0022`](reports/0022-hardening-supervisor-recovery-2026-08-11.md).
 O handoff e a memória de engenharia são uma camada não bloqueante: a entrega
 pode continuar enquanto a curadoria aguarda revisão, sem perder o candidato
 rastreável. A v0.6.0 adiciona cache episódico sanitizado, decisão explícita de
