@@ -16,6 +16,10 @@ descreve o ciclo completo de dry-run, instalação, execução, monitoramento,
 recuperação, memória, desinstalação e diagnóstico pós-atualização de MCP. A
 prática foi motivada pelo [`ADR-0014`](adr/0014-diagnostico-mcp-pos-atualizacao-de-harness.md)
 e pelo [`incidente 0014`](incidents/0014-startup-mcp-pos-atualizacao-codex.md).
+Este checkout também possui um perfil self-hosted em `.ralph/codex.env` para
+que as próximas fases do próprio Ralph Method sejam executadas pelo runner
+nativo do Codex através de `scripts/ralph.sh`; a decisão está no
+[`ADR-0015`](adr/0015-self-hosting-com-runner-codex.md).
 
 A branch `feat/ralph-hardening` concentrou a evolução de segurança da v0.5.0
 e a evolução de memória da v0.6.0; essas mudanças agora fazem parte de

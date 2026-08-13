@@ -54,6 +54,21 @@ O Ralph Method é instalado exclusivamente no projeto-alvo. O repositório que
 distribui o método é apenas a fonte dos componentes; não é dependência de
 runtime, banco ou credencial do projeto.
 
+#### Self-hosting do próprio Ralph Method
+
+Este repositório é uma exceção explícita: ele pode usar o próprio runtime para
+implementar suas fases. O perfil versionado `.ralph/codex.env` aponta para
+`scripts/ralph.sh` e usa o runner nativo do Codex. Execute o wrapper somente
+após uma fase aprovada e com a árvore limpa:
+
+```bash
+bin/ralph-bloco <fase-inicial> <fase-final> codex
+```
+
+Não use `ralph-init apply` sobre este checkout. O instalador deve continuar
+bloqueando a auto-instalação como instalação externa; o perfil self-hosted é a
+configuração explícita deste projeto e não uma migração do framework.
+
 ### 0.2 Fazer o dry-run
 
 Use primeiro `plan`, sempre sem mutação:

@@ -117,3 +117,4 @@
 2026-08-12T00:58:50-03:00 | error | após atualização do Codex CLI 0.147.0, o startup MCP cancelou `context7`, `headroom` e `openai-api-key-local-confirmation`; handshakes diretos estavam saudáveis.
 2026-08-12T00:58:50-03:00 | fix | o profile local do Beer & Code Harness passou `context7` de `npx` resolvido por PATH para o caminho absoluto do executável; startup novo chegou ao prompt sem interrupção.
 2026-08-12T00:58:50-03:00 | decision | toda atualização de harness com falha MCP deve repetir primeiro o diagnóstico de handshake; só aplicar caminho absoluto quando a falha for exclusiva da resolução do launcher no Codex.
+2026-08-13T00:00:00-03:00 | decision | o próprio Ralph Method adotará self-hosting explícito por `.ralph/codex.env`, usando o runner nativo Codex via `scripts/ralph.sh`; `ralph-init apply` continua bloqueado no checkout-fonte.
