@@ -4103,10 +4103,13 @@ function runControlled(array $arguments): void
     unset($_ENV['RALPH_OPENCODE_VERIFY_POLICY_PROOF'], $_ENV['RALPH_OPENCODE_VERIFY_AGENT']);
 
     $environment = array_merge((array) getenv(), $_ENV, [
-        // O executor não recebe contexto de workflow nem lease. Isso impede
-        // que ele use o hook/CLI como capability de escrita no ledger.
+        // O executor recebe somente identificadores públicos da execução para
+        // feedback, logs e seleção da feature. Eles não são capability de
+        // escrita: lease, credenciais e proofs continuam fora do ambiente.
         'RALPH_CONTROLLED_EXECUTOR' => '1',
         'RALPH_HOOK' => $root.'/scripts/ralph-hook.sh',
+        'RALPH_WORKFLOW_ID' => $workflowId,
+        'RALPH_FEATURE_KEY' => $featureKey,
         'RALPH_FEEDBACK_STDOUT' => getenv('RALPH_FEEDBACK_STDOUT') !== false
             ? (string) getenv('RALPH_FEEDBACK_STDOUT')
             : '1',
@@ -4115,8 +4118,6 @@ function runControlled(array $arguments): void
         'RALPH_EXECUTION_ATTEMPT' => (string) $attempt,
     ]);
     unset(
-        $environment['RALPH_WORKFLOW_ID'],
-        $environment['RALPH_FEATURE_KEY'],
         $environment['RALPH_LEASE_TOKEN'],
         $environment['RALPH_OPENCODE_VERIFY_POLICY_PROOF'],
         $environment['RALPH_OPENCODE_VERIFY_AGENT'],

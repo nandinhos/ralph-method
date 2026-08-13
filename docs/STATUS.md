@@ -103,6 +103,11 @@ agora inventaria toda a superfície gerenciada, registra o cache episódico no
 `.git/info/exclude` e mantém a sanitização sem conceder autoridade ao hook. A
 CI portátil foi reexecutada com exit `0`, incluindo 163 asserts do loop e as
 provas de instalação, rollback, provider Codex, conhecimento e reprodutibilidade.
+Na mesma validação, o executor controlado recuperou os identificadores seguros
+de workflow e feature para manter feedback e artefatos correlacionados; leases,
+credenciais e proofs continuam fora do ambiente. O incidente está detalhado no
+[`incidente 0017`](incidents/0017-contexto-seguro-ausente-no-executor.md), com
+regressão reproduzida no `bin/check` do projeto-alvo e corrigida antes do aceite.
 
 A regressão da entrega do detector legado (`FEATURE-093-REGRESSION-RELEASE`)
 foi concluída na branch `feat/detector-bc-legacy`: lint dos componentes

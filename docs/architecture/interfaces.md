@@ -172,6 +172,11 @@ direta, `RALPH_FEEDBACK_CMD=/caminho/do/consumidor` executa um binário com
 timeout e qualquer falha é apenas reportada; a execução não é aprovada nem
 interrompida por ele.
 
+Na invocação controlada, o executor recebe `RALPH_WORKFLOW_ID` e
+`RALPH_FEATURE_KEY` para correlacionar feedback, logs e artefatos. Esses
+identificadores não concedem autoridade de transição; lease, credenciais e
+proofs permanecem fora do ambiente do executor.
+
 Quando o bloco é iniciado pelo `ralph-control run` ou pelo supervisor, o
 controlador ativa esse canal por padrão e retransmite as linhas
 `RALPH_FEEDBACK` enquanto o processo está vivo. Assim o terminal do
