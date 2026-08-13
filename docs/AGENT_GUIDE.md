@@ -817,7 +817,10 @@ gates. Depois de `feature.released`, o controlador cria um candidato local em
 `.ralph/knowledge-candidates/` e registra `knowledge.candidate_created`. Esse
 manifesto é um cache sanitizado da execução: contém somente workflow, feature,
 tentativa, handoff e decisão de retenção; não contém prompts, respostas,
-credenciais ou eventos brutos.
+credenciais ou eventos brutos. Ao materializar o primeiro candidato, o
+controlador também registra `/.ralph/knowledge-candidates/` em
+`.git/info/exclude`; esse cache não deve sujar a árvore nem ser adicionado ao
+`.gitignore` versionado.
 
 Liste os candidatos antes de decidir o que deve permanecer:
 

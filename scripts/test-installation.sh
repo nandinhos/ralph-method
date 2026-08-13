@@ -719,6 +719,77 @@ ROLLBACK_STATE_JSON="$(cat "$evolution_project/.ralph/evolutions/$evolution_id/e
         && (($state["backup"]["files"][0]["status"] ?? null) === "restored") ? 0 : 1);
 '
 
+# Uma instalação externa que já possui a superfície completa do Ralph Method
+# deve ter todos os conflitos incluídos na quarentena. Só os dois arquivos de
+# runtime permanecem no lugar e são preservados sem importação.
+surface_project="$TMP/ralph-evolucao-superficie"
+new_project "$surface_project"
+while IFS= read -r relative; do
+  [ -n "$relative" ] || continue
+  mkdir -p "$surface_project/$(dirname "$relative")"
+  cp "$ROOT/$relative" "$surface_project/$relative"
+done <<'EOF'
+bin/ralph-control
+bin/ralph-trace
+bin/ralph-monitor
+bin/ralph-block
+bin/ralph-bloco
+bin/ralph-knowledge
+scripts/ralph.sh
+scripts/ralph-hook.sh
+scripts/ralph-generate-handoff.sh
+scripts/ralph-run-curator.sh
+scripts/ralph-run-independent-gate.sh
+scripts/ralph-run-quality.sh
+scripts/ralph-run-runtime-evidence.sh
+EOF
+mkdir -p "$surface_project/.ralph" "$surface_project/.git/ralph-control"
+printf '%s\n' '# perfil legado Codex' > "$surface_project/.ralph/codex.env"
+printf '%s\n' '# perfil legado Claude' > "$surface_project/.ralph/claude.env"
+printf '%s\n' '{"legacy":true}' > "$surface_project/.git/ralph-control/events.jsonl"
+printf '%s\n' '{"legacy":true}' > "$surface_project/.git/ralph-control/workflow.json"
+surface_events_hash="$(php -r 'echo hash_file("sha256", $argv[1]);' "$surface_project/.git/ralph-control/events.jsonl")"
+surface_workflow_hash="$(php -r 'echo hash_file("sha256", $argv[1]);' "$surface_project/.git/ralph-control/workflow.json")"
+surface_plan_output="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" evolve --project "$surface_project" --provider auto)"
+SURFACE_PLAN_JSON="$surface_plan_output" php -r '
+    $plan = json_decode(getenv("SURFACE_PLAN_JSON"), true, 512, JSON_THROW_ON_ERROR);
+    $quarantine = array_column($plan["backup"]["signals_to_quarantine"] ?? [], "path");
+    $required = [
+        "bin/ralph-control",
+        "bin/ralph-monitor",
+        "scripts/ralph.sh",
+        ".ralph/codex.env",
+        ".ralph/claude.env",
+    ];
+    foreach ($required as $path) {
+        if (! in_array($path, $quarantine, true)) {
+            exit(1);
+        }
+    }
+    foreach ($plan["new_installation"]["files"] ?? [] as $file) {
+        if (($file["action"] ?? null) === "conflict") {
+            exit(1);
+        }
+    }
+    exit(($plan["status"] ?? null) === "ready" && ($plan["migration"]["state_imported"] ?? true) === false ? 0 : 1);
+'
+surface_apply_output="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" evolve --project "$surface_project" --provider auto --apply)"
+SURFACE_APPLY_JSON="$surface_apply_output" php -r '
+    $result = json_decode(getenv("SURFACE_APPLY_JSON"), true, 512, JSON_THROW_ON_ERROR);
+    exit(($result["status"] ?? null) === "awaiting_acceptance"
+        && preg_match("/^EVL-[0-9]{8}-[0-9]{4}$/", (string) ($result["evolution_id"] ?? "")) === 1 ? 0 : 1);
+'
+surface_id="$(SURFACE_APPLY_JSON="$surface_apply_output" php -r '$result = json_decode(getenv("SURFACE_APPLY_JSON"), true, 512, JSON_THROW_ON_ERROR); echo $result["evolution_id"];')"
+assert_file "$surface_project/.ralph/evolutions/$surface_id/backup/bin/ralph-monitor"
+assert_file "$surface_project/.ralph/evolutions/$surface_id/backup/scripts/ralph.sh"
+assert_file "$surface_project/.ralph/evolutions/$surface_id/backup/.ralph/codex.env"
+assert_file "$surface_project/.git/ralph-control/events.jsonl"
+assert_file "$surface_project/.git/ralph-control/workflow.json"
+surface_events_after_hash="$(php -r 'echo hash_file("sha256", $argv[1]);' "$surface_project/.git/ralph-control/events.jsonl")"
+surface_workflow_after_hash="$(php -r 'echo hash_file("sha256", $argv[1]);' "$surface_project/.git/ralph-control/workflow.json")"
+[ "$surface_events_after_hash" = "$surface_events_hash" ] || fail 'evolução da superfície alterou o ledger legado'
+[ "$surface_workflow_after_hash" = "$surface_workflow_hash" ] || fail 'evolução da superfície alterou o workflow legado'
+
 # O aceite é explícito e não elimina o backup; uma alteração na instalação
 # nova bloqueia rollback em vez de sobrescrever trabalho do usuário.
 accept_project="$TMP/ralph-evolucao-aceite"

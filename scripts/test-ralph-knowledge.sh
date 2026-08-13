@@ -89,6 +89,10 @@ candidates_before="$(cd "$TMP/project" && "$ROOT/bin/ralph-knowledge" candidates
 printf '%s' "$candidates_before" | grep -q '"status": "pending"' || fail 'candidato pendente não foi materializado'
 candidate_id="$(printf '%s' "$candidates_before" | php -r '$v=json_decode(stream_get_contents(STDIN), true, 512, JSON_THROW_ON_ERROR); echo $v["candidates"][0]["curation_id"] ?? "";')"
 [ -f "$TMP/project/.ralph/knowledge-candidates/$candidate_id.json" ] || fail 'cache de candidato ausente'
+if git -C "$TMP/project" status --porcelain | grep -q 'knowledge-candidates'; then
+  fail 'cache de candidato contaminou a árvore de trabalho'
+fi
+grep -qxF '/.ralph/knowledge-candidates/' "$TMP/project/.git/info/exclude" || fail 'cache de candidato não foi isolado no exclude local'
 
 # A entrega pode avançar antes da curadoria; conhecimento é non_blocking.
 advance_output="$(cd "$TMP/project" && control advance --workflow wf_knowledge --feature FEATURE-001 --lease "$lease")"

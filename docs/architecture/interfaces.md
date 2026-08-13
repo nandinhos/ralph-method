@@ -202,7 +202,9 @@ Depois de `feature.released`, o controlador materializa um candidato
 sanitizado em `.ralph/knowledge-candidates/<CUR-...>.json`. Esse cache não é
 fonte de conhecimento e pode ser persistido, rejeitado, enviado para revisão
 ou descartado por ação explícita. Todas as decisões continuam no ledger e não
-bloqueiam `feature.advanced`.
+bloqueiam `feature.advanced`. Na primeira materialização, o controlador registra
+`/.ralph/knowledge-candidates/` em `.git/info/exclude`, sem modificar o
+`.gitignore` versionado do projeto.
 
 Uma lição persistida possui os campos estruturados:
 

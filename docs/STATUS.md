@@ -93,6 +93,17 @@ a assinatura `bc-harness` formada por `install.sh`, `ralph.patch` e
 fingerprint determinístico sem conteúdo bruto, classifica a origem como
 `external_ralph_legacy` e recomenda `evolve`.
 
+Durante a primeira evolução assistida com o provider Codex no `refactor-radar`,
+o portão oficial reproduziu duas regressões da 0.8.0: o cache não bloqueante de
+conhecimento aparecia como arquivo não rastreado, e `observe` não sanitizava
+detalhes depois de se tornar não mutante. A correção está registrada nos
+[`incidentes 0015`](incidents/0015-evolve-superficie-incompleta.md) e
+[`0016`](incidents/0016-candidato-episodico-contaminava-arvore.md): a evolução
+agora inventaria toda a superfície gerenciada, registra o cache episódico no
+`.git/info/exclude` e mantém a sanitização sem conceder autoridade ao hook. A
+CI portátil foi reexecutada com exit `0`, incluindo 163 asserts do loop e as
+provas de instalação, rollback, provider Codex, conhecimento e reprodutibilidade.
+
 A regressão da entrega do detector legado (`FEATURE-093-REGRESSION-RELEASE`)
 foi concluída na branch `feat/detector-bc-legacy`: lint dos componentes
 alterados, `check-shell`, `check-doc-sync`, `test-installation`,

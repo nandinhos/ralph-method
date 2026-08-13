@@ -240,6 +240,7 @@ function writeKnowledgeCandidate(array $candidate): void
     if (! is_dir($directory) && ! mkdir($directory, 0700, true) && ! is_dir($directory)) {
         fail('não foi possível criar o cache de candidatos de conhecimento');
     }
+    excludeKnowledgeCandidates();
     writeJson(knowledgeCandidatePath((string) $candidate['curation_id']), $candidate);
 }
 
@@ -1219,6 +1220,32 @@ function runtimeInit(): void
     global $runtime;
     if (! is_dir($runtime) && ! mkdir($runtime, 0700, true) && ! is_dir($runtime)) {
         fail("não foi possível criar {$runtime}");
+    }
+}
+
+function excludeKnowledgeCandidates(): void
+{
+    global $root;
+    $excludePath = git('rev-parse --git-path info/exclude');
+    if (! str_starts_with($excludePath, DIRECTORY_SEPARATOR)) {
+        $excludePath = $root.DIRECTORY_SEPARATOR.$excludePath;
+    }
+    $directory = dirname($excludePath);
+    if (! is_dir($directory) && ! mkdir($directory, 0700, true) && ! is_dir($directory)) {
+        fail('não foi possível preparar .git/info/exclude');
+    }
+    $contents = is_file($excludePath) ? (string) file_get_contents($excludePath) : '';
+    $line = '/.ralph/knowledge-candidates/';
+    foreach (preg_split('/\R/', $contents) ?: [] as $existing) {
+        if (trim($existing) === $line) {
+            return;
+        }
+    }
+    if ($contents !== '' && ! str_ends_with($contents, "\n")) {
+        $contents .= "\n";
+    }
+    if (file_put_contents($excludePath, $contents.$line."\n", LOCK_EX) === false) {
+        fail('não foi possível registrar candidatos de conhecimento em .git/info/exclude');
     }
 }
 
@@ -4514,10 +4541,21 @@ function traceReport(array $arguments): void
 
 function observe(array $arguments): void
 {
+    $workflowId = trim((string) ($arguments['workflow'] ?? getenv('RALPH_WORKFLOW_ID') ?: ''));
+    $featureKey = trim((string) ($arguments['feature'] ?? getenv('RALPH_FEATURE_KEY') ?: ''));
+    if ($workflowId === '' || $featureKey === '') {
+        fail('observe exige workflow e feature; o hook não deve inventar contexto', 2);
+    }
+    $event = sanitize((string) ($arguments['event'] ?? getenv('RALPH_EVENT') ?: ($arguments['_'][1] ?? 'unknown')));
+    $detail = sanitize((string) ($arguments['detail'] ?? getenv('RALPH_EVENT_DETAIL') ?: ($arguments['_'][2] ?? '')));
     printJson([
         'observed' => false,
         'recorded' => false,
         'reason' => 'ledger_owned_by_controller',
+        'workflow_id' => $workflowId,
+        'feature_key' => $featureKey,
+        'event' => $event,
+        'detail_sanitized' => $detail,
     ]);
 }
 

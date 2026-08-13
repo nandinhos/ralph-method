@@ -11,7 +11,7 @@
 | eventos e locks | `.git/ralph-control/` | `ralph-control` |
 | exclusividade de execução | `.git/ralph-control/executions/<sha256>.lock` | `ralph-control`, mantido durante o bloco |
 | handoffs | `.ralph/handoffs/` | controlador e projeto |
-| candidatos de memória | `.ralph/knowledge-candidates/` | controlador e curador; cache sanitizado e descartável |
+| candidatos de memória | `.ralph/knowledge-candidates/` + `.git/info/exclude` | controlador e curador; cache sanitizado, local e descartável |
 | memória curada | `docs/engineering/` | projeto-alvo |
 | manifesto de instalação | `.ralph/install-manifest.json` | `ralph-init` |
 | detecção de instalação | saída transitória de `ralph-init plan` | `ralph-init`, sem persistência implícita |
@@ -61,6 +61,9 @@
   alterado depois da instalação.
 - candidatos de memória não são conhecimento validado: contêm apenas origem,
   status e decisão de retenção; a publicação exige a ação explícita `curated`;
+- no primeiro candidato materializado, o controlador registra
+  `/.ralph/knowledge-candidates/` em `.git/info/exclude`; o cache episódico não
+  contamina a árvore do projeto e não altera o `.gitignore` versionado;
 - `docs/engineering/INDEX.md` é o índice macro e `categories/` e `topics/` são
   projeções regeneráveis, não fontes independentes de verdade;
 - taxonomia de lição usa `category`, `topics`, `stack`, `domain` e

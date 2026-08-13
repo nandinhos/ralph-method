@@ -910,6 +910,23 @@ function detectExistingRalphInstallation(string $root, ?array $methodManifest): 
         ['id' => 'ralph_ledger_events', 'path' => '.git/ralph-control/events.jsonl', 'kind' => 'runtime_ledger'],
         ['id' => 'ralph_workflow_state', 'path' => '.git/ralph-control/workflow.json', 'kind' => 'runtime_state'],
     ];
+    $definedPaths = array_fill_keys(array_map(
+        static fn (array $definition): string => (string) $definition['path'],
+        $definitions
+    ), true);
+    foreach (array_merge(managedSources(), generatedPaths()) as $relative) {
+        if (isset($definedPaths[$relative])) {
+            continue;
+        }
+        $definitions[] = [
+            'id' => 'ralph_method_surface:'.$relative,
+            'path' => $relative,
+            'kind' => str_starts_with($relative, '.ralph/')
+                ? 'method_generated_file'
+                : 'canonical_method_file',
+        ];
+        $definedPaths[$relative] = true;
+    }
     $signals = [];
     $methodRuntimePaths = ['.git/ralph-control/events.jsonl', '.git/ralph-control/workflow.json'];
     foreach ($definitions as $definition) {
