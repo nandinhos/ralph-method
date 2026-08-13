@@ -14,6 +14,9 @@ O Ralph Method é um framework local instalado dentro de um projeto-alvo. O
   — plano de validação, debug sistemático e promoção controlada.
 - [control-plane-hardening-plan.md](control-plane-hardening-plan.md)
   — contrato executável da evolução de concorrência, crash e recuperação.
+- [provider-failover-continuity-plan.md](provider-failover-continuity-plan.md)
+  — proposta de continuidade Codex → OpenCode por rate limit, com nova
+  tentativa, fencing, cápsula sanitizada e circuit breakers.
 - [../backlog.md](../backlog.md) — itens adiados sem prioridade;
 - [../adr/0007-escopo-fechado-de-harnesses.md](../adr/0007-escopo-fechado-de-harnesses.md)
   — decisão de escopo entre Codex, Claude CLI, OpenCode, Hermes e agy.
@@ -25,6 +28,8 @@ O Ralph Method é um framework local instalado dentro de um projeto-alvo. O
   — detecção segura de Ralph externo e evolução assistida futura.
 - [../adr/0011-evolucao-assistida-backup-rollback.md](../adr/0011-evolucao-assistida-backup-rollback.md)
   — contrato executável de backup, isolamento, aceite e rollback condicional.
+- [../adr/0016-failover-controlado-entre-providers.md](../adr/0016-failover-controlado-entre-providers.md)
+  — decisão proposta de failover opt-in sob autoridade do controlador.
 - [../reports/0001-prova-real-opencode.md](../reports/0001-prova-real-opencode.md)
   — evidência da primeira prova real isolada.
 

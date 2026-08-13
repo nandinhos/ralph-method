@@ -24,6 +24,24 @@
 | métricas derivadas | stdout de `bin/ralph-metrics` | consumidor do projeto/orquestrador, sem persistência implícita |
 | perfis de execução | `.ralph/codex.env`, `.ralph/claude.env` | instalador/usuário |
 
+## Modelo proposto para failover controlado
+
+Os dados abaixo ainda não existem no runtime. Eles pertencem ao plano de
+[`continuidade entre providers`](provider-failover-continuity-plan.md):
+
+| Dado proposto | Local | Dono e regra |
+|---|---|---|
+| política de execução | manifesto versionado e cópia no workflow ativo | projeto define opt-in; controlador valida e grava o hash |
+| resultado comum de runner | artifact controlado + referência no ledger | runner publica; controlador valida sob lease; versão 2 do schema existente |
+| circuito de capacidade | projeção dos eventos e do relógio | `ralph-control`; não cria banco ou sidecar autoritativo |
+| cápsula de continuidade | `.git/ralph-control/continuations/` | projeção regenerável do ledger, workflow e checkout; não é fonte de transição |
+| transições de provider | eventos do ledger e projeção no handoff final | somente `ralph-control` escreve; monitor, trace e métricas apenas leem |
+
+O fingerprint da continuidade precisa cobrir status Git, diff staged, diff
+unstaged e arquivos untracked do projeto. Paths de runtime só podem ser
+excluídos por uma lista fechada e coberta por teste; `git write-tree` sozinho
+não representa trabalho parcial ainda não staged.
+
 ## Regras
 
 - o ledger é JSONL append-only com hash chain;

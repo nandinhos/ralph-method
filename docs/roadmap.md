@@ -45,6 +45,41 @@ O escopo ativo termina nos três harnesses Codex, Claude CLI e OpenCode. Hermes
 e agy não são prioridades desta linha; seus itens estão formalmente adiados em
 [`backlog.md`](backlog.md), com prioridade nenhuma.
 
+## Evolução planejada — continuidade e failover controlado entre providers
+
+O plano completo está em
+[`architecture/provider-failover-continuity-plan.md`](architecture/provider-failover-continuity-plan.md)
+e a decisão proposta no
+[`ADR-0016`](adr/0016-failover-controlado-entre-providers.md). A implementação
+deve preservar `fallback_policy=none` como default e habilitar a cadeia apenas
+por opt-in versionado do workflow.
+
+A fila executável pelo próprio Ralph está em
+[`../.spec/features/094-provider-failover/PHASES.md`](../.spec/features/094-provider-failover/PHASES.md),
+com nove features ordenadas no workflow candidato do mesmo diretório. O
+bootstrap deve ocorrer em clone dedicado, com `ralph-control supervise` e
+engine `codex`, preservando qualquer runtime histórico do clone atual.
+
+- [ ] evoluir `runner-result` para um contrato comum e validar a política do
+  workflow sem criar uma segunda fonte de término;
+- [ ] classificar rate limit do Codex com confiança alta e sem falso positivo
+  por saída dos testes do projeto;
+- [ ] projetar circuit breakers e seleção read-only no controlador;
+- [ ] gerar cápsula de continuidade sanitizada e protegida por hashes;
+- [ ] iniciar failover com nova `attempt`, lease, sessão e fencing token;
+- [ ] integrar Codex → OpenCode somente para `provider_usage_limited`;
+- [ ] manter features seguintes no runner elegível durante o cooldown;
+- [ ] adicionar espera de capacidade com heartbeat e horizonte sem progresso;
+- [ ] projetar transições no handoff, trace, monitor e métricas;
+- [ ] executar matriz de panes, regressão completa e revisão adversarial;
+- [ ] comprovar continuidade real por script reproduzível em worktree
+  descartável do `refactor-radar`;
+- [ ] atualizar `STATUS`, `AGENT_GUIDE` e release somente após os gates finais.
+
+Gatilho de início: aprovação do ADR-0016 e disponibilidade simultânea de Codex
+e OpenCode funcionais, com modelo, agente, proof read-only e domínios de falha
+distintos observáveis pelo readiness na fixture de campo.
+
 ## Evolução concluída — instalação externa e rollback assistido (`v0.8.0`)
 
 - [x] detectar sinais canônicos de Ralph fora do manifesto do Ralph Method;

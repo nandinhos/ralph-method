@@ -57,6 +57,23 @@ tem timeout e não publica a saída bruta. `functional` certifica a CLI;
 | Hermes/agy | delegação filha registrada no trace após diagnóstico suportado | backlog, prioridade nenhuma |
 | instalação remota | manifesto local com hashes | necessidade de vários hosts compartilhando estado |
 
+### Seam proposta de continuidade entre runners
+
+Esta seam ainda não está implementada. O plano está em
+[`provider-failover-continuity-plan.md`](provider-failover-continuity-plan.md)
+e mantém `fallback_policy=none` até sua promoção.
+
+| Componente | Responsabilidade proposta | Limite obrigatório | Gatilho |
+|---|---|---|---|
+| runner nativo ou adapter | publicar `runner-result` estruturado | não escolher destino, criar attempt ou escrever ledger | `provider_usage_limited` com confiança alta |
+| `ralph-control` | projetar circuitos, validar destino e criar nova autoridade | não ler logs brutos como decisão nem reutilizar lease/fencing | política `explicit_failover` válida |
+| cápsula de continuidade | projetar contexto sanitizado e regenerável | não ser fonte de estado nem transportar código, prompt ou segredo | failover autorizado após término do processo anterior |
+| readiness | observar domínio de falha e capacidade do target | não aceitar domínio apenas declarado para automação | origem e destino `observed|exact` e distintos |
+
+O desenho permanece local e dentro do controlador. Serviço, fila, banco ou
+coordenador distribuído só ganham lugar se surgir necessidade real de operar o
+mesmo workflow entre hosts diferentes.
+
 ## Exclusividade de execução
 
 O controlador mantém um lock de execução por `workflow_id + feature_key` em

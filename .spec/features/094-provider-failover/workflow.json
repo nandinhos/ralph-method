@@ -1,0 +1,84 @@
+{
+  "schema_version": "1.1.0",
+  "workflow_id": "wf_provider_failover_20260813_001",
+  "plan_file": ".spec/features/094-provider-failover/PHASES.md",
+  "test_command": "bash scripts/ci-portable.sh",
+  "knowledge_policy": {
+    "mode": "non_blocking"
+  },
+  "features": [
+    {
+      "feature_key": "FEATURE-094A-FAILOVER-CONTRACTS",
+      "title": "Congelar contratos, compatibilidade e testes vermelhos",
+      "position": 1,
+      "input_file": ".spec/features/094-provider-failover/PHASES.md",
+      "source_phase": "1",
+      "status": "pending"
+    },
+    {
+      "feature_key": "FEATURE-094B-CODEX-RATE-LIMIT",
+      "title": "Publicar runner-result Codex e classificar rate limit",
+      "position": 2,
+      "input_file": ".spec/features/094-provider-failover/PHASES.md",
+      "source_phase": "2",
+      "status": "pending"
+    },
+    {
+      "feature_key": "FEATURE-094C-FAILOVER-ROUTING",
+      "title": "Validar política, domínio de falha e roteamento read-only",
+      "position": 3,
+      "input_file": ".spec/features/094-provider-failover/PHASES.md",
+      "source_phase": "3",
+      "status": "pending"
+    },
+    {
+      "feature_key": "FEATURE-094D-CONTINUATION-FENCING",
+      "title": "Gerar continuidade e nova autoridade de execução",
+      "position": 4,
+      "input_file": ".spec/features/094-provider-failover/PHASES.md",
+      "source_phase": "4",
+      "status": "pending"
+    },
+    {
+      "feature_key": "FEATURE-094E-OPENCODE-CONTINUATION",
+      "title": "Continuar a feature com OpenCode",
+      "position": 5,
+      "input_file": ".spec/features/094-provider-failover/PHASES.md",
+      "source_phase": "5",
+      "status": "pending"
+    },
+    {
+      "feature_key": "FEATURE-094F-CAPACITY-WAIT",
+      "title": "Sustentar espera de capacidade e fila longa",
+      "position": 6,
+      "input_file": ".spec/features/094-provider-failover/PHASES.md",
+      "source_phase": "6",
+      "status": "pending"
+    },
+    {
+      "feature_key": "FEATURE-094G-FAILOVER-OBSERVABILITY",
+      "title": "Projetar handoff, trace, monitor e métricas",
+      "position": 7,
+      "input_file": ".spec/features/094-provider-failover/PHASES.md",
+      "source_phase": "7",
+      "status": "pending"
+    },
+    {
+      "feature_key": "FEATURE-094H-FAILOVER-REGRESSION",
+      "title": "Executar matriz adversarial e regressão completa",
+      "position": 8,
+      "input_file": ".spec/features/094-provider-failover/PHASES.md",
+      "source_phase": "8",
+      "status": "pending"
+    },
+    {
+      "feature_key": "FEATURE-094I-FAILOVER-FIELD-RELEASE",
+      "title": "Provar em campo e preparar promoção",
+      "position": 9,
+      "input_file": ".spec/features/094-provider-failover/PHASES.md",
+      "source_phase": "9",
+      "status": "pending"
+    }
+  ]
+}
+

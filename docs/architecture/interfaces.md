@@ -64,6 +64,25 @@ agy podem ser detectados, mas não atravessam a fronteira de execução.
 O cenário completo, incluindo a prova dos três runners, está em
 [`reports/0009-regressao-multiprovider.md`](../reports/0009-regressao-multiprovider.md).
 
+## Interface proposta de failover controlado
+
+Esta interface não está disponível na versão atual. O default continua
+`fallback_policy=none`. A proposta do
+[`plano de continuidade`](provider-failover-continuity-plan.md) adiciona opt-in
+versionado e comandos somente leitura:
+
+```text
+execution_policy.provider_strategy = explicit_failover
+ralph-control provider-status --workflow <id>
+ralph-control failover-plan --workflow <id> --feature <key>
+```
+
+O resultado de execução evolui `schemas/runner-result.schema.json` para um
+contrato comum aos runners. `provider.failover_started` só pode ser emitido
+pelo controlador depois de processo encerrado, domínio de falha observado e
+distinto, cápsula revalidada e nova `attempt`, lease e fencing. O adapter
+continua sem autoridade de workflow.
+
 O procedimento operacional completo para agentes está em
 [`../AGENT_GUIDE.md`](../AGENT_GUIDE.md). Ele é parte do contrato versionado e
 deve ser atualizado junto com `VERSION`.
