@@ -65,6 +65,10 @@ após uma fase aprovada e com a árvore limpa:
 bin/ralph-bloco <fase-inicial> <fase-final> codex
 ```
 
+O perfil self-hosted também define `RALPH_TEST_CMD=bash scripts/ci-portable.sh`,
+que é o comando de qualidade deste repositório; projetos com `bin/check`
+continuam usando esse valor como padrão do wrapper.
+
 Não use `ralph-init apply` sobre este checkout. O instalador deve continuar
 bloqueando a auto-instalação como instalação externa; o perfil self-hosted é a
 configuração explícita deste projeto e não uma migração do framework.

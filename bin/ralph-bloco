@@ -136,7 +136,7 @@ if [ "${RALPH_DRY_RUN:-}" = "1" ]; then
   echo "  engine em uso     : $ENGINE$([ -n "$ENGINE_ARG" ] && echo ' (por argumento)' || echo ' (por detecção)')"
   echo "  perfil            : $PERFIL"
   echo "  fases             : $DE..$ATE, parando antes da $((ATE + 1))"
-  echo "  comando de teste  : bin/check"
+  echo "  comando de teste  : ${RALPH_TEST_CMD:-bin/check}"
   echo "  log de controle   : $LOG"
   if [ -x "$RALPH" ]; then
     echo "  ralph             : $RALPH ✓"
@@ -181,7 +181,8 @@ fi
 # --test-cmd é obrigatório: sem ele a detecção por manifest encontra
 # scripts.test no composer.json e escolhe `composer test`, que roda só o Pest.
 # É o erro da Fase 1 — PHPStan quebrado reportado como verde.
-setsid "$RALPH" --engine "$ENGINE" --test-cmd "bin/check" --from "$DE" > "$LOG" 2>&1 &
+TEST_CMD="${RALPH_TEST_CMD:-bin/check}"
+setsid "$RALPH" --engine "$ENGINE" --test-cmd "$TEST_CMD" --from "$DE" > "$LOG" 2>&1 &
 PID=$!
 sleep 2
 PGID="$(ps -o pgid= -p "$PID" 2>/dev/null | tr -d ' ')"

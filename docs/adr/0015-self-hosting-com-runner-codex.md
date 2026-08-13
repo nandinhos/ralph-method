@@ -35,6 +35,7 @@ O arquivo `.ralph/codex.env` é o perfil self-hosted do repositório e define:
 - `RALPH_CODEX_MODEL=gpt-5.6-luna`;
 - `RALPH_CODEX_REASONING_EFFORT=high`;
 - `RALPH_VERIFY_MODEL=gpt-5.6-luna`.
+- `RALPH_TEST_CMD=bash scripts/ci-portable.sh`.
 
 As fases do próprio projeto devem ser iniciadas pelo wrapper versionado:
 
