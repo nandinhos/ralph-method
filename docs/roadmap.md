@@ -53,17 +53,17 @@ rejeitou 2x por defeito do **comando de gate** (não da feature), e o retry
 re-executou o bloco já commitado 3x (~2h perdidas). O handoff está em
 [`.ralph/handoffs/FEATURE-097-GATE-RECUPERACAO/`](../.ralph/handoffs/FEATURE-097-GATE-RECUPERACAO/execution-summary.md).
 
-- [ ] classificar o resultado do comando de gate: `gate.rejected` (evidência
+- [x] classificar o resultado do comando de gate: `gate.rejected` (evidência
   mostra falha da feature) vs `gate.harness_error` (comando sem evidência,
   stdout vazio, crash, timeout ou contrato violado), com evento e estado
   próprios no ledger;
-- [ ] retry de gate não re-executa bloco já commitado: retoma só do gate
+- [x] retry de gate não re-executa bloco já commitado: retoma só do gate
   pendente/rejeitado, sem nova sessão de implementação;
-- [ ] exigir evidência não-vazia: comando de gate com `exit 0` e stdout vazio
+- [x] exigir evidência não-vazia: comando de gate com `exit 0` e stdout vazio
   é tratado como defeito de harness;
-- [ ] implementar `ralph-control gate --test <gate>`: self-test do comando em
+- [x] implementar `ralph-control gate --test <gate>`: self-test do comando em
   modo fixture (contrato/evidência/exit) antes de trabalho real;
-- [ ] documentar no `AGENT_GUIDE` e atualizar CHANGELOG/STATUS.
+- [x] documentar no `AGENT_GUIDE` e atualizar CHANGELOG/STATUS.
 
 ## Evolução planejada — continuidade e failover controlado entre providers
 

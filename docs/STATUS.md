@@ -8,6 +8,13 @@ tag anotada `v0.9.1` após CI portátil verde e revisão adversarial sem finding
 aberto. O relatório da promoção está em
 [`docs/reports/0026-promocao-v0-9-1.md`](reports/0026-promocao-v0-9-1.md).
 
+A **FEATURE-097** (recuperação de gate distinta entre defeito do comando e
+falha da feature) está implementada em `main` como candidata à `v0.9.2`: o
+`ralph-control` classifica `gate.rejected` (evidência mostra falha da
+feature) vs `gate.harness_error` (comando sem evidência ou timeout), o retry
+de gate não re-executa o bloco já commitado, e o `ralph-control gate --test`
+valida o comando em modo fixture.
+
 O self-hosting do próprio Ralph Method foi exercitado em clone dedicado com o
 engine OpenCode: o `ralph-control supervise` rodou o pipeline completo
 (claim/lease/fencing, implementação via adapter, gates 1–3, revisão read-only
