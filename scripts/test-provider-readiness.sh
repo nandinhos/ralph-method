@@ -20,7 +20,11 @@ fail() {
 assert_json() {
   local json="$1"
   local expression="$2"
-  JSON="$json" php -r "$expression" || fail "assertiva JSON falhou"
+  if ! JSON="$json" php -r "$expression"; then
+    printf 'FALHA: assertiva JSON não satisfeita.\n' >&2
+    printf 'JSON:\n%s\n' "$json" >&2
+    exit 1
+  fi
 }
 
 fake_bin="$TMP/bin"
