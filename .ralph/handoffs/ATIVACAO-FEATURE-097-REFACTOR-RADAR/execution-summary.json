@@ -1,0 +1,1 @@
+{"attempt":1,"document_id":"HND-2026-0010","document_kind":"handoff","feature_key":"ATIVACAO-FEATURE-097-REFACTOR-RADAR","gates":{},"implementation_commit":"eb7facc","knowledge_policy":"non_blocking","result_commit":"5d4b580","schema_version":"1.1.0","state":"ready_for_activation","target_project":"refactor-radar","target_harness":"opencode","workflow_id":"wf_ralph_20260805_001"}
