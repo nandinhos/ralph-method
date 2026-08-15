@@ -454,7 +454,11 @@ function verifyProvider(string $provider, string $path, string $root): array
     if ($provider === 'agy') {
         $healthArgs = ['--add-dir', $root, 'agents'];
     }
-    $healthResult = commandResult(commandLine($path, $healthArgs), $root);
+    // O probe `models` do OpenCode cataloga o provider local e pode levar mais
+    // de 8s (observado em 1.18.18: ~11s); timeout generoso evita falso
+    // degraded que nunca habilitaria o adapter.
+    $healthTimeout = $provider === 'opencode' ? 30 : 8;
+    $healthResult = commandResult(commandLine($path, $healthArgs), $root, $healthTimeout);
     $healthClassifier = (string) ($definition['health']['classifier'] ?? 'exit_zero');
     $healthStatus = healthPassed($healthClassifier, $healthResult) ? 'healthy' : 'unhealthy';
     $base['health_status'] = $healthStatus;

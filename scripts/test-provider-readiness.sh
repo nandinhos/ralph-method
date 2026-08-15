@@ -43,7 +43,7 @@ chmod +x "$fake_bin/codex"
 printf '%s\n' '#!/usr/bin/env bash' 'case "$*" in' '  --version) printf "%s\\n" "fixture" ;;' '  "auth status --json") [ "${FAKE_HANG:-0}" = 1 ] && sleep 20; [ "${FAKE_AUTH:-1}" = 1 ] && printf "%s\\n" "Logged in token=supersecret" || { printf "%s\\n" "Not logged in"; exit 1; } ;;' '  *--print*|*exec*|*run*) exit 91 ;;' '  *) exit 2 ;;' 'esac' > "$fake_bin/claude"
 chmod +x "$fake_bin/claude"
 
-printf '%s\n' '#!/usr/bin/env bash' 'case "$*" in' '  --version) printf "%s\\n" "fixture" ;;' '  "auth list") [ "${FAKE_OPENCODE_AUTH:-1}" = 1 ] && printf "\\033[0m\\n┌  Credentials  ┐\\n●  OpenRouter api\\n●  Anthropic oauth\\n" || { printf "%s\\n" "●  OpenRouter api"; exit 7; } ;;' '  models) printf "%s\\n" "openrouter/model-a" "anthropic/model-b" ;;' '  *--print*|*exec*|*run*) exit 91 ;;' '  *) exit 2 ;;' 'esac' > "$fake_bin/opencode"
+printf '%s\n' '#!/usr/bin/env bash' 'case "$*" in' '  --version) printf "%s\\n" "fixture" ;;' '  "auth list") [ "${FAKE_OPENCODE_AUTH:-1}" = 1 ] && printf "\\033[0m\\n┌  Credentials  ┐\\n●  OpenRouter api\\n●  Anthropic oauth\\n" || { printf "%s\\n" "●  OpenRouter api"; exit 7; } ;;' '  models) [ "${FAKE_OPENCODE_HEALTH_DELAY:-0}" = 1 ] && sleep 12; printf "%s\\n" "openrouter/model-a" "anthropic/model-b" ;;' '  *--print*|*exec*|*run*) exit 91 ;;' '  *) exit 2 ;;' 'esac' > "$fake_bin/opencode"
 chmod +x "$fake_bin/opencode"
 
 printf '%s\n' '#!/usr/bin/env bash' 'case "$*" in' '  --version) printf "%s\\n" "fixture" ;;' '  "status") printf "%s\\n" "Provider: MiniMax" "Model: MiniMax-M3" "MiniMax          ✓ configured" "Other Provider   ✗ not logged in" ;;' '  "auth status MiniMax") printf "%s\\n" "minimax: logged in" ;;' '  *--print*|*exec*|*run*) exit 91 ;;' '  *) exit 2 ;;' 'esac' > "$fake_bin/hermes"
@@ -92,6 +92,16 @@ assert_json "$opencode_verified" '
     $plan = json_decode(getenv("JSON"), true, 512, JSON_THROW_ON_ERROR);
     $provider = $plan["detection"]["providers"]["opencode"] ?? [];
     exit(($provider["auth_status"] ?? null) === "authenticated" && ($provider["health_status"] ?? null) === "healthy" && ($provider["status"] ?? null) === "functional" && ($provider["runner_supported"] ?? false) === true && ($provider["adapter_enabled"] ?? false) === true && ($plan["orchestration"]["mode"] ?? null) === "single_provider" ? 0 : 1);
+'
+
+opencode_slow_health="$(env "${common_env[@]}" FAKE_OPENCODE_HEALTH_DELAY=1 "$ROOT/bin/ralph-init" plan --project "$project" --provider opencode --verify-providers)"
+assert_json "$opencode_slow_health" '
+    $plan = json_decode(getenv("JSON"), true, 512, JSON_THROW_ON_ERROR);
+    $provider = $plan["detection"]["providers"]["opencode"] ?? [];
+    exit(($provider["health_status"] ?? null) === "healthy"
+        && ($provider["status"] ?? null) === "functional"
+        && ($provider["adapter_enabled"] ?? false) === true
+        && ($provider["verification"]["health_timed_out"] ?? true) === false ? 0 : 1);
 '
 
 hermes_verified="$(env "${common_env[@]}" "$ROOT/bin/ralph-init" plan --project "$project" --provider hermes --verify-providers)"
