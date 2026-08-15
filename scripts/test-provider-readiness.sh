@@ -51,6 +51,9 @@ chmod +x "$fake_bin/hermes"
 
 printf '%s\n' '#!/usr/bin/env bash' 'case "$*" in' '  --version) printf "%s\\n" "1.1.13-fixture" ;;' '  models) [ "${FAKE_AGY_AUTH:-1}" = 1 ] && printf "%s\\n" "gemini-3.7-flash-high" || { printf "%s\\n" "authentication required"; exit 7; } ;;' '  *agents) [ "${FAKE_AGY_AGENTS:-1}" = 1 ] && printf "%s\\n" "bc-harness" "ralph-review" || { printf "%s\\n" "authentication required"; exit 7; } ;;' '  *--print*|*exec*|*run*) exit 91 ;;' '  *) exit 2 ;;' 'esac' > "$fake_bin/agy"
 chmod +x "$fake_bin/agy"
+
+printf '%s\n' '#!/usr/bin/env bash' 'case " $* " in' '  *" /bin/true "*) [ "${FAKE_BWRAP_SMOKE:-1}" = 1 ] && exit 0 || exit 1 ;;' '  *) exit 0 ;;' 'esac' > "$fake_bin/bwrap"
+chmod +x "$fake_bin/bwrap"
 printf '%s\n' 'fixture-token' > "$TMP/agy-token"
 
 php_bin="$(command -v php || true)"
@@ -171,6 +174,13 @@ assert_json "$agy_without_agents" '
 
 agy_without_isolation="$(env "${common_env[@]}" RALPH_AGY_TOKEN_FILE="$TMP/missing-token" "$ROOT/bin/ralph-init" plan --project "$project" --provider agy --verify-providers)"
 assert_json "$agy_without_isolation" '
+    $plan = json_decode(getenv("JSON"), true, 512, JSON_THROW_ON_ERROR);
+    $provider = $plan["detection"]["providers"]["agy"] ?? [];
+    exit(($provider["status"] ?? null) === "degraded" && ($provider["adapter_enabled"] ?? true) === false ? 0 : 1);
+'
+
+agy_without_bwrap="$(env "${common_env[@]}" FAKE_BWRAP_SMOKE=0 "$ROOT/bin/ralph-init" plan --project "$project" --provider agy --verify-providers)"
+assert_json "$agy_without_bwrap" '
     $plan = json_decode(getenv("JSON"), true, 512, JSON_THROW_ON_ERROR);
     $provider = $plan["detection"]["providers"]["agy"] ?? [];
     exit(($provider["status"] ?? null) === "degraded" && ($provider["adapter_enabled"] ?? true) === false ? 0 : 1);
