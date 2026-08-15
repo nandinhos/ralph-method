@@ -32,11 +32,15 @@ jobs:
           php-version: '8.2'
           coverage: none
 
+      - name: Instalar bubblewrap
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+
       - name: Verificar ferramentas
         run: |
           php --version
           bash --version
           shellcheck --version
+          bwrap --version
 
       - name: Executar regressão portátil
         run: bash scripts/ci-portable.sh
