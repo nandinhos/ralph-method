@@ -204,6 +204,15 @@ if [ "$scenario" = "false-429" ]; then
   exit 0
 fi
 
+if [ "$scenario" = "codex-usage-limit" ] && [ "$n" -eq 1 ]; then
+  # Mensagem real do Codex CLI 0.147 (rate limit): com "try again at".
+  # Fica no FIM do log, como o provider emite; dispara espera e nao consome ciclo.
+  epoch="${MOCK_RESET_EPOCH:-$(( $(date +%s) + 5 ))}"
+  echo "Some implementation output before the limit."
+  echo "ERROR: You have hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at $(date -d "@$epoch" '+%b %dth, %Y %H:%M')."
+  exit 1
+fi
+
 if [ "$name" = "claude" ]; then emit_claude_ok; else echo "Done."; fi
 exit 0
 MOCK
@@ -475,6 +484,19 @@ if case_enabled false-429; then
   else
     bad "sem espera (${elapsed}s)"
   fi
+fi
+
+# ---------------------------------------------------------------------------
+# 7b. Mensagem real do Codex "hit your usage limit" -> espera com reset
+# ---------------------------------------------------------------------------
+if case_enabled codex-usage-limit; then
+  header "7b. 'hit your usage limit' do Codex dispara espera de limite"
+  d=$(new_case codex-usage-limit)
+  rc=$(run_ralph "$d" codex-usage-limit --engine codex --test-cmd "$d/test.sh" --max-cycles 1)
+  assert_eq 0 "$rc" "exit 0 (limite nao consome ciclo)"
+  assert_contains "$d/out.log" "Limite de uso atingido" "limite detectado na mensagem real do Codex"
+  assert_contains "$d/out.log" "Reset previsto para" "horario de reset extraido de 'try again at'"
+  assert_eq 3 "$(commits "$d")" "fases commitadas apos a espera"
 fi
 
 # ---------------------------------------------------------------------------

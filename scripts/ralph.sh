@@ -1050,17 +1050,25 @@ detect_usage_limit() {
   if [[ "$ENGINE" == "claude" ]]; then
     pattern='usage limit reached'
   else
-    pattern='rate limit reached|quota exceeded|usage limit reached'
+    pattern='rate limit reached|quota exceeded|usage limit|hit your usage limit|usage limit reached'
   fi
 
   grep -qiE "$pattern" <<< "$tail_txt" || return 1
 
-  epoch=$(grep -oiE 'usage limit reached[^0-9]*[0-9]{10,13}' <<< "$tail_txt" \
+  epoch=$(grep -oiE '(usage limit reached|hit your usage limit)[^0-9]*[0-9]{10,13}' <<< "$tail_txt" \
     | grep -oE '[0-9]{10,13}' | tail -1 || true)
 
   if [ -z "$epoch" ]; then
     epoch=$(grep -oiE 'reset[a-z ]*[0-9]{10,13}' <<< "$tail_txt" \
       | grep -oE '[0-9]{10,13}' | tail -1 || true)
+  fi
+
+  if [ -z "$epoch" ]; then
+    epoch=$(grep -oiE 'try again at [A-Za-z]{3} [0-9]{1,2}(th|st|nd|rd), [0-9]{4} [0-9]{1,2}:[0-9]{2}' <<< "$tail_txt" \
+      | tail -1 | sed -E 's/try again at //I; s/([0-9]{1,2})(th|st|nd|rd),/\1,/I')
+    if [ -n "$epoch" ]; then
+      epoch="$(date -d "$epoch" +%s 2>/dev/null || echo "")"
+    fi
   fi
 
   echo "${epoch:-0}"
