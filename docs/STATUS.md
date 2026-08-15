@@ -2,18 +2,24 @@
 
 ## Estado atual
 
-A versão publicada atual é `0.9.1`. Ela publica a FEATURE-096 (comando de
-gate como contrato nativo do método) sobre a base `0.9.0`, identificada pela
-tag anotada `v0.9.1` após CI portátil verde e revisão adversarial sem finding
-aberto. O relatório da promoção está em
-[`docs/reports/0026-promocao-v0-9-1.md`](reports/0026-promocao-v0-9-1.md).
+A versão publicada atual é `0.9.2`. Ela publica a FEATURE-097 (recuperação
+de gate distinta entre defeito do comando e falha da feature) sobre a base
+`0.9.1`, identificada pela tag anotada `v0.9.2`. A correção foi confirmada em
+campo pelo `refactor-radar` (INC-2026-0007): a phase-25 fechou com os 5 gates
+e o workflow avançou para a phase-26 sem re-execução do bloco commitado. O
+relatório da promoção está em
+[`docs/reports/0027-promocao-v0-9-2.md`](reports/0027-promocao-v0-9-2.md).
 
-A **FEATURE-097** (recuperação de gate distinta entre defeito do comando e
-falha da feature) está implementada em `main` como candidata à `v0.9.2`: o
-`ralph-control` classifica `gate.rejected` (evidência mostra falha da
-feature) vs `gate.harness_error` (comando sem evidência ou timeout), o retry
-de gate não re-executa o bloco já commitado, e o `ralph-control gate --test`
-valida o comando em modo fixture.
+### FEATURE-097 — recuperação de gate
+
+- `gate.rejected` (evidência mostra falha da feature → `debugging_required`) vs
+  `gate.harness_error` (comando sem evidência ou timeout → `awaiting_gates`);
+- retry de gate **não re-executa o bloco já commitado**: após
+  `debugging_verified`, o supervisor usa `beginGateRetry`
+  (`gate.retry_started` → `awaiting_gates`) e re-roda só o gate pendente;
+- default de `curation` pré-release é read-only (`ralph-knowledge candidates`);
+- `ralph-control gate-test --gate <gate>` valida o comando em fixture com o
+  `gate-timeout` do gate real.
 
 O self-hosting do próprio Ralph Method foi exercitado em clone dedicado com o
 engine OpenCode: o `ralph-control supervise` rodou o pipeline completo

@@ -1,7 +1,7 @@
 # Guia operacional para agentes de IA — Ralph Method
 
 - guide_version: 1.7.0
-- method_version: 0.9.1
+- method_version: 0.9.2
 - status: ativo
 - fonte_do_metodo: `VERSION`
 - contrato_de_feedback: `schemas/feedback-event.schema.json`

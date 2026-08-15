@@ -5,7 +5,7 @@ português do Brasil. A versão no arquivo `VERSION` identifica o bundle em
 desenvolvimento; uma versão só é considerada publicada após commit, tag
 anotada e promoção documentada.
 
-## 0.9.2 — em preparação
+## 0.9.2 — publicada em 2026-08-15
 
 ### Recuperação de gate distinta (FEATURE-097)
 
@@ -33,6 +33,13 @@ anotada e promoção documentada.
   antes de `feature.released`;
 - `AGENT_GUIDE` documenta a classificação (seção 6.2) e o self-test;
 - regressão dedicada `scripts/test-ralph-gate-recovery.sh` (cenários A–D).
+
+### Estado da publicação
+
+A `0.9.2` publica a FEATURE-097 em `main`, identificada pela tag anotada
+`v0.9.2`. A correção foi confirmada em campo pelo `refactor-radar`
+(INC-2026-0007): a phase-25 fechou com os 5 gates e o workflow avançou para a
+phase-26 sem re-execução do bloco commitado.
 
 ## 0.9.1 — publicada em 2026-08-15
 
