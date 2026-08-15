@@ -55,3 +55,30 @@ Antes da geração, a policy percorre o projeto e rejeita symlink quebrado ou
 resolvido fora de `repo-root`, além de hardlink que compartilhe o inode do token.
 Isso impede que uma ferramenta com path lexicalmente interno atravesse para um
 mount sensível antes da validação pós-evento.
+
+## Hooks do harness Antigravity (recomendação manual, fora da seam)
+
+O Antigravity CLI possui um contrato de lifecycle hooks próprio
+(`~/.gemini/config/hooks.json` ou `.agents/hooks.json` no workspace) com
+eventos `PreToolUse`, `PostToolUse`, `PreInvocation` e `Stop`. Esses hooks são
+**configuração do harness**, não parte da seam `preflight|run|version` do
+adapter; o `ralph-control` permanece a única autoridade de estado e avanço.
+O AGENT_GUIDE (seção 3.3.1) documenta o interceptador `guard_destructive.py`
+recomendado. Contrato de I/O observado no harness:
+
+- **Entrada (stdin)**: JSON camelCase com o contexto da chamada:
+
+  ```json
+  {
+    "toolCall": {"name": "run_command", "args": {"CommandLine": "php artisan test", "Cwd": "/projeto"}},
+    "workspacePaths": ["/projeto"]
+  }
+  ```
+
+- **Saída (stdout)**: estritamente um JSON de decisão — `allow` (executa),
+  `ask` (confirmação do usuário) ou `deny` (bloqueia) com `reason`. Em caso de
+  erro no hook, falhar aberto (`allow`) para não bloquear a IDE por engano.
+
+Esse contrato é específico do harness Antigravity; não deve ser imposto ao
+núcleo do método nem gerado automaticamente pelo `apply` (a instalação permanece
+agnóstica e reversível por ownership).
