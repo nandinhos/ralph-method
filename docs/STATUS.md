@@ -2,11 +2,11 @@
 
 ## Estado atual
 
-A versão publicada atual é `0.9.0`. Ela consolida em `main` o detector legado
-(`bc-harness`, features 091–093) e o adapter `agy` (FEATURE-095), identificada
-pela tag anotada `v0.9.0` após regressão completa, smoke real `agy 1.1.13` e
-revisão adversarial independente sem finding aberto. O relatório da promoção
-está em [`docs/reports/0025-promocao-v0-9-0.md`](reports/0025-promocao-v0-9-0.md).
+A versão publicada atual é `0.9.1`. Ela publica a FEATURE-096 (comando de
+gate como contrato nativo do método) sobre a base `0.9.0`, identificada pela
+tag anotada `v0.9.1` após CI portátil verde e revisão adversarial sem finding
+aberto. O relatório da promoção está em
+[`docs/reports/0026-promocao-v0-9-1.md`](reports/0026-promocao-v0-9-1.md).
 
 O self-hosting do próprio Ralph Method foi exercitado em clone dedicado com o
 engine OpenCode: o `ralph-control supervise` rodou o pipeline completo
