@@ -27,6 +27,7 @@ checks=(
   scripts/test-agy-loop.sh
   scripts/test-agy-control.sh
   scripts/test-ralph-gates-native.sh
+  scripts/test-ralph-gate-recovery.sh
 )
 
 for check in "${checks[@]}"; do

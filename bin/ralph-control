@@ -49,7 +49,7 @@ $eventTypes = [
     'workflow.initialized', 'feature.claimed', 'attempt.started', 'block.finished',
     'command.started', 'command.heartbeat', 'command.passed', 'command.failed', 'failure.detected',
     'fix.applied', 'fix.reverted', 'verification.passed', 'evidence.generated',
-    'gate.passed', 'gate.rejected', 'handoff.generated', 'handoff.committed', 'feature.approved',
+    'gate.passed', 'gate.rejected', 'gate.harness_error', 'handoff.generated', 'handoff.committed', 'feature.approved',
     'feature.released', 'knowledge.candidate_created', 'knowledge.curated',
     'knowledge.rejected', 'knowledge.skipped', 'knowledge.review_required',
     'debugging.required', 'debugging.started', 'debugging.verified', 'debugging.rejected',
@@ -1880,6 +1880,12 @@ function project(array $workflow, array $events): array
                     $feature['gates'][$event['facts']['gate'] ?? 'unknown'] = 'rejected';
                     $feature['state'] = 'debugging_required';
                     break;
+                case 'gate.harness_error':
+                    // FEATURE-097: defeito do comando de gate, não da feature.
+                    // A feature permanece em awaiting_gates; o gate fica marcado
+                    // como harness_error para o pipeline re-rodar o comando.
+                    $feature['gates'][$event['facts']['gate'] ?? 'unknown'] = 'harness_error';
+                    break;
                 case 'gate.session.reclaimed':
                     $feature['state'] = 'awaiting_gates';
                     $feature['lease_token_hash'] = $event['lease_token_hash'] ?? null;
@@ -2254,12 +2260,19 @@ function supervisorExecuteGateCommand(array $arguments, array $feature, string $
     if ($treeChanged && $exitCode === 0) {
         $exitCode = 1;
     }
-    $report = "gate={$gate}\nproducer={$producer}\nexit_code={$exitCode}\ntree_changed=".($treeChanged ? 'true' : 'false')."\n\n"
+    // Classificação do resultado (FEATURE-097): distingue falha da feature de
+    // defeito do comando de gate. Um comando com exit != 0 SEM evidência
+    // (stdout e stderr vazios) ou que estourou o timeout não mostra uma falha
+    // da feature — é um defeito do próprio comando de gate (gate_harness_error).
+    $evidence = trim((string) $result['stdout'].(string) $result['stderr']);
+    $harnessError = $exitCode !== 0 && ($evidence === '' || (int) $result['timed_out'] === 1);
+    $report = "gate={$gate}\nproducer={$producer}\nexit_code={$exitCode}\ntree_changed=".($treeChanged ? 'true' : 'false')
+        ."\nclassification=".($harnessError ? 'gate_harness_error' : ($exitCode === 0 ? 'passed' : 'gate_rejected'))."\n\n"
         .substr($result['stdout']."\n".$result['stderr'], 0, 200000);
     file_put_contents($reportPath, $report, LOCK_EX);
     @chmod($reportPath, 0600);
 
-    $status = $exitCode === 0 && ! $treeChanged ? 'passed' : 'rejected';
+    $status = $exitCode === 0 && ! $treeChanged ? 'passed' : ($harnessError ? 'harness_error' : 'rejected');
     $gateCommand = supervisorSelfCommand().' gate --workflow '.escapeshellarg($workflowId)
         .' --feature '.escapeshellarg($featureKey).' --lease '.escapeshellarg($lease)
         .' --gate '.escapeshellarg($gate).' --status '.escapeshellarg($status)
@@ -2274,7 +2287,7 @@ function supervisorExecuteGateCommand(array $arguments, array $feature, string $
         fail('controlador não registrou o gate '.$gate.': '.$gateOutput, $gateExit);
     }
 
-    return ['exit_code' => $exitCode, 'output' => $gateOutput, 'document_id' => trim($documentId), 'report_path' => $reportPath];
+    return ['exit_code' => $exitCode, 'harness_error' => $harnessError, 'output' => $gateOutput, 'document_id' => trim($documentId), 'report_path' => $reportPath];
 }
 
 /** @return array{exit_code: int, report_path: string, document_id: string} */
@@ -2385,7 +2398,13 @@ function supervisorRunGatePipeline(array $arguments, string $workflowId, string 
             if (($feature['state'] ?? null) !== 'awaiting_gates') {
                 return ['status' => $feature['state'] ?? 'unknown', 'workflow_id' => $workflowId, 'feature_key' => $featureKey];
             }
-            fwrite(STDERR, '[RALPH] gate '.$gate.': processando'."\n");
+            // FEATURE-097: gate marcado como harness_error (defeito do comando)
+            // é re-rodado; não há debugging da feature nem re-execução do bloco.
+            if (($feature['gates'][$gate] ?? null) === 'harness_error') {
+                fwrite(STDERR, '[RALPH] gate '.$gate.': erro de harness detectado; re-rodando o comando'."\n");
+            } else {
+                fwrite(STDERR, '[RALPH] gate '.$gate.': processando'."\n");
+            }
             $result = $gate === 'validation'
                 ? supervisorValidationGate(array_merge($arguments, ['workflow' => $workflowId, 'feature' => $featureKey]), $feature, $lease)
                 : (function () use ($arguments, $workflowId, $featureKey, $feature, $lease, $gate): array {
@@ -2399,6 +2418,13 @@ function supervisorRunGatePipeline(array $arguments, string $workflowId, string 
             if (($result['configuration_required'] ?? false) === true) {
                 fwrite(STDERR, '[RALPH] gate '.$gate.': configuração ausente; sessão preservada para retomada'."\n");
                 return ['status' => 'gates_configuration_required', 'workflow_id' => $workflowId, 'feature_key' => $featureKey, 'missing_gate' => $gate];
+            }
+            if (($result['harness_error'] ?? false) === true) {
+                // FEATURE-097: defeito do comando de gate. A feature permanece
+                // em awaiting_gates (commitado, sem re-execução do bloco) e o
+                // gate fica marcado como harness_error para retry do comando.
+                fwrite(STDERR, '[RALPH] gate '.$gate.': erro de harness (comando sem evidência); gate pendente de retry'."\n");
+                return ['status' => 'gate_harness_error', 'workflow_id' => $workflowId, 'feature_key' => $featureKey, 'failed_gate' => $gate];
             }
             fwrite(STDERR, '[RALPH] gate '.$gate.': '.((int) $result['exit_code'] === 0 ? 'aprovado' : 'rejeitado')."\n");
             if ((int) $result['exit_code'] !== 0) {
@@ -2505,6 +2531,21 @@ function superviseWorkflow(array $arguments): void
                 $gateResult = supervisorRunGatePipeline($arguments, $workflowId, $cursor);
                 fwrite(STDERR, supervisorFeedback(supervisorSnapshot($arguments, $workflowId, $staleAfter, $activityStaleAfter))."\n");
                 if (($gateResult['status'] ?? null) === 'next_feature') {
+                    continue;
+                }
+                if (($gateResult['status'] ?? null) === 'gate_harness_error') {
+                    // FEATURE-097: defeito do comando de gate. Re-rodar o gate
+                    // (o pipeline o fará) com limite de tentativas; esgotado,
+                    // devolve recovery_required em vez de loop infinito.
+                    $harnessRetries = (int) ($arguments['gate-harness-retries'] ?? 2);
+                    if ($retry >= $harnessRetries) {
+                        supervisorRecordRequiredRecovery($arguments, $feature, supervisorSnapshot($arguments, $workflowId, $staleAfter, $activityStaleAfter), 'comando de gate falhou sem evidência após limite de tentativas');
+                        printJson(['status' => 'recovery_required', 'workflow_id' => $workflowId, 'feature_key' => $cursor, 'reason' => 'gate_harness_error_limit', 'failed_gate' => $gateResult['failed_gate'] ?? null]);
+
+                        return;
+                    }
+                    $retry++;
+                    fwrite(STDERR, '[RALPH] gate '.($gateResult['failed_gate'] ?? '?').": erro de harness; nova tentativa do comando ({$retry}/{$harnessRetries})\n");
                     continue;
                 }
                 printJson($gateResult);
@@ -3103,7 +3144,7 @@ function recordGate(array $arguments): void
     $gate = required($arguments, 'gate');
     $status = required($arguments, 'status');
     $allowed = ['validation', 'quality', 'runtime_evidence', 'technical_review', 'curation'];
-    if (! in_array($gate, $allowed, true) || ! in_array($status, ['passed', 'rejected'], true)) {
+    if (! in_array($gate, $allowed, true) || ! in_array($status, ['passed', 'rejected', 'harness_error'], true)) {
         fail('gate ou status inválido');
     }
     withLock(function () use ($arguments, $workflowId, $featureKey, $lease, $gate, $status): void {
@@ -3114,7 +3155,10 @@ function recordGate(array $arguments): void
         if (($feature['state'] ?? null) !== 'awaiting_gates') {
             fail('gates só podem ser registrados em awaiting_gates');
         }
-        $type = $status === 'passed' ? 'gate.passed' : 'gate.rejected';
+        // FEATURE-097: um status harness_error registra gate.harness_error e
+        // NÃO dispara debugging_required da feature — o defeito é do comando
+        // de gate, não da feature; o retry mira o comando (re-roda o gate).
+        $type = $status === 'passed' ? 'gate.passed' : ($status === 'harness_error' ? 'gate.harness_error' : 'gate.rejected');
         $events = readEvents();
         foreach (array_reverse($events) as $existing) {
             if (($existing['feature_key'] ?? null) !== $featureKey || (int) ($existing['attempt'] ?? 0) !== (int) $feature['attempt']) {
@@ -3122,6 +3166,12 @@ function recordGate(array $arguments): void
             }
             if (($existing['type'] ?? null) === $type && (($existing['facts']['gate'] ?? null) === $gate)) {
                 return;
+            }
+            if (($existing['type'] ?? null) === 'gate.harness_error' && (($existing['facts']['gate'] ?? null) === $gate)) {
+                // FEATURE-097: um gate marcado como harness_error pode ser
+                // re-rodado com o comando corrigido; o resultado posterior
+                // (passed/rejected) substitui o erro de harness.
+                break;
             }
             if (in_array($existing['type'] ?? null, ['gate.passed', 'gate.rejected'], true) && (($existing['facts']['gate'] ?? null) === $gate)) {
                 fail("gate {$gate} já foi registrado com outro resultado");
@@ -3146,6 +3196,57 @@ function recordGate(array $arguments): void
         }
     });
     printJson(['gate' => $gate, 'status' => $status]);
+}
+
+/**
+ * gate-test — self-test do comando de gate (FEATURE-097).
+ * Roda o comando configurado em modo fixture (sem workflow) e valida o
+ * contrato: contexto por env (RALPH_GATE etc.), produção de evidência e exit
+ * code. Não toca no workflow/ledger.
+ *
+ * Uso: ralph-control gate-test --gate technical_review [--command CMD]
+ */
+function gateTestCommand(array $arguments): void
+{
+    global $root;
+    $gate = required($arguments, 'gate');
+    $allowed = ['validation', 'quality', 'runtime_evidence', 'technical_review', 'curation'];
+    if (! in_array($gate, $allowed, true)) {
+        fail('gate inválido; use '.implode(', ', $allowed));
+    }
+    $command = $arguments['command'] ?? null;
+    if (! is_string($command) || trim($command) === '') {
+        $command = supervisorGateCommand($arguments, $gate);
+    }
+    if ($command === null || trim($command) === '') {
+        fail("nenhum comando configurado para o gate {$gate} (--command, RALPH_<GATE>_COMMAND ou default instalado)");
+    }
+    $environment = array_merge((array) getenv(), $_ENV, [
+        'RALPH_WORKFLOW_ID' => 'wf_gate_selftest',
+        'RALPH_FEATURE_KEY' => 'FEATURE-GATE-SELFTEST',
+        'RALPH_ATTEMPT' => '1',
+        'RALPH_GATE' => $gate,
+        'RALPH_REPORT_PATH' => '/tmp/ralph-gate-selftest-report.log',
+    ]);
+    unset($environment['RALPH_LEASE'], $environment['RALPH_LEASE_TOKEN']);
+    $before = workingTreeFingerprint();
+    $result = runReadOnlyCommand(trim($command), max(5, (int) ($arguments['gate-timeout'] ?? 60)), $environment);
+    $after = workingTreeFingerprint();
+    $treeChanged = $before !== $after;
+    $exitCode = (int) $result['exit_code'];
+    $evidence = trim((string) $result['stdout'].(string) $result['stderr']);
+    $harnessError = $exitCode !== 0 && ($evidence === '' || (int) $result['timed_out'] === 1);
+    $classification = $exitCode === 0 && ! $treeChanged ? 'passed' : ($harnessError ? 'gate_harness_error' : 'gate_rejected');
+    printJson([
+        'gate' => $gate,
+        'command' => trim($command),
+        'classification' => $classification,
+        'exit_code' => $exitCode,
+        'timed_out' => (bool) $result['timed_out'],
+        'tree_changed' => $treeChanged,
+        'evidence_bytes' => strlen($evidence),
+        'expected' => 'no workflow/ledger alterado',
+    ]);
 }
 
 function approveFeature(array $arguments): void
@@ -5128,6 +5229,8 @@ try {
         case 'reconcile': reconcileExternalBlock($arguments);
             break;
         case 'gate': recordGate($arguments);
+            break;
+        case 'gate-test': gateTestCommand($arguments);
             break;
         case 'approve': approveFeature($arguments);
             break;

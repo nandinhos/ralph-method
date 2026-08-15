@@ -1014,6 +1014,32 @@ Uma instalação padrão do método já instala os quatro wrappers em
 retornar `gates_configuration_required`. A configuração explícita por env
 continua tendo prioridade sobre os defaults.
 
+### 6.2 Recuperação de gate: defeito do comando vs falha da feature
+
+O `ralph-control` classifica o resultado do comando de gate (FEATURE-097):
+
+| Classificação | Evento | Quando | Efeito |
+|---|---|---|---|
+| `gate.passed` | evidência verde, árvore intacta | exit 0, stdout não vazio | avança |
+| `gate.rejected` | evidência mostra falha da **feature** | exit != 0 com stdout/stderr não vazios | `debugging_required` da feature (corrige a feature) |
+| `gate.harness_error` | **defeito do comando de gate** | exit != 0 com stdout E stderr vazios, ou timeout | a feature permanece `awaiting_gates`; o gate é re-rodado |
+
+Um `gate.harness_error` **não** re-executa o bloco já commitado: a feature
+continua em `awaiting_gates`, o comando é re-rodado automaticamente até
+`--gate-harness-retries` (default 2) e, só então, o supervisor registra
+`recovery_required` com `reason=gate_harness_error_limit`. O systematic
+debugging de um erro de harness deve mirar o **comando** de gate, não a
+feature. Isso evita o cenário registrado no INC-2026-0007, em que um defeito
+do script de revisão re-implementou a feature várias vezes.
+
+Um comando de gate **deve produzir evidência**: com `exit 0` e stdout vazio,
+o resultado é tratado como defeito de harness. Para validar o comando antes de
+uma sessão real, use o self-test:
+
+```bash
+bin/ralph-control gate --test <gate>
+```
+
 ## 7. Memória episódica, retenção e índices
 
 A memória de engenharia é uma camada pós-entrega e não substitui os cinco

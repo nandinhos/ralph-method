@@ -5,6 +5,26 @@ português do Brasil. A versão no arquivo `VERSION` identifica o bundle em
 desenvolvimento; uma versão só é considerada publicada após commit, tag
 anotada e promoção documentada.
 
+## 0.9.2 — em preparação
+
+### Recuperação de gate distinta (FEATURE-097)
+
+- `ralph-control` classifica o resultado do comando de gate em três estados:
+  `gate.passed`, `gate.rejected` (evidência mostra falha da feature →
+  `debugging_required`) e `gate.harness_error` (comando sem evidência — stdout
+  e stderr vazios — ou timeout → a feature permanece `awaiting_gates`);
+- um `gate_harness_error` não re-executa o bloco já commitado: o comando é
+  re-rodado automaticamente até `--gate-harness-retries` (default 2) e, só
+  então, o supervisor registra `recovery_required` com
+  `reason=gate_harness_error_limit`;
+- comando de gate com `exit 0` e stdout vazio é tratado como defeito de
+  harness (evidência mínima obrigatória);
+- novo self-test `ralph-control gate-test --gate <gate>`: valida o comando
+  configurado em modo fixture (contexto por env, evidência, exit code) sem
+  tocar no workflow/ledger — teria pego o INC-2026-0007 em segundos;
+- `AGENT_GUIDE` documenta a classificação (seção 6.2) e o self-test;
+- regressão dedicada `scripts/test-ralph-gate-recovery.sh`.
+
 ## 0.9.1 — publicada em 2026-08-15
 
 ### Gates como contrato nativo (FEATURE-096)
