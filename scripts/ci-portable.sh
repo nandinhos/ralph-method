@@ -23,6 +23,9 @@ checks=(
   scripts/test-ralph.sh
   scripts/test-opencode-policy.sh
   scripts/test-opencode-adapter.sh
+  scripts/test-agy-adapter.sh
+  scripts/test-agy-loop.sh
+  scripts/test-agy-control.sh
 )
 
 for check in "${checks[@]}"; do

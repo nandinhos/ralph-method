@@ -87,8 +87,9 @@ sem progresso ou surgir qualquer condição insegura, o estado final é
 - failover distribuído entre máquinas ou checkouts diferentes.
 
 Claude CLI permanece compatível com a seam, mas só entra em uma cadeia após
-fixture, prova de campo e decisão própria. Hermes e agy continuam fora do
-escopo operacional desta linha.
+fixture, prova de campo e decisão própria. Hermes e `agy` continuam fora da
+cadeia de failover proposta; o adapter executável `agy` da FEATURE-095 não
+altera essa decisão.
 
 ## 5. Baseline auditado
 

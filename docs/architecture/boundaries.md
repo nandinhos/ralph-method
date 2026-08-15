@@ -54,8 +54,17 @@ tem timeout e não publica a saída bruta. `functional` certifica a CLI;
 | Codex | runner nativo selecionável após prontidão | fechado e coberto pela regressão do loop |
 | Claude CLI | runner nativo selecionável após prontidão | fechado e coberto pela regressão do loop |
 | OpenCode | adapter de saída + runner selecionável após prontidão | fechado; fixture real, política read-only, saída normalizada, prova de processo e campo verde |
-| Hermes/agy | delegação filha registrada no trace após diagnóstico suportado | backlog, prioridade nenhuma |
+| agy | adapter `preflight|run|version`, resultado 1.1 e verify allowlisted | aprovado para implementação; Linux + `bwrap` são pré-requisitos fail-closed |
+| Hermes | delegação filha registrada no trace após diagnóstico suportado | backlog, prioridade nenhuma |
 | instalação remota | manifesto local com hashes | necessidade de vários hosts compartilhando estado |
+
+### Seam de adapters executáveis
+
+| Forma atual barata | Boundary definida | Gatilho de extração |
+|---|---|---|
+| dispatch local para `adapters/<runner>/runner.sh` | argumentos comuns + `runner-result`; parser/policy ficam no adapter | terceiro transporte não redutível a sessão headless ou três adapters exigindo nova operação comum |
+| verify `agy` em `bwrap` local | raiz vazia, mounts allowlisted e ambiente limpo | sandbox preventivo upstream ou equivalente comprovado em outro SO |
+| limites 256 KiB/5 MiB/10k/1800s | adapter falha antes/depois do processo sem truncar como sucesso | 1% das sessões atingir 80% de um limite em 30 dias |
 
 ### Seam proposta de continuidade entre runners
 

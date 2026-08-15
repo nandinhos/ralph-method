@@ -1,14 +1,15 @@
 # Guia operacional para agentes de IA — Ralph Method
 
-- guide_version: 1.6.0
+- guide_version: 1.7.0
 - method_version: 0.8.0
 - status: ativo
 - fonte_do_metodo: `VERSION`
 - contrato_de_feedback: `schemas/feedback-event.schema.json`
 
-Escopo da versão: Codex e Claude CLI operam pelos runners nativos do loop;
-OpenCode opera pelo adapter executável certificado em campo. Hermes e agy são
-somente detecção passiva nesta linha e estão no backlog com prioridade nenhuma.
+Escopo deste checkout: Codex e Claude CLI operam pelos runners nativos do loop;
+OpenCode e `agy` operam por adapters executáveis. O verify `agy` exige Linux,
+`bwrap`, token OAuth local e agente workspace. Hermes permanece somente em
+detecção passiva e no backlog sem prioridade.
 
 Esta versão de manutenção consolida a portabilidade do CI em PHP 8.2, a
 supervisão sem namespace privilegiado e a documentação pós-promoção. Este
@@ -97,8 +98,9 @@ Leia o JSON completo:
 
 `--verify-providers` executa apenas probes seguros de prontidão; não envie uma
 mensagem generativa para testar o modelo. Codex e Claude CLI usam runners
-nativos; OpenCode exige modelo explícito e revisão read-only comprovada; Hermes
-e agy permanecem em readiness passiva nesta versão.
+nativos; OpenCode exige modelo explícito e revisão read-only comprovada; `agy`
+exige modelo explícito e isolamento Linux funcional para habilitar o adapter;
+Hermes permanece em readiness passiva.
 
 Se o plano não produzir runner elegível, não materialize configuração fictícia
 e não avance para `apply`. O retorno correto é `needs_review` com a causa.
@@ -491,6 +493,27 @@ um evento, e o resultado continua válido somente com sessão terminal, canário
 ausente, superfície de política preservada, marcador presente no JSONL e
 política revalidada.
 
+Para uma revisão `agy`, não gere proof externo. O adapter calcula o hash sobre
+o runner, parser, policy e agente instalados e exige o token OAuth fora do
+projeto. O preflight falha antes da geração se Linux, `bwrap`, token ou agente
+`ralph-review` estiverem ausentes. Durante o verify, somente o projeto,
+runtime mínimo e token são montados; `/tmp` e app-data são efêmeros, o ambiente
+é limpo e um `settings.json` controlado define
+`allowNonWorkspaceAccess=false` e nenhuma permissão de comando. O agente usa
+`commandExecutionPolicy: strict`, MCP desativado e `--mode plan` como defesas
+adicionais. Configure:
+
+```bash
+RALPH_AGY_MODEL=gemini-3.7-flash-high
+RALPH_AGY_EFFORT=high
+RALPH_AGY_VERIFY_AGENT=ralph-review
+RALPH_VERIFY_MODEL=gemini-3.7-flash-high
+```
+
+Não grave o token em `.ralph/agy.env`; o caminho padrão é resolvido pela sessão
+local do `agy`, e `RALPH_AGY_TOKEN_FILE` serve somente para um caminho local
+alternativo fora de `PROJECT_ROOT`.
+
 ### 3.4 Prontidão de providers
 
 A existência de uma CLI não habilita seu adapter. O estado precisa avançar
@@ -524,7 +547,8 @@ chamada de modelo foi consumida ou concluída.
 `runner_supported` separa a certificação da sessão da existência do adapter de
 execução no Ralph. `adapter_enabled` só fica verdadeiro quando a CLI está
 functional e o runner correspondente já está implementado nesta versão.
-OpenCode usa `auth list` e `models`; Hermes identifica o provider selecionado
+OpenCode usa `auth list` e `models`; `agy` usa `models` e `agents`, depois
+comprova Linux, `bwrap` e token OAuth legível. Hermes identifica o provider selecionado
 no próprio `status` (ou respeita `RALPH_HERMES_PROVIDER`) e valida
 `auth status <provider>`. O status de outros providers listados pelo Hermes
 não reprova o provider selecionado.
@@ -542,8 +566,7 @@ Somente uma CLI `functional` com `runner_supported=true` pode definir
 `auto`, a instalação do núcleo pode continuar em
 `orchestration.mode=needs_review`, sem fallback silencioso. Hermes tenta
 identificar automaticamente o provider selecionado e aceita
-`RALPH_HERMES_PROVIDER` como override; agy permanece bloqueado até existir um
-diagnóstico seguro registrado. Quando não houver runner apto, o plano deixa
+`RALPH_HERMES_PROVIDER` como override. Quando não houver runner apto, o plano deixa
 `selection.selected_provider` e `orchestration.primary_runner` como `null`; não
 materializa um executor fantasma.
 
@@ -558,8 +581,9 @@ modelo ou por uma mensagem textual do CLI; use os campos do plano.
 | `selected_provider=codex` e `adapter_enabled=true` | runner nativo Codex; perfil `.ralph/codex.env` | aplicar e executar pelo loop |
 | `selected_provider=claude` e `adapter_enabled=true` | runner nativo Claude CLI; perfil `.ralph/claude.env` | aplicar e executar pelo loop |
 | `selected_provider=opencode` e `adapter_enabled=true` | adapter OpenCode; preencher modelo/agente e prova read-only | aplicar, configurar e validar antes da revisão |
+| `selected_provider=agy` e `adapter_enabled=true` | adapter `agy`; preencher modelo/effort e preservar token fora do projeto | aplicar e validar preflight impl/verify antes do loop |
 | `selected_provider=null` ou `mode=needs_review` | nenhum executor autorizado | não executar; corrigir prontidão ou solicitar decisão |
-| Hermes ou agy detectado sem adapter | readiness apenas | não promover; registrar ou consultar backlog |
+| Hermes detectado sem adapter | readiness apenas | não promover; registrar ou consultar backlog |
 
 O procedimento padrão é:
 
@@ -595,7 +619,10 @@ salve credenciais ou a saída integral em prompt, ledger ou documentação.
   `RALPH_OPENCODE_MODEL`, `RALPH_OPENCODE_AGENT` e, para technical review,
   gere `RALPH_OPENCODE_VERIFY_POLICY_PROOF` fora da raiz mutável. A ausência
   da prova ou do agente read-only bloqueia a chamada.
-- **Hermes/agy:** não configure execução nesta versão. A presença da CLI não
+- **agy:** use `.ralph/agy.env`, preencha `RALPH_AGY_MODEL` e, se necessário,
+  `RALPH_VERIFY_MODEL`. Não copie credenciais. O verify só pode avançar após
+  `adapters/agy/runner.sh preflight --mode verify --repo-root "$PROJECT_ROOT"`.
+- **Hermes:** não configure execução nesta versão. A presença da CLI não
   implica adapter; o agente deve manter `needs_review` ou seguir o backlog.
 
 Após o `apply`, confira `.ralph/method.json`, `.ralph/providers.json` e o

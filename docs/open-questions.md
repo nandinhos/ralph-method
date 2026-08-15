@@ -6,8 +6,8 @@
 | O evento terminal será sempre `step_finish`? | OpenCode pode emitir vários `step_finish` na mesma sessão; o parser exige pelo menos um e rejeita sessões divergentes | Ralph Method | quando uma versão nova do OpenCode for certificada |
 | O transporte do prompt será por argumento? | `--file` foi comprovado; argumento permanece fora do contrato inicial | Ralph Method | se uma versão futura retirar `--file` |
 | Probe de geração real deve existir? | não nesta versão; probe seguro explícito usa diagnóstico local e não envia prompt | Ralph Method | política de custo/consentimento antes de uma versão futura |
+| Como oferecer verify `agy` fora de Linux? | manter adapter degradado fora de Linux; não substituir `bwrap` por confiança em `--mode plan` | Ralph Method | sandbox externo equivalente comprovado em campo |
 
-Hermes e agy foram deliberadamente retirados das questões abertas e adiados
-sem prioridade. A decisão está em
-[`docs/adr/0007-escopo-fechado-de-harnesses.md`](adr/0007-escopo-fechado-de-harnesses.md)
-e os itens estão em [`docs/backlog.md`](backlog.md).
+Hermes permanece adiado sem prioridade. O `agy` foi reaberto pelo
+[`ADR-0017`](adr/0017-reabertura-agy-e-seam-comum-de-adapters.md); o suporte
+multiplataforma continua explicitamente aberto sem enfraquecer o isolamento.

@@ -10,8 +10,8 @@
     "terminal_event", "error_summary", "artifact_refs"
   ],
   "properties": {
-    "schema_version": {"const": "1.0.0"},
-    "runner": {"const": "opencode"},
+    "schema_version": {"enum": ["1.0.0", "1.1.0"]},
+    "runner": {"enum": ["opencode", "agy"]},
     "runner_version": {"type": "string", "minLength": 1},
     "provider": {"type": ["string", "null"]},
     "requested_model": {"type": ["string", "null"]},
@@ -46,15 +46,36 @@
   },
   "allOf": [
     {
+      "if": {"properties": {"schema_version": {"const": "1.0.0"}}},
+      "then": {"properties": {"runner": {"const": "opencode"}}}
+    },
+    {
+      "if": {"properties": {"schema_version": {"const": "1.1.0"}}},
+      "then": {"properties": {"runner": {"const": "agy"}}}
+    },
+    {
       "if": {"properties": {"status": {"const": "completed"}}},
       "then": {
         "required": ["session_id", "terminal_event"],
         "properties": {
           "session_id": {"type": "string", "minLength": 1},
-          "terminal_event": {"const": "step_finish"},
           "events_seen": {"type": "integer", "minimum": 1}
         }
       }
+    },
+    {
+      "if": {
+        "properties": {"runner": {"const": "opencode"}, "status": {"const": "completed"}},
+        "required": ["runner", "status"]
+      },
+      "then": {"properties": {"terminal_event": {"const": "step_finish"}}}
+    },
+    {
+      "if": {
+        "properties": {"runner": {"const": "agy"}, "status": {"const": "completed"}},
+        "required": ["runner", "status"]
+      },
+      "then": {"properties": {"terminal_event": {"const": "result"}}}
     },
     {
       "if": {"properties": {"execution_mode": {"const": "verify"}}},

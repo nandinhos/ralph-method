@@ -2,7 +2,9 @@
 
 ## Estado atual
 
-A versão atual é `0.8.0`.
+A versão publicada atual é `0.8.0`. Este checkout contém o candidato da
+FEATURE-095 para o adapter `agy`; ele não foi promovido, tagueado nem incluído
+em failover.
 
 A versão `0.4.0` foi a primeira promoção para `main`. A versão `0.6.1` foi a
 release de manutenção baseada no merge `ba98dfa` em `main`, recebeu a tag
@@ -11,7 +13,7 @@ release atual, promovida para `main` após a comprovação da base funcional em
 [`docs/reports/0016-promocao-v0-6-0.md`](reports/0016-promocao-v0-6-0.md).
 O fechamento da manutenção está em
 [`docs/reports/0017-release-manutencao-v0-6-1.md`](reports/0017-release-manutencao-v0-6-1.md).
-O guia operacional para agentes está na `guide_version: 1.6.0` e agora
+O guia operacional para agentes está na `guide_version: 1.7.0` e agora
 descreve o ciclo completo de dry-run, instalação, execução, monitoramento,
 recuperação, memória, desinstalação e diagnóstico pós-atualização de MCP. A
 prática foi motivada pelo [`ADR-0014`](adr/0014-diagnostico-mcp-pos-atualizacao-de-harness.md)
@@ -66,10 +68,12 @@ base `0.4.0` mantém a instalação local reversível, doctor, ownership por has
 e canal de feedback para o orquestrador externo; as evoluções `0.5.0` e `0.6.0`
 adicionam hardening do control plane e memória de engenharia versionada.
 
-O escopo operacional está fechado em três harnesses: Codex e Claude CLI pelos
-runners nativos do loop, e OpenCode pelo adapter executável certificado em
-campo. Hermes e agy permanecem somente na detecção passiva compatível e estão
-registrados em [`docs/backlog.md`](backlog.md) com prioridade nenhuma.
+O escopo operacional deste checkout inclui quatro harnesses: Codex e Claude CLI
+pelos runners nativos do loop, OpenCode pelo adapter certificado e `agy` pelo
+adapter candidato em `adapters/agy/`. O verify `agy` é fail-closed e limitado a
+Linux com `bwrap` allowlisted e file access restrito ao workspace; Hermes
+permanece somente na detecção passiva e
+no [`docs/backlog.md`](backlog.md).
 
 A v0.7.0 adicionou uma camada de detecção somente leitura para identificar
 Ralph externo antes do `apply`. A v0.8.0 transforma a evolução em uma operação
@@ -146,9 +150,11 @@ no [`Relatório 0023`](reports/0023-revalidacao-regressao-release-detector-legad
 | Detecção de instalação | `schemas/ralph-installation-detection.schema.json` | Ralph Method gerenciado, Ralph externo ou origem ambígua |
 | Evolução | `schemas/ralph-evolution.schema.json`, `.ralph/evolutions/` | estado persistente, hashes, drift e rollback sem importar estado legado |
 | Adapter OpenCode | `adapters/opencode/` | preflight, execução JSONL, parser fail-closed e resultado normalizado |
+| Adapter agy | `adapters/agy/` | preflight, `stream-json`, parser/policy fail-closed e verify isolado por `bwrap` |
 | Runners Codex/Claude | `scripts/ralph.sh` | integração nativa de execução e revisão do loop |
-| Resultado de runner | `schemas/runner-result.schema.json` | contrato sanitizado de sessão, modelo, terminal e fallback |
+| Resultado de runner | `schemas/runner-result.schema.json` | OpenCode 1.0/`step_finish` e `agy` 1.1/`result` sob contrato sanitizado |
 | Política read-only OpenCode | `adapters/opencode/policy.php`, `scripts/opencode-readonly-proof.sh` | fingerprint, prova externa e bloqueio fail-closed da revisão |
+| Política read-only agy | `adapters/agy/policy.php`, `.agents/agents/ralph-review/agent.md` | hash versionado, allowlist e isolamento preventivo Linux |
 | Guia de agentes | `docs/AGENT_GUIDE.md` | operação, comunicação e ciclo de vida |
 
 A matriz completa de componentes, responsabilidades e limites está em
@@ -176,9 +182,11 @@ O loop herdado do `bc-harness` possui execução Codex e Claude. Nesta versão,
 provider pode ser certificado como `functional` quando `auth_status` é
 `authenticated` e `health_status` é `healthy`. `adapter_enabled` exige também
 `runner_supported=true`. OpenCode é certificado com `auth list` + `models`,
-JSONL, política read-only e teste de campo. Hermes e agy podem ser detectados
-de modo seguro, mas não possuem adapter de execução nesta linha e não entram
-na seleção como fallback. Nenhum probe inicia geração. Quando nenhum runner
+JSONL e prova read-only externa. `agy` usa `models` +
+`--add-dir <repo-root> agents` como probes não generativos, exige exatamente
+`ralph-review` e só habilita o adapter com Linux, `bwrap` operacional e token
+OAuth legível; sua prova real usa isolamento allowlisted. Hermes continua sem
+adapter. Nenhum provider entra como fallback. Nenhum probe inicia geração. Quando nenhum runner
 está disponível, `auto` mantém o plano em `needs_review` sem materializar
 `codex` ou outro executor fictício.
 
@@ -190,8 +198,10 @@ Os checks portáteis verdes são `scripts/check-shell.sh`,
 `scripts/test-provider-readiness.sh`, `scripts/test-multiprovider.sh`,
 `scripts/test-ralph-method.sh`, `scripts/test-ralph-knowledge.sh` e
 `scripts/test-ralph.sh`, `scripts/test-ralph-metrics.sh`, além de `scripts/test-opencode-policy.sh`,
-`scripts/test-opencode-adapter.sh`, `scripts/test-opencode-adversarial.sh` e da prova real
-`scripts/test-opencode-field.sh`. Eles cobrem ownership, conflito, idempotência,
+`scripts/test-opencode-adapter.sh`, `scripts/test-opencode-adversarial.sh`,
+`scripts/test-agy-adapter.sh`, `scripts/test-agy-loop.sh` e
+`scripts/test-agy-control.sh`. As provas reais explícitas são
+`scripts/test-opencode-field.sh` e `scripts/test-agy-field.sh`. Eles cobrem ownership, conflito, idempotência,
 remoção segura, eventos, prontidão de providers, progresso e a regressão do
 loop, capability adversarial, parsing JSONL, política read-only e execução
 complexa por OpenCode com implementação e revisão preservadas no trace.
@@ -215,9 +225,10 @@ OpenCode terminaram verdes no relatório
 Ela prova que a seleção `auto` escolhe somente providers funcionais com
 `runner_supported=true`, mantém a ordem Codex → Claude CLI → OpenCode, não
 faz fallback silencioso, bloqueia `apply` explícito não autenticado e mantém
-`fallback_policy=none`. A mesma prova registra no `ralph-trace` identidade
-exata, modelo e sessão dos três harnesses. Hermes e agy não participam da
-seleção executável e continuam no backlog sem prioridade.
+`fallback_policy=none`. A mesma prova histórica registra no `ralph-trace`
+identidade exata, modelo e sessão dos três harnesses então ativos. A regressão
+atual inclui `agy` como quarto runner sem mudar a política de fallback; Hermes
+continua no backlog sem prioridade.
 
 Os smoke tests reais dos CLIs também foram comprovados fora do loop: Codex
 retornou exit `0`, JSONL válido, thread e marcador determinístico; Claude

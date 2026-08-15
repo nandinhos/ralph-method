@@ -30,9 +30,22 @@ SOURCE="$TMP/method-source"
 PROJECT="$TMP/projeto-independente"
 mkdir -p "$SOURCE" "$PROJECT"
 
-# A instalação deve funcionar a partir de um bundle Git limpo, sem o checkout
-# de desenvolvimento e sem depender de outro projeto.
+# A instalação deve funcionar a partir de um bundle Git sem metadados, sem o
+# checkout de desenvolvimento e sem depender de outro projeto. A base vem de
+# HEAD; o overlay inclui somente mudanças versionáveis do checkout para que o
+# teste exercite a fonte atual antes do commit. Em árvore limpa, o overlay é
+# vazio e o bundle equivale ao archive.
 git -C "$ROOT" archive --format=tar HEAD | tar -x -C "$SOURCE"
+while IFS= read -r -d '' deleted; do
+  rm -f -- "$SOURCE/$deleted"
+done < <(git -C "$ROOT" diff --name-only -z --diff-filter=D HEAD)
+(
+  cd "$ROOT"
+  {
+    git diff --name-only -z --diff-filter=ACMRTUXB HEAD
+    git ls-files --others --exclude-standard -z
+  } | tar --null -T - -cf -
+) | tar -x -C "$SOURCE"
 EXPECTED_VERSION="$(tr -d '[:space:]' < "$SOURCE/VERSION")"
 
 # Excluímos testes/checkers: eles podem citar o projeto de origem como parte
@@ -69,11 +82,14 @@ assert_file "$PROJECT/bin/ralph-control"
 assert_file "$PROJECT/bin/ralph-init"
 assert_file "$PROJECT/bin/ralph-metrics"
 assert_file "$PROJECT/adapters/opencode/runner.sh"
+assert_file "$PROJECT/adapters/agy/runner.sh"
+assert_file "$PROJECT/.agents/agents/ralph-review/agent.md"
 assert_file "$PROJECT/schemas/knowledge-candidate.schema.json"
 assert_file "$PROJECT/scripts/ralph.sh"
 assert_file "$PROJECT/.ralph/codex.env"
 assert_file "$PROJECT/.ralph/claude.env"
 assert_file "$PROJECT/.ralph/opencode.env"
+assert_file "$PROJECT/.ralph/agy.env"
 
 doctor="$(RALPH_METHOD_SOURCE="$SOURCE" "$SOURCE/bin/ralph-init" doctor --project "$PROJECT")"
 DOCTOR_JSON="$doctor" php -r '
@@ -85,6 +101,8 @@ RALPH_METHOD_SOURCE="$SOURCE" "$SOURCE/bin/ralph-init" uninstall --project "$PRO
 assert_not_exists "$PROJECT/.ralph/install-manifest.json"
 assert_not_exists "$PROJECT/bin/ralph-control"
 assert_not_exists "$PROJECT/adapters/opencode/runner.sh"
+assert_not_exists "$PROJECT/adapters/agy/runner.sh"
+assert_not_exists "$PROJECT/.agents/agents/ralph-review/agent.md"
 assert_file "$PROJECT/README.md"
 
 # O relatório de uninstall é uma evidência e o lock é um controle local

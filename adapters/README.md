@@ -1,8 +1,7 @@
 # Integrações condicionais de harnesses e providers
 
-A release `0.4.0` fecha o escopo operacional em três harnesses. A tabela
-abaixo distingue o que já é executável do que é apenas uma integração nativa
-ou detecção passiva:
+O Ralph Method possui quatro harnesses executáveis nesta linha. A tabela
+abaixo distingue runners nativos, adapters dedicados e detecção passiva:
 
 | Harness | Implementação atual | Estado |
 |---|---|---|
@@ -10,11 +9,11 @@ ou detecção passiva:
 | Claude CLI | runner nativo em `scripts/ralph.sh` | certificado no loop |
 | OpenCode | adapter explícito em `adapters/opencode/` | certificado em campo |
 | Hermes | readiness passiva | backlog, prioridade nenhuma |
-| agy | readiness passiva quando detectável | backlog, prioridade nenhuma |
+| agy | adapter explícito em `adapters/agy/` | candidato funcional; verify Linux allowlisted |
 
-“Três adapters” é uma abreviação operacional. No contrato técnico, somente
-OpenCode possui hoje um diretório de adapter dedicado; Codex e Claude são
-runners nativos do loop e passam pelo mesmo contrato de trace e gates.
+No contrato técnico, OpenCode e `agy` possuem diretórios de adapter dedicados;
+Codex e Claude são runners nativos do loop. Todos passam pelo mesmo contrato de
+trace e gates, sem receber autoridade do controlador.
 
 Um adapter só pode ser habilitado quando o instalador registrar o provider
 como `functional` e com `runner_supported=true` em `.ralph/providers.json`. A
@@ -56,3 +55,18 @@ O primeiro adapter executável está em `adapters/opencode/`. Ele usa
 `schemas/runner-result.schema.json`. A execução deve ocorrer pelo
 `ralph-control`; chamar o runner isoladamente é apenas um teste de contrato e
 não libera feature nem gate.
+
+## Adapter agy
+
+O adapter em `adapters/agy/` implementa a mesma seam
+`preflight|run|version`, usa `agy --output-format stream-json` e publica
+`runner-result 1.1.0` com terminal `result`. Implementação usa permissões de
+mutação explícitas; verificação exige Linux, `bwrap`, agente `ralph-review`,
+app-data efêmero e montagem read-only do token OAuth e de `repo-root`.
+
+`--mode plan` é somente defesa em profundidade: a fronteira preventiva é o
+namespace allowlisted. O parser reprova ferramentas fora da allowlist,
+divergência de modelo, múltiplas conversas ou terminais e qualquer política
+incompleta. A prova direta isolada pode ser repetida com
+`bash scripts/test-agy-field.sh`; ela exige sessão local autenticada e não faz
+parte da CI sem credenciais.

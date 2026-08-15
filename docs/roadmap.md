@@ -41,9 +41,10 @@ O desenho detalhado, os riscos e os critérios estão em
 O plano histórico da engine OpenCode permanece em
 [`architecture/opencode-engine-plan.md`](architecture/opencode-engine-plan.md).
 
-O escopo ativo termina nos três harnesses Codex, Claude CLI e OpenCode. Hermes
-e agy não são prioridades desta linha; seus itens estão formalmente adiados em
-[`backlog.md`](backlog.md), com prioridade nenhuma.
+O escopo ativo inclui Codex, Claude CLI, OpenCode e o candidato `agy` reaberto
+na FEATURE-095. Hermes permanece sem prioridade e formalmente adiado em
+[`backlog.md`](backlog.md). A entrada de `agy` não habilita o failover proposto
+na FEATURE-094.
 
 ## Evolução planejada — continuidade e failover controlado entre providers
 
@@ -157,7 +158,7 @@ um gatilho mensurável.
 - [x] fixtures offline de OpenCode e Hermes com bloqueio de geração;
 - [x] adapter de execução OpenCode entregue na v0.4.0;
 - [ ] adapter de execução Hermes — adiado para `BL-0001`, prioridade nenhuma;
-- [ ] adapter de execução agy — adiado para `BL-0002`, prioridade nenhuma.
+- [x] adapter de execução agy — adiamento supersedido pela FEATURE-095 e pelo ADR-0017; candidato entregue.
 
 ## 0.1.0 — extração do núcleo
 
@@ -186,5 +187,6 @@ um gatilho mensurável.
 - [x] runner nativo Codex e fixture do loop;
 - [x] runner nativo Claude CLI e fixture do loop;
 - [x] adapter de execução OpenCode (entregue na v0.4.0);
-- [ ] Hermes/agy como delegações filhas — backlog sem prioridade;
-- [x] regressão de execução multiprovider dos três harnesses fechados; relatório `0009`.
+- [ ] Hermes como delegação filha — backlog sem prioridade;
+- [x] adapter `agy` como delegação filha sob a seam comum;
+- [x] regressão de execução multiprovider de Codex, Claude, OpenCode e `agy`;

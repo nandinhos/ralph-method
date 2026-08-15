@@ -25,12 +25,17 @@ bin/ralph-control knowledge curated|rejected|review-required|skipped --workflow 
 | Claude CLI | runner nativo de `scripts/ralph.sh` | suportado e coberto pelo loop |
 | OpenCode | `adapters/opencode/runner.sh` + parser/policy | adapter executável certificado |
 | Hermes | readiness passiva | backlog, prioridade nenhuma |
-| agy | readiness passiva quando detectável | backlog, prioridade nenhuma |
+| agy | `adapters/agy/runner.sh` + parser/policy | adapter aprovado; verify Linux allowlisted |
 
-Codex e Claude não possuem diretórios de adapter dedicados nesta versão; o
-termo adapter é reservado tecnicamente ao normalizador OpenCode. Todos os três
-harnesses fechados compartilham trace, feedback, gates e autoridade do
-`ralph-control`.
+Codex e Claude não possuem diretórios de adapter dedicados. OpenCode e `agy`
+implementam a interface `preflight|run|version` e publicam resultado normalizado;
+classificação e metadata são internas ao `run`. Todos compartilham trace,
+feedback, gates e autoridade do `ralph-control`.
+
+No caminho controlado, adapters devem produzir exatamente uma delegação `impl`
+e uma `verify` bem-sucedidas por tentativa. O loop fixa em memória a assinatura
+das superfícies de verificação antes de `impl` e bloqueia o gate 3 se runner,
+parser, policy, agente ou o próprio loop mudarem durante a sessão.
 
 ## Fluxo agnóstico de identificação e configuração
 
@@ -56,13 +61,13 @@ plan --provider auto --verify-providers
 | `orchestration.mode=needs_review` | nenhum executor autorizado | bloquear até decisão/correção |
 | `fallback_policy=none` | não trocar executor silenciosamente | registrar qualquer fallback explicitamente |
 
-O instalador gera perfis locais para os três harnesses fechados. Codex e
-Claude CLI apontam para o runner nativo do loop; OpenCode aponta para seu
-adapter e exige modelo/agente/prova read-only quando houver revisão. Hermes e
-agy podem ser detectados, mas não atravessam a fronteira de execução.
+O instalador gera perfis locais para Codex, Claude, OpenCode e `agy`. OpenCode
+exige modelo/agente/prova externa; `agy` exige modelo/effort e, no verify,
+Linux, `bwrap`, token local e agente workspace. Hermes não atravessa a
+fronteira de execução.
 
-O cenário completo, incluindo a prova dos três runners, está em
-[`reports/0009-regressao-multiprovider.md`](../reports/0009-regressao-multiprovider.md).
+O cenário atual, incluindo a prova dos quatro runners, está em
+[`reports/0024-adapter-agy-funcional-2026-08-14.md`](../reports/0024-adapter-agy-funcional-2026-08-14.md).
 
 ## Interface proposta de failover controlado
 
@@ -90,7 +95,7 @@ deve ser atualizado junto com `VERSION`.
 `plan` é somente leitura. `apply` instala apenas os arquivos listados no
 manifesto, com cópia atômica. `uninstall` sem `--apply` apenas calcula o plano;
 com `--apply`, remove somente arquivos ainda iguais ao hash instalado e
-preserva arquivos modificados pelo usuário. Os perfis locais de Codex, Claude e OpenCode
+preserva arquivos modificados pelo usuário. Os perfis locais de Codex, Claude, OpenCode e `agy`
 também são gerados com `RALPH_BIN=scripts/ralph.sh` e entram no ownership. O
 relatório fica em
 `.ralph/uninstall-report.json`. O histórico operacional (`.git/ralph-control`),
@@ -286,6 +291,15 @@ O adapter OpenCode também exige `runner-result.schema.json`, uma única sessão
 pelo menos um evento terminal `step_finish`; múltiplos `step_finish` na mesma
 sessão são válidos. Falta de evidência de fallback permanece como
 `fallback_used=null` e `fallback_status=unknown`.
+
+O `agy` publica `schema_version=1.1.0`, exige exatamente um `init`, uma
+`conversation_id`, modelo observado igual ao solicitado e um `result` final.
+O JSONL persistido é uma projeção sem prompt, resposta, paths, parâmetros,
+output ou usage. No verify, somente `view_file`, `list_dir`, `grep_search` e
+`find_by_name` são aceitos, com schemas de parâmetros fechados e paths dentro
+de `repo-root`. O `settings.json` efêmero desabilita acesso fora do workspace;
+o parser pode conservar somente classificações opacas como
+`outside_workspace/denied` para evidência da fronteira.
 
 No modo de revisão, o resultado também deve conter `permission_policy_hash`,
 `permission_policy_status=verified` e `verification_agent`. O resultado

@@ -12,8 +12,8 @@ gates comprovam e o controlador decide.
 - systematic debugging read-only;
 - handoff e documentos numerados;
 - `ralph-trace` para a árvore de delegação entre executores;
-- integração controlada com Codex, Claude CLI e OpenCode;
-- readiness passiva compatível com Hermes e agy, sem adapter de execução nesta versão;
+- integração controlada com Codex, Claude CLI, OpenCode e Antigravity CLI (`agy`);
+- readiness passiva compatível com Hermes, ainda sem adapter de execução;
 - instalação exclusiva por projeto, sem estado global do produto;
 - desinstalação reversível por ownership e hashes;
 - feedback JSONL/stdout/callback para o orquestrador externo.
@@ -65,7 +65,8 @@ adapter correspondente.
 | Codex | runner nativo do `scripts/ralph.sh` | `functional` e `adapter_enabled=true` |
 | Claude CLI | runner nativo do `scripts/ralph.sh` | `functional` e `adapter_enabled=true` |
 | OpenCode | adapter em `adapters/opencode/` | modelo, agente e prova read-only antes da revisão |
-| Hermes ou agy | somente readiness passiva nesta versão | não iniciar execução; consultar backlog |
+| Antigravity CLI (`agy`) | adapter em `adapters/agy/` | modelo explícito; verify exige Linux, `bwrap`, token e agente workspace |
+| Hermes | somente readiness passiva | não iniciar execução; consultar backlog |
 
 O caminho recomendado é sempre `--provider auto --verify-providers`: o plano
 identifica os executáveis, certifica somente sessões autenticadas por probes
@@ -135,12 +136,11 @@ exclusiva do `ralph-control`.
 
 O caminho padrão é `native_codex`. O modo `auto` consulta todos os providers
 certificados, mas seleciona somente um runner com `adapter_enabled=true`, em
-ordem determinística e sem fallback silencioso. A versão `0.4.0` fecha o
-escopo em três harnesses: Codex e Claude CLI usam os runners nativos do loop;
-OpenCode usa o adapter executável em `adapters/opencode/`, certificado com
-JSONL, política read-only e teste de campo. Hermes e agy podem aparecer na
-detecção passiva, mas ficam no backlog com prioridade nenhuma e não habilitam
-execução.
+ordem determinística e sem fallback silencioso. Codex e Claude CLI usam os
+runners nativos do loop; OpenCode e `agy` usam a seam executável
+`preflight|run|version`. O verify `agy` é suportado nesta linha somente em
+Linux com `bwrap` allowlisted. Hermes pode aparecer na detecção passiva, mas
+permanece no backlog e não habilita execução.
 
 O `ralph-trace` diferencia identidade `exact`, `declared`, `observed`,
 `partial` e `unavailable`. Um provider que não expõe modelo efetivo não pode
@@ -165,9 +165,10 @@ para agentes de IA fazem parte da release.
 O Ralph Method está na versão publicada `0.8.0`, com memória episódica
 sanitizada, retenção explícita, índices de engenharia por categoria e tema,
 evolução externa com rollback e verificação de campo no OpenCode.
-O fechamento de escopo e as decisões de adiamento estão em
-[`docs/adr/0007-escopo-fechado-de-harnesses.md`](docs/adr/0007-escopo-fechado-de-harnesses.md)
-e [`docs/backlog.md`](docs/backlog.md).
+Este checkout contém também o candidato do adapter `agy`, reaberto pelo
+[`ADR-0017`](docs/adr/0017-reabertura-agy-e-seam-comum-de-adapters.md), sem
+alterar a versão publicada ou habilitar failover. O estado dos adiamentos está
+em [`docs/backlog.md`](docs/backlog.md).
 
 A versão atual é `0.8.0`. Ela adiciona evolução assistida com backup,
 isolamento, aceite e rollback condicional para Ralph externo, mantendo o

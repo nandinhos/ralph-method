@@ -22,7 +22,7 @@
 | lock de instalação | `.ralph/install.lock` | `ralph-init`, preservado para coordenação local |
 | feedback do loop | `.git/ralph-control/feedback/events.jsonl` | `ralph.sh` |
 | métricas derivadas | stdout de `bin/ralph-metrics` | consumidor do projeto/orquestrador, sem persistência implícita |
-| perfis de execução | `.ralph/codex.env`, `.ralph/claude.env` | instalador/usuário |
+| perfis de execução | `.ralph/codex.env`, `.ralph/claude.env`, `.ralph/opencode.env`, `.ralph/agy.env` | instalador/usuário; nunca contêm credenciais |
 
 ## Modelo proposto para failover controlado
 
@@ -69,6 +69,9 @@ não representa trabalho parcial ainda não staged.
   credenciais, tokens ou prompts.
 - `adapter_enabled` só pode ser verdadeiro quando `status` é `functional` e
   `runner_supported` é verdadeiro.
+- `runner-result` preserva duas variantes 1.x: OpenCode `1.0.0` com terminal
+  `step_finish` e `agy` `1.1.0` com terminal `result`; o controlador valida a
+  combinação e nunca converte uma versão na outra no ledger.
 - `functional` nesta versão significa autenticação confirmada e diagnóstico
   local não generativo aprovado para a CLI; não significa probe real de
   geração.

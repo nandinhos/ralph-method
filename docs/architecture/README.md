@@ -17,6 +17,14 @@ O Ralph Method é um framework local instalado dentro de um projeto-alvo. O
 - [provider-failover-continuity-plan.md](provider-failover-continuity-plan.md)
   — proposta de continuidade Codex → OpenCode por rate limit, com nova
   tentativa, fencing, cápsula sanitizada e circuit breakers.
+- [../prd/prd-adapter-agy.md](../prd/prd-adapter-agy.md) — requisitos da
+  reabertura do Antigravity CLI.
+- [../adr/0017-reabertura-agy-e-seam-comum-de-adapters.md](../adr/0017-reabertura-agy-e-seam-comum-de-adapters.md)
+  — seam comum e entrada do segundo adapter.
+- [../adr/0018-isolamento-allowlisted-do-verify-agy.md](../adr/0018-isolamento-allowlisted-do-verify-agy.md)
+  — isolamento preventivo do verify `agy`.
+- [../adr/0019-runner-result-v1-1-multiplo-adapter.md](../adr/0019-runner-result-v1-1-multiplo-adapter.md)
+  — compatibilidade entre resultados 1.0 e 1.1.
 - [../backlog.md](../backlog.md) — itens adiados sem prioridade;
 - [../adr/0007-escopo-fechado-de-harnesses.md](../adr/0007-escopo-fechado-de-harnesses.md)
   — decisão de escopo entre Codex, Claude CLI, OpenCode, Hermes e agy.
@@ -79,7 +87,9 @@ Ralph for instalado em outro projeto ou receber outro harness.
 | OpenCode | `scripts/opencode-readonly-proof.sh` | Gerar prova externa de revisão | Cria prova fora da raiz mutável; sua ausência bloqueia o runner de revisão. |
 | OpenCode | `.opencode/agents/ralph-review.md` | Definir agente read-only | Restringe a revisão independente; não pode implementar ou editar o checkout. |
 | Hermes | readiness em `bin/ralph-init` | Detectar sessão/provider passivamente | Nesta linha não possui adapter de execução e não pode ser fallback. |
-| agy | readiness passiva em `bin/ralph-init` | Detectar presença compatível | Nesta linha não possui probe/adapter executável e permanece bloqueado. |
+| Adapter comum | `scripts/ralph.sh` + `adapters/<runner>/runner.sh` | Despachar `preflight`, `run` e `version` | Não conhece flags do provider nem interpreta JSONL bruto. |
+| agy | `adapters/agy/` | Executar e normalizar Antigravity CLI | Impl pode mutar; verify exige isolamento allowlisted Linux e nunca grava ledger. |
+| agy | `.agents/agents/ralph-review/agent.md` | Restringir a revisão às ferramentas de leitura | É defesa em profundidade; a fronteira preventiva é `bwrap`. |
 
 ### Contratos versionados
 
@@ -90,7 +100,7 @@ Ralph for instalado em outro projeto ou receber outro harness.
 | Detecção de instalação | `schemas/ralph-installation-detection.schema.json` | Classificar Ralph Method e Ralph externo | Expõe sinais relativos e hashes sem conteúdo; não migra ou importa runtime desconhecido. |
 | Evolução | `schemas/ralph-evolution.schema.json`, `.ralph/evolutions/` | Controlar backup, isolamento e rollback | Registra estado `EVL-YYYYMMDD-NNNN`, hashes e drift; o modo `quarantine_only` não importa ledger, workflow, prompts ou credenciais. |
 | Readiness | `schemas/provider-readiness.schema.json` | Validar autenticação e capacidade | Separa `functional`, `runner_supported` e `adapter_enabled`; não prova geração real. |
-| Runner | `schemas/runner-result.schema.json` | Validar resultado normalizado | Garante identidade, sessão, evento terminal, fallback e modo impl/verify; não faz transição de estado. |
+| Runner | `schemas/runner-result.schema.json` | Validar resultado normalizado | Preserva OpenCode 1.0 e aceita `agy` 1.1 com terminais próprios; não faz transição de estado. |
 | Política read-only | `schemas/readonly-policy-proof.schema.json` | Validar prova externa | Garante fingerprint e status da política; não substitui a revisão independente. |
 
 ### Documentação, evidência e operação
@@ -117,7 +127,7 @@ Ralph for instalado em outro projeto ou receber outro harness.
 | Artefatos | `.git/ralph-control/artifacts/` | Guardar evidências de execução | Referenciado pelo ledger e protegido por hash; não deve conter segredos. |
 | Relatórios locais | `.git/ralph-control/reports/` | Armazenar projeções operacionais | Mantém relatórios do runtime sem transformar evento bruto em documentação curada. |
 | Instalação | `.ralph/method.json`, `.ralph/providers.json` | Descrever método e readiness instalados | São metadados locais e não substituem workflow, lease ou gates. |
-| Perfis | `.ralph/codex.env`, `.ralph/claude.env`, `.ralph/opencode.env` | Configurar runners por projeto | São gerados com ownership; credenciais não devem ser gravadas neles. |
+| Perfis | `.ralph/codex.env`, `.ralph/claude.env`, `.ralph/opencode.env`, `.ralph/agy.env` | Configurar runners por projeto | São gerados com ownership; credenciais não devem ser gravadas neles. |
 | Handoffs | `.ralph/handoffs/<feature_key>/` | Preservar entrega por feature | Contêm resumo, incidentes e evidências versionáveis; não contêm raciocínio privado. |
 
 ## Princípio central

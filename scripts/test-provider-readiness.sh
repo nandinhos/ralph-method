@@ -45,13 +45,14 @@ chmod +x "$fake_bin/opencode"
 printf '%s\n' '#!/usr/bin/env bash' 'case "$*" in' '  --version) printf "%s\\n" "fixture" ;;' '  "status") printf "%s\\n" "Provider: MiniMax" "Model: MiniMax-M3" "MiniMax          ✓ configured" "Other Provider   ✗ not logged in" ;;' '  "auth status MiniMax") printf "%s\\n" "minimax: logged in" ;;' '  *--print*|*exec*|*run*) exit 91 ;;' '  *) exit 2 ;;' 'esac' > "$fake_bin/hermes"
 chmod +x "$fake_bin/hermes"
 
-printf '%s\n' '#!/usr/bin/env bash' 'case "$1" in' '  --version) printf "%s\\n" "fixture" ;;' '  *--print*|*exec*|*run*) exit 91 ;;' '  *) exit 2 ;;' 'esac' > "$fake_bin/agy"
+printf '%s\n' '#!/usr/bin/env bash' 'case "$*" in' '  --version) printf "%s\\n" "1.1.13-fixture" ;;' '  models) [ "${FAKE_AGY_AUTH:-1}" = 1 ] && printf "%s\\n" "gemini-3.7-flash-high" || { printf "%s\\n" "authentication required"; exit 7; } ;;' '  *agents) [ "${FAKE_AGY_REVIEW_AGENT:-1}" = 1 ] && printf "%s\\n" "ralph-review" || printf "%s\\n" "outro-agente" ;;' '  *--print*|*exec*|*run*) exit 91 ;;' '  *) exit 2 ;;' 'esac' > "$fake_bin/agy"
 chmod +x "$fake_bin/agy"
+printf '%s\n' 'fixture-token' > "$TMP/agy-token"
 
 php_bin="$(command -v php || true)"
 [ -n "$php_bin" ] || fail 'PHP não está disponível no PATH do teste'
 php_runtime_path="$(dirname "$php_bin"):/usr/bin:/bin"
-common_env=(PATH="$fake_bin:$php_runtime_path" RALPH_METHOD_SOURCE="$ROOT" RALPH_HERMES_PROVIDER=)
+common_env=(PATH="$fake_bin:$php_runtime_path" RALPH_METHOD_SOURCE="$ROOT" RALPH_HERMES_PROVIDER= RALPH_AGY_TOKEN_FILE="$TMP/agy-token")
 
 without_verification="$(env "${common_env[@]}" "$ROOT/bin/ralph-init" plan --project "$project" --provider claude)"
 assert_json "$without_verification" '
@@ -123,7 +124,7 @@ apply_exit=0
 env "${common_env[@]}" FAKE_AUTH=0 "$ROOT/bin/ralph-init" apply --project "$project" --provider claude --verify-providers >/dev/null 2>&1 || apply_exit=$?
 [ "$apply_exit" -eq 3 ] || fail "provider não autenticado não bloqueou apply explícito"
 
-auto_blocked="$(env "${common_env[@]}" FAKE_CODEX_AUTH=0 FAKE_AUTH=0 FAKE_OPENCODE_AUTH=0 "$ROOT/bin/ralph-init" plan --project "$project" --provider auto --verify-providers)"
+auto_blocked="$(env "${common_env[@]}" FAKE_CODEX_AUTH=0 FAKE_AUTH=0 FAKE_OPENCODE_AUTH=0 FAKE_AGY_AUTH=0 "$ROOT/bin/ralph-init" plan --project "$project" --provider auto --verify-providers)"
 assert_json "$auto_blocked" '
     $plan = json_decode(getenv("JSON"), true, 512, JSON_THROW_ON_ERROR);
     exit(($plan["orchestration"]["mode"] ?? null) === "needs_review" && ($plan["orchestration"]["primary_runner"] ?? null) === null && ($plan["selection"]["selected_provider"] ?? null) === null && ($plan["selection"]["adapter_enabled"] ?? true) === false ? 0 : 1);
@@ -144,11 +145,31 @@ assert_json "$timed" '
     exit(($plan["detection"]["providers"]["claude"]["status"] ?? null) === "authentication_unknown" ? 0 : 1);
 '
 
-unsupported="$(env "${common_env[@]}" "$ROOT/bin/ralph-init" plan --project "$project" --provider agy --verify-providers)"
-assert_json "$unsupported" '
+agy_verified="$(env "${common_env[@]}" "$ROOT/bin/ralph-init" plan --project "$project" --provider agy --verify-providers)"
+assert_json "$agy_verified" '
     $plan = json_decode(getenv("JSON"), true, 512, JSON_THROW_ON_ERROR);
     $provider = $plan["detection"]["providers"]["agy"] ?? [];
-    exit(($provider["status"] ?? null) === "unsupported" && ($provider["adapter_enabled"] ?? true) === false ? 0 : 1);
+    exit(($provider["auth_status"] ?? null) === "authenticated"
+        && ($provider["health_status"] ?? null) === "healthy"
+        && ($provider["status"] ?? null) === "functional"
+        && ($provider["runner_supported"] ?? false) === true
+        && ($provider["adapter_enabled"] ?? false) === true ? 0 : 1);
+'
+
+agy_without_review_agent="$(env "${common_env[@]}" FAKE_AGY_REVIEW_AGENT=0 "$ROOT/bin/ralph-init" plan --project "$project" --provider agy --verify-providers)"
+assert_json "$agy_without_review_agent" '
+    $plan = json_decode(getenv("JSON"), true, 512, JSON_THROW_ON_ERROR);
+    $provider = $plan["detection"]["providers"]["agy"] ?? [];
+    exit(($provider["health_status"] ?? null) === "unhealthy"
+        && ($provider["status"] ?? null) === "degraded"
+        && ($provider["adapter_enabled"] ?? true) === false ? 0 : 1);
+'
+
+agy_without_isolation="$(env "${common_env[@]}" RALPH_AGY_TOKEN_FILE="$TMP/missing-token" "$ROOT/bin/ralph-init" plan --project "$project" --provider agy --verify-providers)"
+assert_json "$agy_without_isolation" '
+    $plan = json_decode(getenv("JSON"), true, 512, JSON_THROW_ON_ERROR);
+    $provider = $plan["detection"]["providers"]["agy"] ?? [];
+    exit(($provider["status"] ?? null) === "degraded" && ($provider["adapter_enabled"] ?? true) === false ? 0 : 1);
 '
 
 printf 'OK: prontidão de provider, probe seguro, sanitização e bloqueio condicional passaram.\n'

@@ -617,7 +617,7 @@ function runnerResults(array $before, array $recorded, string $workflowId, strin
         if (($before[$path] ?? null) === $hash) {
             continue;
         }
-        if (! is_array($result) || ($result['runner'] ?? null) !== 'opencode') {
+        if (! is_array($result) || ! in_array($result['runner'] ?? null, ['opencode', 'agy'], true)) {
             continue;
         }
         if (($result['workflow_id'] ?? null) !== $workflowId
@@ -665,13 +665,19 @@ function normativeRunnerResults(array $entries): array
 function validateRunnerPolicyEvidence(array $result): void
 {
     global $root, $activeVerificationProof;
+    $runner = $result['runner'] ?? null;
     $agent = $result['verification_agent'] ?? null;
-    $proof = is_string($activeVerificationProof) && $activeVerificationProof !== ''
-        ? $activeVerificationProof
-        : getenv('RALPH_OPENCODE_VERIFY_POLICY_PROOF');
+    if (! in_array($runner, ['opencode', 'agy'], true)) {
+        fail('resultado verify com runner sem checker de política');
+    }
+    $proof = $runner === 'opencode'
+        ? (is_string($activeVerificationProof) && $activeVerificationProof !== ''
+            ? $activeVerificationProof
+            : getenv('RALPH_OPENCODE_VERIFY_POLICY_PROOF'))
+        : null;
     $checkerCandidates = [
-        $root.'/adapters/opencode/policy.php',
-        dirname(__DIR__).'/adapters/opencode/policy.php',
+        $root.'/adapters/'.$runner.'/policy.php',
+        dirname(__DIR__).'/adapters/'.$runner.'/policy.php',
     ];
     $checker = null;
     foreach ($checkerCandidates as $candidate) {
@@ -680,17 +686,22 @@ function validateRunnerPolicyEvidence(array $result): void
             break;
         }
     }
-    if (! is_string($agent) || $agent === '' || ! is_string($proof) || $proof === '' || ! is_file($checker)) {
-        fail('resultado verify sem agente, prova externa ou checker de política');
+    if (! is_string($agent) || $agent === '' || ! is_file($checker)) {
+        fail('resultado verify sem agente ou checker de política');
+    }
+    if ($runner === 'opencode' && (! is_string($proof) || $proof === '')) {
+        fail('resultado OpenCode verify sem prova externa');
     }
     $command = escapeshellarg(PHP_BINARY).' '.escapeshellarg($checker)
         .' check --repo-root '.escapeshellarg($root)
-        .' --agent '.escapeshellarg($agent)
-        .' --proof-file '.escapeshellarg($proof);
+        .' --agent '.escapeshellarg($agent);
+    if ($runner === 'opencode') {
+        $command .= ' --proof-file '.escapeshellarg((string) $proof);
+    }
     $exitCode = 0;
     $output = commandOutput($command, $exitCode);
     if ($exitCode !== 0) {
-        fail('prova externa read-only rejeitada durante a importação do trace');
+        fail('política read-only rejeitada durante a importação do trace');
     }
     $verified = json_decode($output, true);
     if (! is_array($verified)
@@ -721,22 +732,25 @@ function validateRunnerResult(array $result): void
     ];
     foreach ($required as $field) {
         if (! array_key_exists($field, $result)) {
-            fail("resultado OpenCode sem campo obrigatório: {$field}");
+            fail("resultado de runner sem campo obrigatório: {$field}");
         }
     }
     $unknown = array_values(array_diff(array_keys($result), $allowed));
     if ($unknown !== []) {
-        fail('resultado OpenCode contém campos não previstos: '.implode(', ', $unknown));
+        fail('resultado de runner contém campos não previstos: '.implode(', ', $unknown));
     }
-    if (($result['schema_version'] ?? null) !== '1.0.0'
-        || ($result['runner'] ?? null) !== 'opencode'
+    $runner = $result['runner'] ?? null;
+    $schemaVersion = $result['schema_version'] ?? null;
+    $contractValid = ($schemaVersion === '1.0.0' && $runner === 'opencode')
+        || ($schemaVersion === '1.1.0' && $runner === 'agy');
+    if (! $contractValid
         || ! is_string($result['runner_version'])
         || $result['runner_version'] === ''
         || (! is_string($result['requested_model']) && $result['requested_model'] !== null)
         || ! in_array($result['identity_status'], ['exact', 'declared', 'observed', 'partial', 'unavailable'], true)
         || ! is_string($result['identity_source'])
         || $result['identity_source'] === '') {
-        fail('resultado OpenCode com contrato ou runner inválido');
+        fail('resultado com contrato ou runner inválido');
     }
     if (! in_array($result['execution_mode'], ['impl', 'verify'], true)
         || ! is_string($result['execution_id'])
@@ -747,11 +761,11 @@ function validateRunnerResult(array $result): void
         || preg_match('/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/', $result['feature_key']) !== 1
         || ! is_int($result['attempt'])
         || $result['attempt'] < 0) {
-        fail('resultado OpenCode com contexto de execução inválido');
+        fail('resultado de runner com contexto de execução inválido');
     }
     foreach (['provider', 'effective_model', 'session_id', 'terminal_event', 'prompt_sha256', 'prompt_transport', 'verification_agent', 'error_summary'] as $field) {
         if (array_key_exists($field, $result) && ! is_string($result[$field]) && $result[$field] !== null) {
-            fail("resultado OpenCode com {$field} inválido");
+            fail("resultado de runner com {$field} inválido");
         }
     }
     if (! in_array($result['status'], ['completed', 'failed', 'interrupted', 'usage_limited'], true)
@@ -759,29 +773,29 @@ function validateRunnerResult(array $result): void
         || ! is_int($result['events_seen'])
         || $result['events_seen'] < 0
         || ! is_array($result['artifact_refs'])) {
-        fail('resultado OpenCode com status ou evidência inválida');
+        fail('resultado de runner com status ou evidência inválida');
     }
     foreach ($result['artifact_refs'] as $artifactRef) {
         if (! is_string($artifactRef)) {
-            fail('resultado OpenCode contém referência de artefato inválida');
+            fail('resultado de runner contém referência de artefato inválida');
         }
     }
     if (array_key_exists('event_bytes', $result)
         && (! is_int($result['event_bytes']) || $result['event_bytes'] < 0)) {
-        fail('resultado OpenCode com event_bytes inválido');
+        fail('resultado de runner com event_bytes inválido');
     }
     if (! in_array($result['fallback_status'], ['unknown', 'detected', 'not_detected'], true)
         || (! is_bool($result['fallback_used']) && $result['fallback_used'] !== null)) {
-        fail('resultado OpenCode com fallback inválido');
+        fail('resultado de runner com fallback inválido');
     }
     if (array_key_exists('permission_policy_status', $result)
         && ! in_array($result['permission_policy_status'], ['verified', 'not_required', 'failed'], true)) {
-        fail('resultado OpenCode com permission_policy_status inválido');
+        fail('resultado de runner com permission_policy_status inválido');
     }
     if (array_key_exists('permission_policy_hash', $result)
         && $result['permission_policy_hash'] !== null
         && (! is_string($result['permission_policy_hash']) || preg_match('/^[a-f0-9]{64}$/', $result['permission_policy_hash']) !== 1)) {
-        fail('resultado OpenCode com permission_policy_hash inválido');
+        fail('resultado de runner com permission_policy_hash inválido');
     }
     if ($result['execution_mode'] === 'verify'
         && (($result['permission_policy_status'] ?? null) !== 'verified'
@@ -789,19 +803,31 @@ function validateRunnerResult(array $result): void
             || preg_match('/^[a-f0-9]{64}$/', (string) $result['permission_policy_hash']) !== 1
             || ! is_string($result['verification_agent'] ?? null)
             || $result['verification_agent'] === '')) {
-        fail('resultado OpenCode verify sem contrato de política completo');
+        fail('resultado verify sem contrato de política completo');
     }
     if ($result['execution_mode'] === 'impl'
         && (($result['permission_policy_status'] ?? null) !== 'not_required'
             || ($result['permission_policy_hash'] ?? null) !== null)) {
-        fail('resultado OpenCode impl carrega política read-only indevida');
+        fail('resultado impl carrega política read-only indevida');
     }
+    $expectedTerminal = $runner === 'agy' ? 'result' : 'step_finish';
     if ($result['status'] === 'completed'
         && (! is_string($result['session_id'] ?? null)
             || $result['session_id'] === ''
-            || ($result['terminal_event'] ?? null) !== 'step_finish'
+            || ($result['terminal_event'] ?? null) !== $expectedTerminal
             || $result['events_seen'] < 1)) {
-        fail('resultado OpenCode concluído sem sessão, evento terminal ou eventos observados');
+        fail('resultado concluído sem sessão, evento terminal ou eventos observados');
+    }
+    if ($runner === 'agy' && $result['status'] === 'completed'
+        && (($result['provider'] ?? null) !== 'agy'
+            || ! is_string($result['requested_model'] ?? null)
+            || $result['requested_model'] === ''
+            || ($result['effective_model'] ?? null) !== $result['requested_model']
+            || ($result['identity_status'] ?? null) !== 'observed'
+            || ($result['identity_source'] ?? null) !== 'event_init_model'
+            || ($result['fallback_used'] ?? null) !== false
+            || ($result['fallback_status'] ?? null) !== 'not_detected')) {
+        fail('resultado agy concluído com identidade, provider ou fallback incompatível');
     }
 }
 
@@ -810,7 +836,7 @@ function recordRunnerResult(array $arguments, array $feature, array $result, str
     validateRunnerResult($result);
     $executionId = $result['execution_id'] ?? null;
     if (! is_string($executionId) || preg_match('/^exec_[A-Za-z0-9_-]+$/', $executionId) !== 1) {
-        fail('resultado OpenCode com execution_id inválido');
+        fail('resultado de runner com execution_id inválido');
     }
     if (($result['workflow_id'] ?? null) !== ($arguments['workflow'] ?? null)
         || ($result['feature_key'] ?? null) !== ($feature['feature_key'] ?? null)
@@ -841,7 +867,7 @@ function recordRunnerResult(array $arguments, array $feature, array $result, str
         'workflow_id' => $result['workflow_id'],
         'feature_key' => $result['feature_key'],
         'attempt' => (int) $result['attempt'],
-        'runner' => 'opencode',
+        'runner' => $result['runner'],
         'runner_version' => $result['runner_version'] ?? null,
         'provider' => $result['provider'] ?? null,
         'requested_model' => $result['requested_model'] ?? null,
@@ -863,14 +889,14 @@ function recordRunnerResult(array $arguments, array $feature, array $result, str
         'result_sha256' => hash_file('sha256', $resultPath) ?: null,
         'error_summary' => $result['error_summary'] ?? null,
         'artifact_refs' => [
-            'artifact_'.$feature['feature_key'].'_opencode_'.$artifactRole.'_events',
-            'artifact_'.$feature['feature_key'].'_opencode_'.$artifactRole.'_result',
+            'artifact_'.$feature['feature_key'].'_'.$result['runner'].'_'.$artifactRole.'_events',
+            'artifact_'.$feature['feature_key'].'_'.$result['runner'].'_'.$artifactRole.'_result',
         ],
     ];
     $traceArguments = array_merge($arguments, [
         'idempotency-key' => 'trace:delegation:'.($feature['feature_key'] ?? '').':'.$executionId,
     ]);
-    appendEvent(eventContext($traceArguments, $feature, $status, 'Resultado do adapter OpenCode importado pelo controlador', $facts));
+    appendEvent(eventContext($traceArguments, $feature, $status, 'Resultado de adapter importado pelo controlador', $facts));
 }
 
 /**
@@ -3972,8 +3998,8 @@ function configuredRalph(array $arguments): string
 {
     global $root;
     $engine = (string) ($arguments['engine'] ?? 'codex');
-    if (! in_array($engine, ['codex', 'claude', 'opencode'], true)) {
-        fail('engine inválido; use codex, claude ou opencode');
+    if (! in_array($engine, ['codex', 'claude', 'opencode', 'agy'], true)) {
+        fail('engine inválido; use codex, claude, opencode ou agy');
     }
     $profile = $root.'/.ralph/'.$engine.'.env';
     $ralph = null;
@@ -4124,6 +4150,8 @@ function runControlled(array $arguments): void
     );
     if ($generatedRalph && $engine === 'opencode') {
         unset($environment['RALPH_VERIFY']);
+    } elseif ($generatedRalph && $engine === 'agy') {
+        $environment['RALPH_VERIFY'] = 'always';
     }
     $processCommand = controlledProcessCommand($command);
     $containment = $processCommand['containment'];
@@ -4277,7 +4305,7 @@ function runControlled(array $arguments): void
     $feature = featureFrom($projection, $featureKey);
     checkLease($feature, $lease);
     $runnerResultEntries = runnerResults($runnerResultBefore, $recordedRunnerIds, $workflowId, $featureKey, $attempt);
-    if ($generatedRalph && $engine === 'opencode' && $exitCode === 0) {
+    if ($generatedRalph && in_array($engine, ['opencode', 'agy'], true) && $exitCode === 0) {
         $contextModes = recordedRunnerContextModes($workflowId, $featureKey, $attempt);
         $successfulCounts = ['impl' => 0, 'verify' => 0];
         $normativeError = null;
@@ -4285,7 +4313,7 @@ function runControlled(array $arguments): void
             $result = $runnerResultEntry['result'];
             $resultMode = $result['execution_mode'] ?? null;
             if (! is_string($resultMode) || ! in_array($resultMode, ['impl', 'verify'], true)) {
-                $normativeError = 'resultado OpenCode normativo duplicado ou sem modo único';
+                $normativeError = 'resultado de adapter normativo duplicado ou sem modo único';
                 break;
             }
             if (($result['status'] ?? null) === 'completed' && ($result['exit_code'] ?? null) === 0) {
@@ -4298,13 +4326,13 @@ function runControlled(array $arguments): void
                 $resultExecutionId = $runnerResultEntry['result']['execution_id'] ?? null;
                 $resultMode = $runnerResultEntry['result']['execution_mode'] ?? null;
                 if (! is_string($resultExecutionId) || ! is_string($resultMode) || isset($contextModes[$resultExecutionId])) {
-                    $normativeError = 'resultado OpenCode normativo duplicado ou sem modo único';
+                    $normativeError = 'resultado de adapter normativo duplicado ou sem modo único';
                     break;
                 }
                 if (($successfulCounts[$resultMode] ?? 0) !== 1
                     || ($runnerResultEntry['result']['status'] ?? null) !== 'completed'
                     || ($runnerResultEntry['result']['exit_code'] ?? null) !== 0) {
-                    $normativeError = 'resultado OpenCode normativo sem exatamente um sucesso por modo';
+                    $normativeError = 'resultado de adapter normativo sem exatamente um sucesso por modo';
                     break;
                 }
                 $contextModes[$resultExecutionId] = $resultMode;
@@ -4315,8 +4343,8 @@ function runControlled(array $arguments): void
             || count($contextModes) !== 2
             || ($modeCounts['impl'] ?? 0) !== 1
             || ($modeCounts['verify'] ?? 0) !== 1) {
-            $normativeError ??= 'execução OpenCode normativa exige exatamente uma delegação impl e uma verify';
-            appendEvent(eventContext($arguments, $feature, 'recovery.required', 'Execução OpenCode normativa sem exatamente uma implementação e uma revisão', [
+            $normativeError ??= 'execução de adapter normativa exige exatamente uma delegação impl e uma verify';
+            appendEvent(eventContext($arguments, $feature, 'recovery.required', 'Execução de adapter normativa sem exatamente uma implementação e uma revisão', [
                 'execution_modes' => $contextModes,
                 'runner_result_paths' => array_values(array_map(static fn (array $entry): string => $entry['path'], $runnerResultEntries)),
                 'normative_runner_result_paths' => array_values(array_map(static fn (array $entry): string => $entry['path'], $normativeRunnerEntries)),

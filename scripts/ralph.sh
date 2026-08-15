@@ -22,7 +22,7 @@
 #   ./ralph.sh [opcoes] [caminho-do-arquivo]
 #
 # Opcoes:
-#   --engine codex|claude|opencode    engine de implementacao (default: codex)
+#   --engine codex|claude|opencode|agy engine de implementacao (default: codex)
 #   --from N                 comeca na fase N (limpa do progresso as fases >= N)
 #   --keep-going             continua apos uma fase falhar (default: para)
 #   --max-cycles N           ciclos de correcao por fase (default: 3)
@@ -146,7 +146,27 @@ OPENCODE_AGENT="${RALPH_OPENCODE_AGENT:-}"
 OPENCODE_AUTO="${RALPH_OPENCODE_AUTO:-0}"
 OPENCODE_PURE="${RALPH_OPENCODE_PURE:-1}"
 OPENCODE_VERIFY_POLICY_PROOF="${RALPH_OPENCODE_VERIFY_POLICY_PROOF:-}"
+OPENCODE_VERIFY_AGENT="${RALPH_OPENCODE_VERIFY_AGENT:-}"
+AGY_MODEL="${RALPH_AGY_MODEL:-}"
+AGY_EFFORT="${RALPH_AGY_EFFORT:-high}"
+AGY_AGENT="${RALPH_AGY_AGENT:-}"
+AGY_VERIFY_AGENT="${RALPH_AGY_VERIFY_AGENT:-ralph-review}"
+AGY_PRINT_TIMEOUT="${RALPH_AGY_PRINT_TIMEOUT:-30m}"
 ENGINE_RESULT_FILE=""
+ADAPTER_SURFACE_FINGERPRINT=""
+
+export RALPH_OPENCODE_MODEL="$OPENCODE_MODEL"
+export RALPH_OPENCODE_VARIANT="$OPENCODE_VARIANT"
+export RALPH_OPENCODE_AGENT="$OPENCODE_AGENT"
+export RALPH_OPENCODE_AUTO="$OPENCODE_AUTO"
+export RALPH_OPENCODE_PURE="$OPENCODE_PURE"
+export RALPH_OPENCODE_VERIFY_POLICY_PROOF="$OPENCODE_VERIFY_POLICY_PROOF"
+export RALPH_OPENCODE_VERIFY_AGENT="$OPENCODE_VERIFY_AGENT"
+export RALPH_AGY_MODEL="$AGY_MODEL"
+export RALPH_AGY_EFFORT="$AGY_EFFORT"
+export RALPH_AGY_AGENT="$AGY_AGENT"
+export RALPH_AGY_VERIFY_AGENT="$AGY_VERIFY_AGENT"
+export RALPH_AGY_PRINT_TIMEOUT="$AGY_PRINT_TIMEOUT"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -214,6 +234,42 @@ format_duration() {
   else
     printf "%ds" "$seconds"
   fi
+}
+
+is_adapter_engine() {
+  [[ "$ENGINE" == opencode || "$ENGINE" == agy ]]
+}
+
+adapter_runner_path() {
+  printf '%s/../adapters/%s/runner.sh' "$SCRIPT_DIR" "$ENGINE"
+}
+
+adapter_surface_fingerprint() {
+  local paths=("$0" "$(adapter_runner_path)")
+  if [ "$ENGINE" = agy ]; then
+    paths+=(
+      "$SCRIPT_DIR/../adapters/agy/parser.php"
+      "$SCRIPT_DIR/../adapters/agy/policy.php"
+      "$(pwd)/.agents/agents/ralph-review/agent.md"
+    )
+  else
+    paths+=(
+      "$SCRIPT_DIR/../adapters/opencode/parser.php"
+      "$SCRIPT_DIR/../adapters/opencode/policy.php"
+      "$(pwd)/.opencode/agents/ralph-review.md"
+    )
+  fi
+  {
+    local path
+    for path in "${paths[@]}"; do
+      if [ ! -f "$path" ]; then
+        printf 'MISSING %s\n' "$path"
+        continue
+      fi
+      stat -c '%n|%F|%a|%d|%i|%s' "$path"
+      sha256sum "$path"
+    done
+  } 2>/dev/null | sha256sum | cut -d' ' -f1
 }
 
 # ---------------------------------------------------------------------------
@@ -588,8 +644,8 @@ resolve_test_cmd() {
 }
 
 preflight_checks() {
-  if [[ "$ENGINE" != "codex" && "$ENGINE" != "claude" && "$ENGINE" != "opencode" ]]; then
-    fail "Engine invalida: $ENGINE. Use 'codex', 'claude' ou 'opencode'."
+  if [[ "$ENGINE" != "codex" && "$ENGINE" != "claude" && "$ENGINE" != "opencode" && "$ENGINE" != "agy" ]]; then
+    fail "Engine invalida: $ENGINE. Use 'codex', 'claude', 'opencode' ou 'agy'."
     exit 1
   fi
 
@@ -611,8 +667,8 @@ preflight_checks() {
       ;;
   esac
 
-  if $VERIFY_ONLY && [[ "$ENGINE" != "opencode" ]]; then
-    fail "--verify-only exige engine opencode."
+  if $VERIFY_ONLY && ! is_adapter_engine; then
+    fail "--verify-only exige uma engine com adapter (opencode ou agy)."
     exit 1
   fi
 
@@ -639,6 +695,14 @@ preflight_checks() {
         exit 1
         ;;
     esac
+  elif [[ "$ENGINE" == "agy" ]]; then
+    case "$AGY_EFFORT" in
+      low|medium|high) ;;
+      *)
+        fail "RALPH_AGY_EFFORT invalido: '$AGY_EFFORT'. Use low, medium ou high."
+        exit 1
+        ;;
+    esac
   fi
 
   # O modelo de verificacao e explicito por engine, com override opcional.
@@ -646,36 +710,44 @@ preflight_checks() {
     VERIFY_MODEL="$RALPH_VERIFY_MODEL"
   elif [[ "$ENGINE" == "claude" ]]; then
     VERIFY_MODEL="sonnet"
-  elif [[ "$ENGINE" == "opencode" ]]; then
-    VERIFY_MODEL="$OPENCODE_MODEL"
+  elif is_adapter_engine; then
+    if [[ "$ENGINE" == "agy" ]]; then
+      VERIFY_MODEL="$AGY_MODEL"
+    else
+      VERIFY_MODEL="$OPENCODE_MODEL"
+    fi
   else
     VERIFY_MODEL="$CODEX_MODEL"
   fi
+  export RALPH_VERIFY_MODEL="$VERIFY_MODEL"
 
-  if [[ "$ENGINE" == "opencode" ]]; then
-    local opencode_runner="$SCRIPT_DIR/../adapters/opencode/runner.sh"
-    if [ ! -x "$opencode_runner" ]; then
-      fail "adapter OpenCode não encontrado ou sem permissão: $opencode_runner"
+  if is_adapter_engine; then
+    local adapter_runner
+    adapter_runner="$(adapter_runner_path)"
+    if [ ! -x "$adapter_runner" ]; then
+      fail "adapter $ENGINE não encontrado ou sem permissão: $adapter_runner"
       exit 1
     fi
-    local preflight_args=(preflight --model "$OPENCODE_MODEL")
+    local preflight_args=(preflight --mode impl --repo-root "$(pwd)")
     if [ "$VERIFY_MODE" != off ]; then
-      preflight_args+=(
-        --mode verify
-        --repo-root "$(pwd)"
-        --agent "${RALPH_OPENCODE_VERIFY_AGENT:-}"
-        --policy-proof "$OPENCODE_VERIFY_POLICY_PROOF"
-      )
+      preflight_args=(preflight --mode verify --repo-root "$(pwd)")
     fi
-    if ! "$opencode_runner" "${preflight_args[@]}" >/dev/null; then
-      fail "preflight do adapter OpenCode falhou"
+    if ! "$adapter_runner" "${preflight_args[@]}" >/dev/null; then
+      fail "preflight do adapter $ENGINE falhou"
       exit 1
     fi
-    if [ "$VERIFY_MODE" != off ] && [ -z "${RALPH_OPENCODE_VERIFY_AGENT:-}" ]; then
+    if [ "$VERIFY_MODE" != off ]; then
+      ADAPTER_SURFACE_FINGERPRINT="$(adapter_surface_fingerprint)"
+      [ -n "$ADAPTER_SURFACE_FINGERPRINT" ] || {
+        fail "não foi possível fixar a superfície de verificação do adapter $ENGINE"
+        exit 1
+      }
+    fi
+    if [ "$ENGINE" = opencode ] && [ "$VERIFY_MODE" != off ] && [ -z "${RALPH_OPENCODE_VERIFY_AGENT:-}" ]; then
       fail "OpenCode exige RALPH_OPENCODE_VERIFY_AGENT read-only quando o gate 3 está ativo"
       exit 1
     fi
-    if [ "$VERIFY_MODE" != off ] && [ -z "$OPENCODE_VERIFY_POLICY_PROOF" ]; then
+    if [ "$ENGINE" = opencode ] && [ "$VERIFY_MODE" != off ] && [ -z "$OPENCODE_VERIFY_POLICY_PROOF" ]; then
       fail "OpenCode exige RALPH_OPENCODE_VERIFY_POLICY_PROOF externo quando o gate 3 está ativo"
       exit 1
     fi
@@ -1058,27 +1130,26 @@ run_engine() {
   while true; do
     local rc=0
 
-    if [[ "$ENGINE" == "opencode" ]]; then
-      local opencode_runner="$SCRIPT_DIR/../adapters/opencode/runner.sh"
+    if is_adapter_engine; then
+      local adapter_runner
+      adapter_runner="$(adapter_runner_path)"
+      if [[ "$mode" == verify ]] && [ "$(adapter_surface_fingerprint)" != "$ADAPTER_SURFACE_FINGERPRINT" ]; then
+        fail "superfície de verificação do adapter $ENGINE mudou após a implementação"
+        return 86
+      fi
       local event_file="${log_file}.events.jsonl"
       ENGINE_RESULT_FILE="${log_file}.result.json"
-      local policy_args=()
-      if [[ "$mode" == "verify" ]]; then
-        policy_args=(--policy-proof "$OPENCODE_VERIFY_POLICY_PROOF")
-      fi
-      "$opencode_runner" run \
+      "$adapter_runner" run \
         --repo-root "$(pwd)" \
         --prompt-file "$prompt_file" \
         --events-file "$event_file" \
         --result-file "$ENGINE_RESULT_FILE" \
         --mode "$mode" \
         --execution-id "exec_${RUN_ID}_${mode}_${RALPH_PHASE_NUM:-0}_${RALPH_PHASE_ATTEMPT:-1}" \
-        --model "$OPENCODE_MODEL" \
-        --agent "$OPENCODE_AGENT" \
-        --variant "$OPENCODE_VARIANT" \
-        --auto "$OPENCODE_AUTO" \
-        --pure "$OPENCODE_PURE" \
-        "${policy_args[@]}" | tee "$log_file" || rc=$?
+        --workflow-id "${RALPH_EXECUTION_WORKFLOW_ID:-wf_${RUN_ID}}" \
+        --feature-key "${RALPH_EXECUTION_FEATURE_KEY:-FEATURE-${RALPH_PHASE_NUM:-0}}" \
+        --attempt "${RALPH_EXECUTION_ATTEMPT:-${RALPH_PHASE_ATTEMPT:-1}}" \
+        | tee "$log_file" || rc=$?
     elif [[ "$ENGINE" == "codex" ]]; then
       local session_model="$CODEX_MODEL"
       [[ "$mode" == "verify" ]] && session_model="$VERIFY_MODEL"
@@ -1136,9 +1207,9 @@ GATE_CAUSE=""
 gate0_engine_finished() {
   local log_file="$1" rc="$2"
 
-  if [[ "$ENGINE" == "opencode" ]]; then
+  if is_adapter_engine; then
     if [ ! -f "$ENGINE_RESULT_FILE" ]; then
-      GATE_CAUSE="O adapter OpenCode terminou sem publicar resultado normalizado."
+      GATE_CAUSE="O adapter $ENGINE terminou sem publicar resultado normalizado."
       return 1
     fi
     # A expressão PHP é literal de propósito; não há expansão shell dentro dela.
@@ -1147,7 +1218,7 @@ gate0_engine_finished() {
       $result = json_decode(file_get_contents($argv[1]), true);
       exit(is_array($result) && ($result["status"] ?? null) === "completed" && ($result["exit_code"] ?? 1) === 0 && ($result["session_id"] ?? null) !== null && ($result["terminal_event"] ?? null) !== null ? 0 : 1);
     ' "$ENGINE_RESULT_FILE"; then
-      GATE_CAUSE="O resultado normalizado do OpenCode não comprovou conclusão, sessão e evento terminal."
+      GATE_CAUSE="O resultado normalizado do $ENGINE não comprovou conclusão, sessão e evento terminal."
       return 1
     fi
   elif [[ "$ENGINE" == "claude" ]]; then
@@ -1582,6 +1653,8 @@ main() {
   log "$total_phases fases para implementar (engine: $ENGINE, max-cycles: $MAX_CYCLES)"
   if [ "$ENGINE" = "codex" ]; then
     log "Codex: perfil $CODEX_PROFILE · modelo $CODEX_MODEL · esforco $CODEX_REASONING_EFFORT"
+  elif [ "$ENGINE" = "agy" ]; then
+    log "agy: modelo $AGY_MODEL · effort $AGY_EFFORT · verify-agent $AGY_VERIFY_AGENT"
   fi
   [ "$FROM_PHASE" -gt 1 ] && log "Iniciando a partir da fase $FROM_PHASE"
   echo ""

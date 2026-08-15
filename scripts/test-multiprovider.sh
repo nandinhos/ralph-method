@@ -123,6 +123,18 @@ printf '%s\n' \
   'esac' > "$fake_bin/opencode"
 chmod +x "$fake_bin/opencode"
 
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'case "$*" in' \
+  '  --version) printf "%s\\n" "agy-fixture 1.1.13" ;;' \
+  '  models) [ "${FAKE_AGY_AUTH:-1}" = 1 ] && printf "%s\\n" "gemini-3.7-flash-high" || { printf "%s\\n" "authentication required"; exit 7; } ;;' \
+  '  *agents) printf "%s\\n" "ralph-review" ;;' \
+  '  *--print*|*exec*|*run*) printf "%s\\n" "$*" >> "$FAKE_GENERATION_LOG"; exit 91 ;;' \
+  '  *) exit 2 ;;' \
+  'esac' > "$fake_bin/agy"
+chmod +x "$fake_bin/agy"
+printf '%s\n' 'fixture-token' > "$TMP/agy-token"
+
 php_bin="$(command -v php || true)"
 [ -n "$php_bin" ] || fail 'PHP não está disponível no PATH do teste'
 php_runtime_path="$(dirname "$php_bin"):/usr/bin:/bin"
@@ -132,11 +144,12 @@ common_env=(
   "RALPH_METHOD_SOURCE=$ROOT"
   "RALPH_HERMES_PROVIDER="
   "FAKE_GENERATION_LOG=$generation_log"
+  "RALPH_AGY_TOKEN_FILE=$TMP/agy-token"
 )
 
 all_functional="$(env "${common_env[@]}" FAKE_CODEX_AUTH=1 FAKE_CLAUDE_AUTH=1 FAKE_OPENCODE_AUTH=1 \
   "$ROOT/bin/ralph-init" plan --project "$project" --provider auto --verify-providers)"
-assert_selection "$all_functional" codex '["codex","claude","opencode"]' '["codex","claude","opencode"]' native_codex codex
+assert_selection "$all_functional" codex '["codex","claude","opencode","agy"]' '["codex","claude","opencode","agy"]' native_codex codex
 
 repeat_functional="$(env "${common_env[@]}" FAKE_CODEX_AUTH=1 FAKE_CLAUDE_AUTH=1 FAKE_OPENCODE_AUTH=1 \
   "$ROOT/bin/ralph-init" plan --project "$project" --provider auto --verify-providers)"
@@ -144,18 +157,22 @@ assert_eq "$(summary "$all_functional")" "$(summary "$repeat_functional")" 'sele
 
 codex_unavailable="$(env "${common_env[@]}" FAKE_CODEX_AUTH=0 FAKE_CLAUDE_AUTH=1 FAKE_OPENCODE_AUTH=1 \
   "$ROOT/bin/ralph-init" plan --project "$project" --provider auto --verify-providers)"
-assert_selection "$codex_unavailable" claude '["claude","opencode"]' '["claude","opencode"]' single_provider claude
+assert_selection "$codex_unavailable" claude '["claude","opencode","agy"]' '["claude","opencode","agy"]' single_provider claude
 assert_json "$codex_unavailable" '
     $plan = json_decode(getenv("JSON_PAYLOAD"), true, 512, JSON_THROW_ON_ERROR);
     $codex = $plan["detection"]["providers"]["codex"] ?? [];
     exit(($codex["status"] ?? null) === "unauthenticated" && ($codex["adapter_enabled"] ?? true) === false ? 0 : 1);
 '
 
-only_opencode="$(env "${common_env[@]}" FAKE_CODEX_AUTH=0 FAKE_CLAUDE_AUTH=0 FAKE_OPENCODE_AUTH=1 \
+only_opencode="$(env "${common_env[@]}" FAKE_CODEX_AUTH=0 FAKE_CLAUDE_AUTH=0 FAKE_OPENCODE_AUTH=1 FAKE_AGY_AUTH=0 \
   "$ROOT/bin/ralph-init" plan --project "$project" --provider auto --verify-providers)"
 assert_selection "$only_opencode" opencode '["opencode"]' '["opencode"]' single_provider opencode
 
-none_functional="$(env "${common_env[@]}" FAKE_CODEX_AUTH=0 FAKE_CLAUDE_AUTH=0 FAKE_OPENCODE_AUTH=0 \
+only_agy="$(env "${common_env[@]}" FAKE_CODEX_AUTH=0 FAKE_CLAUDE_AUTH=0 FAKE_OPENCODE_AUTH=0 FAKE_AGY_AUTH=1 \
+  "$ROOT/bin/ralph-init" plan --project "$project" --provider auto --verify-providers)"
+assert_selection "$only_agy" agy '["agy"]' '["agy"]' single_provider agy
+
+none_functional="$(env "${common_env[@]}" FAKE_CODEX_AUTH=0 FAKE_CLAUDE_AUTH=0 FAKE_OPENCODE_AUTH=0 FAKE_AGY_AUTH=0 \
   "$ROOT/bin/ralph-init" plan --project "$project" --provider auto --verify-providers)"
 assert_selection "$none_functional" null '[]' '[]' needs_review null
 assert_json "$none_functional" '
@@ -216,6 +233,7 @@ trace_feature() {
 trace_feature FEATURE-TRACE exec_trace_codex codex openai gpt-5-codex sess_trace_codex
 trace_feature FEATURE-TRACE exec_trace_claude claude anthropic claude-sonnet-4-20250514 sess_trace_claude
 trace_feature FEATURE-TRACE exec_trace_opencode opencode opencode opencode/deepseek-v4-flash-free sess_trace_opencode
+trace_feature FEATURE-TRACE exec_trace_agy agy agy gemini-3.7-flash-high sess_trace_agy
 
 trace_report="$(control trace-report --workflow wf_trace_matrix --format json)"
 assert_json "$trace_report" '
@@ -224,6 +242,7 @@ assert_json "$trace_report" '
         "codex" => ["gpt-5-codex", "sess_trace_codex"],
         "claude" => ["claude-sonnet-4-20250514", "sess_trace_claude"],
         "opencode" => ["opencode/deepseek-v4-flash-free", "sess_trace_opencode"],
+        "agy" => ["gemini-3.7-flash-high", "sess_trace_agy"],
     ];
     $found = [];
     foreach ($report["features"] ?? [] as $feature) {
@@ -235,7 +254,7 @@ assert_json "$trace_report" '
             }
         }
     }
-    exit(($report["delegation_count"] ?? null) === 3 && $found === $expected ? 0 : 1);
+    exit(($report["delegation_count"] ?? null) === 4 && $found === $expected ? 0 : 1);
 '
 
-printf 'OK: regressão multiprovider offline, seleção determinística, bloqueio sem fallback, probes não generativos e trace dos três harnesses passaram.\n'
+printf 'OK: regressão multiprovider offline, seleção determinística, bloqueio sem fallback, probes não generativos e trace dos quatro harnesses passaram.\n'

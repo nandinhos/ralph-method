@@ -197,10 +197,10 @@ function providerDefinitions(): array
             'capabilities' => ['execution', 'model_selection', 'diagnostics'],
         ],
         'agy' => [
-            'auth' => null,
-            'health' => null,
-            'runner_supported' => false,
-            'capabilities' => ['execution', 'model_selection'],
+            'auth' => ['args' => ['models'], 'classifier' => 'agy_models'],
+            'health' => ['args' => ['agents'], 'classifier' => 'agy_agents'],
+            'runner_supported' => true,
+            'capabilities' => ['execution', 'model_selection', 'diagnostics'],
         ],
     ];
 }
@@ -227,6 +227,16 @@ function hasOpenCodeCredentialSignal(string $output): bool
 function hasOpenCodeModelSignal(string $output): bool
 {
     return preg_match('/^\s*[a-z0-9][a-z0-9_.-]*\/[a-z0-9][a-z0-9_.-]*(?:\s|$)/mi', stripAnsi($output)) === 1;
+}
+
+function hasAgyModelSignal(string $output): bool
+{
+    return preg_match('/^\s*(?:gemini|claude|gpt)[A-Za-z0-9._-]+\s*$/mi', stripAnsi($output)) === 1;
+}
+
+function hasAgyAgentSignal(string $output): bool
+{
+    return preg_match('/^\s*ralph-review\s*$/m', stripAnsi($output)) === 1;
 }
 
 function extractHermesProvider(string $output): string
@@ -281,6 +291,13 @@ function classifyAuth(array $result, string $classifier): string
 
         return 'unknown';
     }
+    if ($classifier === 'agy_models') {
+        if (($result['exit'] ?? 1) !== 0) {
+            return hasUnauthenticatedSignal($output) ? 'unauthenticated' : 'unknown';
+        }
+
+        return hasAgyModelSignal($output) ? 'authenticated' : 'unknown';
+    }
     if (hasUnauthenticatedSignal($output)) {
         return 'unauthenticated';
     }
@@ -331,6 +348,9 @@ function healthPassed(string $classifier, array $result, ?string $providerTarget
     $output = (string) ($result['output'] ?? '');
     if ($classifier === 'opencode_models') {
         return hasOpenCodeModelSignal($output);
+    }
+    if ($classifier === 'agy_agents') {
+        return hasAgyAgentSignal($output);
     }
     if ($classifier === 'hermes_status') {
         return $providerTarget !== null && hermesHealthPassed($result, $providerTarget);
@@ -431,6 +451,9 @@ function verifyProvider(string $provider, string $path, string $root): array
     }
 
     $healthArgs = $definition['health']['args'];
+    if ($provider === 'agy') {
+        $healthArgs = ['--add-dir', $root, 'agents'];
+    }
     $healthResult = commandResult(commandLine($path, $healthArgs), $root);
     $healthClassifier = (string) ($definition['health']['classifier'] ?? 'exit_zero');
     $healthStatus = healthPassed($healthClassifier, $healthResult) ? 'healthy' : 'unhealthy';
@@ -440,6 +463,23 @@ function verifyProvider(string $provider, string $path, string $root): array
     $base['status'] = $healthStatus === 'healthy' ? 'functional' : 'degraded';
     $base['adapter_enabled'] = $base['status'] === 'functional' && $base['runner_supported'];
     $base['reason'] = providerReason($base['status'], $authStatus, $healthStatus, true, $base['runner_supported']);
+
+    if ($provider === 'agy' && $base['status'] === 'functional') {
+        $home = rtrim((string) getenv('HOME'), '/');
+        $tokenFile = trim((string) getenv('RALPH_AGY_TOKEN_FILE'));
+        $tokenFile = $tokenFile !== '' ? $tokenFile : $home.'/.gemini/antigravity-cli/antigravity-oauth-token';
+        $bwrap = trim((string) shell_exec('command -v bwrap 2>/dev/null'));
+        $isolationReady = PHP_OS_FAMILY === 'Linux' && $bwrap !== '' && is_file($tokenFile) && is_readable($tokenFile);
+        if ($isolationReady) {
+            $smoke = commandResult(commandLine($bwrap, ['--ro-bind', '/', '/', '--proc', '/proc', '--dev', '/dev', '--unshare-pid', '--die-with-parent', '/bin/true']), $root, 5);
+            $isolationReady = ($smoke['exit'] ?? 1) === 0 && ($smoke['timed_out'] ?? true) === false;
+        }
+        if (! $isolationReady) {
+            $base['status'] = 'degraded';
+            $base['adapter_enabled'] = false;
+            $base['reason'] = 'CLI agy funcional, mas verify exige Linux, bwrap operacional e token OAuth legível';
+        }
+    }
 
     return $base;
 }
@@ -1069,13 +1109,16 @@ function managedSources(): array
         'adapters/README.md', 'adapters/opencode/runner.sh',
         'adapters/opencode/parser.php', 'adapters/opencode/policy.php', 'adapters/opencode/contract.md',
         'scripts/opencode-readonly-proof.sh', '.opencode/agents/ralph-review.md',
+        'adapters/agy/runner.sh', 'adapters/agy/parser.php',
+        'adapters/agy/policy.php', 'adapters/agy/contract.md',
+        '.agents/agents/ralph-review/agent.md',
     ];
 }
 
 /** @return list<string> */
 function generatedPaths(): array
 {
-    return ['.ralph/method.json', '.ralph/providers.json', '.ralph/codex.env', '.ralph/claude.env', '.ralph/opencode.env'];
+    return ['.ralph/method.json', '.ralph/providers.json', '.ralph/codex.env', '.ralph/claude.env', '.ralph/opencode.env', '.ralph/agy.env'];
 }
 
 /** @return array<string, string> */
@@ -1085,6 +1128,7 @@ function generatedProfiles(): array
         '.ralph/codex.env' => "# Gerado pelo Ralph Method; altere somente se quiser uma política local.\nRALPH_BIN=scripts/ralph.sh\nRALPH_VERIFY_MODEL=gpt-5.6-luna\n",
         '.ralph/claude.env' => "# Gerado pelo Ralph Method; altere somente se quiser uma política local.\nRALPH_BIN=scripts/ralph.sh\nRALPH_VERIFY_MODEL=sonnet\n",
         '.ralph/opencode.env' => "# Gerado pelo Ralph Method; defina um modelo e uma prova read-only externa antes de executar.\nRALPH_BIN=scripts/ralph.sh\nRALPH_OPENCODE_MODEL=\nRALPH_OPENCODE_VARIANT=\nRALPH_OPENCODE_AGENT=\nRALPH_OPENCODE_AUTO=1\nRALPH_OPENCODE_PURE=1\nRALPH_OPENCODE_VERIFY_AGENT=ralph-review\nRALPH_OPENCODE_VERIFY_POLICY_PROOF=\nRALPH_VERIFY_MODEL=\n",
+        '.ralph/agy.env' => "# Gerado pelo Ralph Method; verify exige Linux, bwrap e token OAuth local do agy.\nRALPH_BIN=scripts/ralph.sh\nRALPH_AGY_MODEL=\nRALPH_AGY_EFFORT=high\nRALPH_AGY_AGENT=\nRALPH_AGY_VERIFY_AGENT=ralph-review\nRALPH_AGY_PRINT_TIMEOUT=30m\nRALPH_VERIFY_MODEL=\n",
     ];
 }
 

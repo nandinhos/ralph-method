@@ -1,6 +1,6 @@
 # ADR 0007 — escopo fechado em três harnesses
 
-**Status:** aceito
+**Status:** superseded — substituído pelo [ADR-0017](0017-reabertura-agy-e-seam-comum-de-adapters.md) em 2026-08-14
 **Data:** 2026-08-09
 **Decisores:** Ralph Method
 

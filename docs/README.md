@@ -35,8 +35,8 @@ Comece pelo [README do projeto](../README.md) e depois consulte:
    agnóstico de harness;
 4. [architecture/README.md](architecture/README.md) para a matriz de cada
    componente, função e limite;
-5. [reports/0009-regressao-multiprovider.md](reports/0009-regressao-multiprovider.md)
-   para a prova dos três harnesses ativos.
+5. [reports/0024-adapter-agy-funcional-2026-08-14.md](reports/0024-adapter-agy-funcional-2026-08-14.md)
+   para a implementação e prova do quarto harness executável.
 
 ## Para agentes de IA
 

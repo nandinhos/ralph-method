@@ -2,7 +2,9 @@
 
 ## Status
 
-Proposta em implementação controlada na branch `feat/opencode-engine`.
+Superseded pelo [ADR-0017](0017-reabertura-agy-e-seam-comum-de-adapters.md)
+em 2026-08-14. O contrato e as evidências históricas permanecem válidos; a seam
+foi extraída quando o gatilho do segundo adapter disparou.
 
 ## Contexto
 
