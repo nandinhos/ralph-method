@@ -963,6 +963,52 @@ O handoff deve registrar o que ocorreu, erros encontrados, correções, arquivos
 commit, evidência antes/depois, comprovação e risco residual. Nunca copie
 prompts completos ou segredos para o handoff.
 
+### 6.1 Contrato do comando de gate (nativo do método)
+
+O comando de gate é parte nativa do Ralph-Method: todo projeto que adota o
+método herda os cinco gates e também o comando canônico de cada um. O
+`ralph-control supervise` resolve o comando por
+`--<gate>-command` (ex.: `--runtime-evidence-command`) ou pelas variáveis de
+ambiente `RALPH_<GATE>_COMMAND` (ex.: `RALPH_RUNTIME_EVIDENCE_CMD`); sem
+configuração explícita, usa os defaults nativos instalados:
+
+| Gate | Comando canônico instalado | Default de evidência |
+|---|---|---|
+| `quality` | `scripts/ralph-run-quality.sh` | `bin/check` (ou `--quality-command`) |
+| `runtime_evidence` | `scripts/ralph-run-runtime-evidence.sh` | `RALPH_RUNTIME_EVIDENCE_CMD`, depois `scripts/*runtime-evidence*`, depois `bin/check` |
+| `technical_review` | `scripts/ralph-run-independent-gate.sh` | `RALPH_TECHNICAL_REVIEW_COMMAND`; sem comando, o gate é rejeitado sem inventar revisão |
+| `curation` | `scripts/ralph-run-independent-gate.sh` | `RALPH_CURATION_COMMAND`, depois `bin/ralph-knowledge --workflow ... --feature ...` |
+
+**Contexto por ambiente, não por argumento.** O supervisor invoca o comando de
+gate sem argumentos posicionais e fornece o contexto por variáveis de ambiente:
+
+```text
+RALPH_WORKFLOW_ID  RALPH_FEATURE_KEY  RALPH_ATTEMPT
+RALPH_GATE  RALPH_REPORT_PATH  RALPH_LEASE
+```
+
+O comando de gate **não** chama `ralph-control gate` quando invocado pelo
+supervisor: ele apenas produz evidência (stdout/stderr) e retorna o exit code;
+o controlador registra o gate e verifica a árvore. Os wrappers instalados
+leem o contrato por ambiente e, quando chamados manualmente com argumentos
+posicionais (`--workflow --feature --lease`), mantêm o comportamento legado de
+registrar o gate.
+
+Exemplo mínimo de comando de gate configurável só por env (sem args):
+
+```bash
+#!/usr/bin/env bash
+# usa RALPH_WORKFLOW_ID, RALPH_FEATURE_KEY, RALPH_GATE e RALPH_ATTEMPT
+printf 'gate=%s feature=%s attempt=%s\n' \
+  "$RALPH_GATE" "$RALPH_FEATURE_KEY" "$RALPH_ATTEMPT"
+# ... executa a evidência e termina com exit code 0/1
+```
+
+Uma instalação padrão do método já instala os quatro wrappers em
+`scripts/ralph-run-*.sh`; com eles, o `supervise` executa os cinco gates sem
+retornar `gates_configuration_required`. A configuração explícita por env
+continua tendo prioridade sobre os defaults.
+
 ## 7. Memória episódica, retenção e índices
 
 A memória de engenharia é uma camada pós-entrega e não substitui os cinco

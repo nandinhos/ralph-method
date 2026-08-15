@@ -5,6 +5,27 @@ português do Brasil. A versão no arquivo `VERSION` identifica o bundle em
 desenvolvimento; uma versão só é considerada publicada após commit, tag
 anotada e promoção documentada.
 
+## 0.9.1 — em preparação
+
+### Gates como contrato nativo (FEATURE-096)
+
+- o supervisor passa a fornecer o contexto do comando de gate por ambiente
+  (`RALPH_WORKFLOW_ID`, `RALPH_FEATURE_KEY`, `RALPH_ATTEMPT`, `RALPH_GATE`,
+  `RALPH_REPORT_PATH`, `RALPH_LEASE`) em vez de argumentos posicionais;
+- os wrappers instalados `scripts/ralph-run-quality.sh`,
+  `ralph-run-runtime-evidence.sh` e `ralph-run-independent-gate.sh` leem o
+  contrato por env e, quando invocados pelo supervisor, apenas emitem evidência
+  + exit code (o controlador registra o gate); a chamada manual com argumentos
+  continua aceita e registra o gate;
+- defaults nativos para os três gates sem default: `runtime_evidence`
+  (env → `scripts/*runtime-evidence*` → `bin/check`), `technical_review`
+  (env; sem comando, rejeita sem inventar revisão) e `curation`
+  (env → `bin/ralph-knowledge --workflow --feature`), de modo que o
+  `supervise` executa os cinco gates numa instalação padrão sem retornar
+  `gates_configuration_required`;
+- `AGENT_GUIDE` documenta o contrato do comando de gate (seção 6.1);
+- regressão dedicada `scripts/test-ralph-gates-native.sh`.
+
 ## 0.9.0 — publicada em 2026-08-14
 
 ### Adapter nativo `agy` (FEATURE-095)

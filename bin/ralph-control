@@ -2217,8 +2217,21 @@ function supervisorExecuteGateCommand(array $arguments, array $feature, string $
     if (! is_dir(dirname($reportPath)) && ! mkdir(dirname($reportPath), 0700, true) && ! is_dir(dirname($reportPath))) {
         fail('não foi possível criar o diretório de relatórios dos gates', 12);
     }
+    // Contrato canônico de contexto: o comando de gate não recebe argumentos
+    // posicionais; o supervisor fornece o contexto por ambiente
+    // (RALPH_WORKFLOW_ID, RALPH_FEATURE_KEY, RALPH_ATTEMPT, RALPH_GATE,
+    // RALPH_REPORT_PATH e RALPH_LEASE). Os wrappers instalados leem esse
+    // contrato; projetos podem configurar comandos próprios que o respeitem.
+    $environment = array_merge((array) getenv(), $_ENV, [
+        'RALPH_WORKFLOW_ID' => $workflowId,
+        'RALPH_FEATURE_KEY' => $featureKey,
+        'RALPH_ATTEMPT' => (string) $attempt,
+        'RALPH_GATE' => $gate,
+        'RALPH_REPORT_PATH' => $reportPath,
+        'RALPH_LEASE' => $lease,
+    ]);
     $before = workingTreeFingerprint();
-    $result = runReadOnlyCommand($command, max(1, (int) ($arguments['gate-timeout'] ?? 900)));
+    $result = runReadOnlyCommand($command, max(1, (int) ($arguments['gate-timeout'] ?? 900)), $environment);
     $after = workingTreeFingerprint();
     $exitCode = (int) $result['exit_code'];
     $treeChanged = $before !== $after;
@@ -2315,6 +2328,16 @@ function supervisorGateCommand(array $arguments, string $gate): ?string
         $command = getenv($environmentName) ?: null;
     }
     if (! is_string($command) || trim($command) === '') {
+        // Defaults nativos: todo projeto que adota o método herda os cinco
+        // gates e também o comando canônico de cada um. Os wrappers instalados
+        // leem o contrato por ambiente (RALPH_WORKFLOW_ID/FEATURE_KEY/ATTEMPT/
+        // GATE/REPORT_PATH/LEASE) e emitem evidência + exit code; o supervisor
+        // registra o resultado. A configuração explícita por env/argumento tem
+        // prioridade sobre os defaults.
+        $wrapper = $root.'/scripts/ralph-run-'.($gate === 'quality' ? 'quality' : ($gate === 'curation' ? 'independent-gate' : ($gate === 'technical_review' ? 'independent-gate' : 'runtime-evidence'))).'.sh';
+        if (is_file($wrapper) && is_executable($wrapper)) {
+            return $wrapper;
+        }
         if ($gate === 'quality' && is_file($root.'/bin/check')) {
             return './bin/check';
         }
