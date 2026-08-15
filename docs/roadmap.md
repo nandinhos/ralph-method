@@ -112,7 +112,7 @@ distintos observáveis pelo readiness na fixture de campo.
 - [ ] adicionar adapters de migração por origem, sem importar estado desconhecido por inferência;
 - [x] testar backup incompleto e rollback após alteração do usuário;
 - [x] testar recuperação de estado interrompido com reconstrução pelo manifesto;
-- [ ] testar SIGKILL real durante rename e espaço insuficiente com fixture de falha de filesystem.
+- [x] testar SIGKILL real durante rename e espaço insuficiente com fixture de falha de filesystem.
 
 O detector e a evolução assistida foram validados na branch `dev`, incluindo
 uma prova de campo conduzida pelo OpenCode, e promovidos para `main`; o

@@ -32,7 +32,11 @@ anotada e promoção documentada.
   (`ralph-knowledge candidates`), sem exigir ação de retenção que falharia
   antes de `feature.released`;
 - `AGENT_GUIDE` documenta a classificação (seção 6.2) e o self-test;
-- regressão dedicada `scripts/test-ralph-gate-recovery.sh` (cenários A–D).
+- regressão dedicada `scripts/test-ralph-gate-recovery.sh` (cenários A–D);
+- regressão de resiliência a falha de filesystem na evolução assistida:
+  `scripts/test-evolution-filesystem.sh` (SIGKILL real durante o rename de
+  publicação e falha de escrita no destino → rollback restaura a árvore
+  legada).
 
 ### Estado da publicação
 

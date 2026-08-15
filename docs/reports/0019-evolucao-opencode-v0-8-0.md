@@ -89,10 +89,12 @@ autoridade de estado.
 
 ## Limitações e próximos hardenings
 
-Ainda não foi simulado um `SIGKILL` real durante um `rename` nem falta real de
-espaço no filesystem. A recuperação determinística de um estado interrompido,
-com reconstrução a partir do manifesto e preservação do estágio, foi coberta
-pela suíte portátil. Adapters de migração semântica continuam fora do escopo
+O `SIGKILL` real durante o `rename` de publicação e a falta de espaço no
+filesystem passaram a ser simulados pela suíte portátil
+(`scripts/test-evolution-filesystem.sh`): em ambos os casos o rollback
+reconstrói a árvore legada. A recuperação determinística de um estado
+interrompido, com reconstrução a partir do manifesto e preservação do estágio,
+permanece coberta. Adapters de migração semântica continuam fora do escopo
 até existir um contrato específico por origem.
 
 ## Origem
