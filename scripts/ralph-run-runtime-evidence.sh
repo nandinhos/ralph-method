@@ -28,10 +28,14 @@ CONTROL="$REPO/bin/ralph-control"
 WORKFLOW="${RALPH_WORKFLOW_ID:-}"
 FEATURE="${RALPH_FEATURE_KEY:-}"
 LEASE="${RALPH_LEASE:-}"
-GATE="${RALPH_GATE:-runtime_evidence}"
+GATE="${RALPH_GATE:-}"
 COMMAND="${RALPH_RUNTIME_EVIDENCE_CMD:-}"
 SUPERVISOR=0
+# O supervisor exporta RALPH_GATE no contrato por ambiente; a presença dela
+# indica invocação controlada (o controlador registra o gate). Chamada manual
+# com --workflow/--feature/--lease registra o gate como antes.
 [ -n "$GATE" ] && SUPERVISOR=1
+[ -n "$GATE" ] || GATE="runtime_evidence"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -53,7 +57,9 @@ if [ "$SUPERVISOR" -eq 0 ] && [ -z "$LEASE" ]; then
 fi
 
 if [ -z "$COMMAND" ]; then
-  DETECTED="$(find "$REPO/scripts" -maxdepth 1 -type f -name '*runtime-evidence*' -executable 2>/dev/null | head -1 || true)"
+  # Detecção NÃO pode casar com o próprio wrapper instalado (ralph-run-*.sh);
+  # usa apenas scripts de evidência do projeto, fora do prefixo canônico.
+  DETECTED="$(find "$REPO/scripts" -maxdepth 1 -type f -name '*runtime-evidence*' ! -name 'ralph-run-*' -executable 2>/dev/null | head -1 || true)"
   [ -n "$DETECTED" ] && COMMAND="$DETECTED"
 fi
 if [ -z "$COMMAND" ] && [ -f "$REPO/bin/check" ]; then

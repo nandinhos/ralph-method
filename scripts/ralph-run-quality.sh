@@ -21,10 +21,14 @@ CONTROL="$REPO/bin/ralph-control"
 WORKFLOW="${RALPH_WORKFLOW_ID:-}"
 FEATURE="${RALPH_FEATURE_KEY:-}"
 LEASE="${RALPH_LEASE:-}"
-GATE="${RALPH_GATE:-quality}"
+GATE="${RALPH_GATE:-}"
 COMMAND=""
 SUPERVISOR=0
+# O supervisor exporta RALPH_GATE no contrato por ambiente; a presença dela
+# indica invocação controlada (o controlador registra o gate). Chamada manual
+# com --workflow/--feature/--lease registra o gate como antes.
 [ -n "$GATE" ] && SUPERVISOR=1
+[ -n "$GATE" ] || GATE="quality"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -46,6 +50,12 @@ if [ "$SUPERVISOR" -eq 0 ] && [ -z "$LEASE" ]; then
 fi
 
 [ -n "$COMMAND" ] || COMMAND="bin/check"
+if [ ! -f "$REPO/$COMMAND" ]; then
+  if ! command -v "$COMMAND" >/dev/null 2>&1; then
+    echo "comando de qualidade ausente: $COMMAND (crie bin/check ou passe --command)" >&2
+    exit 1
+  fi
+fi
 
 set +e
 (cd "$REPO" && bash -c "$COMMAND") 2>&1

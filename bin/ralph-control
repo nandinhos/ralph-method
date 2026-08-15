@@ -2219,19 +2219,35 @@ function supervisorExecuteGateCommand(array $arguments, array $feature, string $
     }
     // Contrato canônico de contexto: o comando de gate não recebe argumentos
     // posicionais; o supervisor fornece o contexto por ambiente
-    // (RALPH_WORKFLOW_ID, RALPH_FEATURE_KEY, RALPH_ATTEMPT, RALPH_GATE,
-    // RALPH_REPORT_PATH e RALPH_LEASE). Os wrappers instalados leem esse
-    // contrato; projetos podem configurar comandos próprios que o respeitem.
+    // (RALPH_WORKFLOW_ID, RALPH_FEATURE_KEY, RALPH_ATTEMPT, RALPH_GATE e
+    // RALPH_REPORT_PATH). O lease não é exportado: o controlador registra o
+    // gate; o wrapper manual recebe o lease por --lease. Os identificadores
+    // são públicos da execução; credenciais/proofs permanecem fora.
+    $leaseEnvBefore = getenv('RALPH_LEASE');
+    $leaseTokenEnvBefore = getenv('RALPH_LEASE_TOKEN');
+    if ($leaseEnvBefore !== false) {
+        putenv('RALPH_LEASE');
+    }
+    if ($leaseTokenEnvBefore !== false) {
+        putenv('RALPH_LEASE_TOKEN');
+    }
     $environment = array_merge((array) getenv(), $_ENV, [
         'RALPH_WORKFLOW_ID' => $workflowId,
         'RALPH_FEATURE_KEY' => $featureKey,
         'RALPH_ATTEMPT' => (string) $attempt,
         'RALPH_GATE' => $gate,
         'RALPH_REPORT_PATH' => $reportPath,
-        'RALPH_LEASE' => $lease,
     ]);
+    unset($environment['RALPH_LEASE'], $environment['RALPH_LEASE_TOKEN']);
     $before = workingTreeFingerprint();
     $result = runReadOnlyCommand($command, max(1, (int) ($arguments['gate-timeout'] ?? 900)), $environment);
+    // Restaura o ambiente para não alterar chamadas posteriores do supervisor.
+    if ($leaseEnvBefore !== false) {
+        putenv('RALPH_LEASE='.$leaseEnvBefore);
+    }
+    if ($leaseTokenEnvBefore !== false) {
+        putenv('RALPH_LEASE_TOKEN='.$leaseTokenEnvBefore);
+    }
     $after = workingTreeFingerprint();
     $exitCode = (int) $result['exit_code'];
     $treeChanged = $before !== $after;

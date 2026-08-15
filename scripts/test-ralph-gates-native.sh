@@ -90,6 +90,19 @@ QUALITY_CMD_CHECK="$ROOT/scripts/ralph-run-quality.sh"
 ctx="$(cd "$repo" && RALPH_WORKFLOW_ID=wf_gates_native RALPH_FEATURE_KEY=FEATURE-GATES-NATIVE RALPH_GATE=quality RALPH_ATTEMPT=1 bash "$repo/bin/env-gate.sh")"
 [ "$ctx" = "ctx=wf_gates_native/FEATURE-GATES-NATIVE/quality/1" ] || fail "contrato por env não entregue ao comando: $ctx"
 
+# 5b. Modo manual: sem RALPH_GATE no ambiente, o wrapper quality registra o
+#     gate via ralph-control gate (comportamento legado com --lease). Testado
+#     no workflow fresh (feature ainda pending) mais abaixo.
+
+# 5c. Default de runtime_evidence não recursa no próprio wrapper: com bin/check
+#     presente e sem env, a detecção cai em bin/check (não no ralph-run-*).
+printf '%s\n' '#!/usr/bin/env bash' 'echo runtime-check-ok' > "$repo/bin/check"
+chmod +x "$repo/bin/check"
+runtime_default_out="$(cd "$repo" && env RALPH_WORKFLOW_ID=wf_gates_native RALPH_FEATURE_KEY=FEATURE-GATES-NATIVE RALPH_GATE=runtime_evidence RALPH_ATTEMPT=1 \
+  timeout 10 bash "$repo/scripts/ralph-run-runtime-evidence.sh" 2>&1)"
+echo "runtime_default: $runtime_default_out" | head -1
+grep -q "runtime-check-ok" <<< "$runtime_default_out" || fail 'default de runtime_evidence não resolveu para bin/check'
+
 # 6. Supervise com um gate sem default e sem env não para em
 #    gates_configuration_required (usa o default do wrapper).
 fresh="$TMP/repo2"
@@ -104,6 +117,26 @@ init2="$(cd "$fresh" && control init --workflow wf_gates_native --manifest workf
 [ -n "$init2" ] || fail 'init do workflow fresh falhou'
 claim2="$(cd "$fresh" && control claim --workflow wf_gates_native --feature FEATURE-GATES-NATIVE --actor gates-test)"
 lease2="$(printf '%s' "$claim2" | php -r '$v=json_decode(stream_get_contents(STDIN), true, 512, JSON_THROW_ON_ERROR); echo $v["lease_token"] ?? "";')"
+
+# 5b. Modo manual (feature pending): sem RALPH_GATE, o wrapper quality registra
+#     o gate via ralph-control gate com --lease. Usamos um stub do controlador
+#     no caminho que o wrapper usa ($REPO/bin/ralph-control) para registrar a
+#     chamada (o registro real depende do estado do workflow).
+stub="$TMP/stub-control"
+mkdir -p "$stub" "$fresh/bin"
+printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$*" >> "'"$TMP"'/gate-calls.log"' 'case "$1" in' '  document-id) echo "RPT-2026-0001" ;;' '  *) exit 0 ;;' 'esac' > "$stub/ralph-control"
+chmod +x "$stub/ralph-control"
+cp "$stub/ralph-control" "$fresh/bin/ralph-control"
+chmod +x "$fresh/bin/ralph-control"
+rm -f "$TMP/gate-calls.log"
+manual_out="$(cd "$fresh" && env -u RALPH_GATE -u RALPH_WORKFLOW_ID -u RALPH_FEATURE_KEY \
+  bash "$fresh/scripts/ralph-run-quality.sh" --workflow wf_gates_native --feature FEATURE-GATES-NATIVE --lease "$lease2" 2>&1)"
+echo "manual: $manual_out" | head -1
+grep -q "runtime-check-ok\|check OK" <<< "$manual_out" || fail 'modo manual do quality não rodou a evidência'
+grep -q "gate --workflow wf_gates_native --feature FEATURE-GATES-NATIVE --lease $lease2 --gate quality" "$TMP/gate-calls.log" \
+  || fail 'modo manual não chamou ralph-control gate com o lease'
+rm -f "$fresh/bin/ralph-control"
+
 run2="$(cd "$fresh" && control run --workflow wf_gates_native --feature FEATURE-GATES-NATIVE --lease "$lease2" --command 'exit 0')"
 printf '%s' "$run2" | grep -q '"status": "awaiting_gates"' || fail "run fresh não chegou a awaiting_gates: $run2"
 

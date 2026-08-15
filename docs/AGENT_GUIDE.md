@@ -984,15 +984,20 @@ gate sem argumentos posicionais e fornece o contexto por variáveis de ambiente:
 
 ```text
 RALPH_WORKFLOW_ID  RALPH_FEATURE_KEY  RALPH_ATTEMPT
-RALPH_GATE  RALPH_REPORT_PATH  RALPH_LEASE
+RALPH_GATE  RALPH_REPORT_PATH
 ```
+
+O lease **não** é exportado ao comando de gate: o controlador registra o
+resultado; o wrapper manual recebe o lease por `--lease`. Credenciais e proofs
+permanecem fora do ambiente do comando.
 
 O comando de gate **não** chama `ralph-control gate` quando invocado pelo
 supervisor: ele apenas produz evidência (stdout/stderr) e retorna o exit code;
 o controlador registra o gate e verifica a árvore. Os wrappers instalados
-leem o contrato por ambiente e, quando chamados manualmente com argumentos
-posicionais (`--workflow --feature --lease`), mantêm o comportamento legado de
-registrar o gate.
+leem o contrato por ambiente (a presença de `RALPH_GATE` indica invocação
+controlada) e, quando chamados manualmente com argumentos posicionais
+(`--workflow --feature --lease`), mantêm o comportamento legado de registrar
+o gate.
 
 Exemplo mínimo de comando de gate configurável só por env (sem args):
 
