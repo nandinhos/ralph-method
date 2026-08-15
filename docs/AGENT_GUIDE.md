@@ -994,6 +994,19 @@ bash scripts/test-ralph.sh
 bash scripts/test-reproducibility.sh
 ```
 
+**Validação remota obrigatória.** O `ci-portable.sh` é a fronteira oficial e
+roda no GitHub Actions a cada push para `main` ou branch `feat/**`. Uma
+mudança que toque testes, workflow de CI, instalação, readiness de providers
+ou isolamento `bwrap` deve ser validada no runner remoto, não apenas no host
+do desenvolvedor: o kernel do GitHub Actions restringe user namespaces, então
+`bwrap --unshare-pid` falha lá mesmo quando funciona localmente. Por isso os
+testes de readiness e multiprovider usam um `bwrap` fake
+(`FAKE_BWRAP_SMOKE=1|0`) para isolar a lógica de decisão do `ralph-init` da
+capacidade do kernel; nunca dependa de `bwrap` real para um assert da CI
+portátil. Antes de declarar uma release publicada, confira
+`gh run list` para o commit: a tag e a promoção só valem com o CI remoto
+verde.
+
 ## 10. Desinstalação segura
 
 Primeiro gere o plano, sem alterar o projeto:
