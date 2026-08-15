@@ -12,3 +12,5 @@
 2026-08-14 | segurança | A policy passou a rejeitar symlink externo/quebrado e hardlink para o token antes da geração, fechando escape lexical de `repo-root` para mounts sensíveis.
 2026-08-14 | adversarial | A revisão independente reprovou o candidato por superfícies de verify mutáveis, canonicalização semântica fail-open e validação insuficiente de identidade/fallback no controlador; promoção permaneceu bloqueada.
 2026-08-14 | segurança | O loop passou a fixar a assinatura das superfícies antes de impl, vereditos agora exigem linhas integrais/únicas e o controlador revalida identidade/fallback e o par normativo impl+verify de `agy`.
+2026-08-15 | erro | A promoção da v0.9.0 subiu com bin/ralph-init ainda em RALPH_METHOD_VERSION='0.8.0'; o CI remoto falhou no test-installation. check-doc-sync validava só VERSION vs AGENT_GUIDE/STATUS, não a constante do instalador.
+2026-08-15 | correção | check-doc-sync.sh passou a validar RALPH_METHOD_VERSION em bin/ralph-init e a entrada da versão em CHANGELOG.md contra VERSION; sendo o primeiro item de ci-portable.sh, qualquer divergência bloqueia push/merge. Guia de agentes documenta a regra.

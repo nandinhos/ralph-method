@@ -28,6 +28,12 @@ guia deve ser atualizado no mesmo commit ou release, incluindo seu campo
 bash scripts/check-doc-sync.sh
 ```
 
+O check valida também a sincronização de `bin/ralph-init`
+(`RALPH_METHOD_VERSION`), `docs/STATUS.md` e `CHANGELOG.md` com `VERSION`, e é
+o primeiro item da CI portátil: qualquer divergência de versão entre esses
+arquivos bloqueia o push/merge. Uma release nunca deve alterar apenas
+`VERSION`; todas as fontes de versão do método precisam avançar juntas.
+
 Uma alteração de CLI, schema, máquina de estados, provider, comunicação ou
 ownership exige também a atualização da seção correspondente deste guia, de
 `docs/STATUS.md` e, quando houver decisão arquitetural, de um ADR em
