@@ -96,6 +96,19 @@
   terminal. `attempt.started` chegou a **9+**.
 - O supervise foi interrompido para parar o sangramento de re-execuções.
 
+## Resolução (fix 8f81ea1 / HND-2026-0012) — CONFIRMADO
+
+Com a correção `8f81ea1` (retry pós-debugging de feature commitada não
+re-executa o bloco) aplicada, a phase-25 fechou:
+
+- bloco do attempt 10 concluiu com exit 0 e os cinco gates passaram
+  (validation, quality, runtime_evidence, technical_review, curation);
+- `feature.approved` → `handoff.generated` → `handoff.committed`
+  (`613da63`) → `feature.released` (2026-08-15T21:43:23Z) →
+  `knowledge.candidate_created` → `feature.advanced`;
+- o workflow avançou para **phase-26** (progresso 1/15);
+- árvore limpa; feature commitada em `3729c4e` + handoff `613da63`.
+
 ## Evidência
 
 - `INC-2026-0007` (pane original), `DBG-2026-0008/0009/0010/0011` (debugs da
