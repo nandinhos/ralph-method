@@ -64,17 +64,37 @@ runtime, banco ou credencial do projeto.
 #### Self-hosting do próprio Ralph Method
 
 Este repositório é uma exceção explícita: ele pode usar o próprio runtime para
-implementar suas fases. O perfil versionado `.ralph/codex.env` aponta para
-`scripts/ralph.sh` e usa o runner nativo do Codex. Execute o wrapper somente
-após uma fase aprovada e com a árvore limpa:
+implementar suas fases. Os perfis versionados `.ralph/codex.env` (runner
+nativo Codex) e `.ralph/opencode.env` (adapter OpenCode) apontam para
+`scripts/ralph.sh`. Execute o wrapper somente após uma fase aprovada e com a
+árvore limpa:
 
 ```bash
 bin/ralph-bloco <fase-inicial> <fase-final> codex
+bin/ralph-bloco <fase-inicial> <fase-final> opencode
 ```
 
-O perfil self-hosted também define `RALPH_TEST_CMD=bash scripts/ci-portable.sh`,
+Os perfis self-hosted também definem `RALPH_TEST_CMD=bash scripts/ci-portable.sh`,
 que é o comando de qualidade deste repositório; projetos com `bin/check`
 continuam usando esse valor como padrão do wrapper.
+
+O self-hosting com OpenCode exige que a proof read-only exista antes do
+primeiro verify. Gere-a fora da raiz mutável e mantenha o caminho em
+`RALPH_OPENCODE_VERIFY_POLICY_PROOF`:
+
+```bash
+bash scripts/opencode-readonly-proof.sh \
+  --repo-root "$PWD" --agent ralph-review \
+  --model "$RALPH_OPENCODE_MODEL" \
+  --proof-file /tmp/ralph-readonly-policy-proof.json
+```
+
+O `ralph-control supervise` remove `RALPH_OPENCODE_*` do ambiente do executor;
+ao iniciar o supervisor com `--engine opencode`, exporte
+`RALPH_OPENCODE_MODEL`, `RALPH_OPENCODE_AGENT`,
+`RALPH_OPENCODE_VERIFY_AGENT` e `RALPH_OPENCODE_VERIFY_POLICY_PROOF` no
+processo que o lança (ex: `RALPH_OPENCODE_MODEL=... bin/ralph-control supervise
+... --engine opencode`).
 
 Não use `ralph-init apply` sobre este checkout. O instalador deve continuar
 bloqueando a auto-instalação como instalação externa; o perfil self-hosted é a
@@ -628,7 +648,13 @@ salve credenciais ou a saída integral em prompt, ledger ou documentação.
 - **OpenCode:** use `.ralph/opencode.env`, preencha
   `RALPH_OPENCODE_MODEL`, `RALPH_OPENCODE_AGENT` e, para technical review,
   gere `RALPH_OPENCODE_VERIFY_POLICY_PROOF` fora da raiz mutável. A ausência
-  da prova ou do agente read-only bloqueia a chamada.
+  da prova ou do agente read-only bloqueia a chamada. O health probe
+  `opencode models` pode levar ~11s em CLIs recentes; o `ralph-init` usa
+  timeout de 30s para este provider (demais seguem em 8s), então um OpenCode
+  autenticado deve aparecer como `functional`/`adapter_enabled=true`. Em
+  execução controlada (`supervise`/`run`), as variáveis `RALPH_OPENCODE_*`
+  precisam estar no ambiente do processo que lança o supervisor; o controlador
+  as remove do executor, mas o preflight do adapter as lê.
 - **agy:** use `.ralph/agy.env`, preencha `RALPH_AGY_MODEL` e, se necessário,
   `RALPH_VERIFY_MODEL`. Não copie credenciais. O verify só pode avançar após
   `adapters/agy/runner.sh preflight --mode verify --repo-root "$PROJECT_ROOT"`.

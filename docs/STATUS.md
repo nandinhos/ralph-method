@@ -8,6 +8,19 @@ pela tag anotada `v0.9.0` após regressão completa, smoke real `agy 1.1.13` e
 revisão adversarial independente sem finding aberto. O relatório da promoção
 está em [`docs/reports/0025-promocao-v0-9-0.md`](reports/0025-promocao-v0-9-0.md).
 
+O self-hosting do próprio Ralph Method foi exercitado em clone dedicado com o
+engine OpenCode: o `ralph-control supervise` rodou o pipeline completo
+(claim/lease/fencing, implementação via adapter, gates 1–3, revisão read-only
+independente, systematic debugging e retry) sobre a fila da FEATURE-094
+(failover). A certificação revelou e corrigiu três pontos que o uso real
+expôs: o detector de rate limit do Codex não reconhecia a mensagem real
+`You have hit your usage limit ... try again at <data>`; o health probe
+`opencode models` demora ~11s e estourava o timeout de 8s, deixando o OpenCode
+permanentemente `degraded`; e o preflight OpenCode exige as variáveis
+`RALPH_OPENCODE_*` no ambiente do supervisor. Os perfis self-hosted
+`.ralph/codex.env` e `.ralph/opencode.env` estão versionados; a prova
+read-only do OpenCode é gerada fora da raiz mutável.
+
 A versão `0.4.0` foi a primeira promoção para `main`. A versão `0.6.1` foi a
 release de manutenção baseada no merge `ba98dfa` em `main`, recebeu a tag
 anotada `v0.6.1` e está sincronizada com `origin/main`. A `0.8.0` agora é a

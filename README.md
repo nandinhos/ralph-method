@@ -68,6 +68,13 @@ adapter correspondente.
 | Antigravity CLI (`agy`) | adapter em `adapters/agy/` | modelo explícito; verify exige Linux, `bwrap`, token e agente workspace |
 | Hermes | somente readiness passiva | não iniciar execução; consultar backlog |
 
+O perfil de execução do OpenCode é gerado em `.ralph/opencode.env` pelo
+instalador; o repositório também versiona um perfil self-hosted com o mesmo
+nome (ver `docs/AGENT_GUIDE.md`, seção "Self-hosting do próprio Ralph
+Method"). O health probe `opencode models` pode demorar alguns segundos; o
+`ralph-init` usa timeout de 30s para este provider, então um OpenCode
+autenticado aparece como `functional` com `adapter_enabled=true`.
+
 O caminho recomendado é sempre `--provider auto --verify-providers`: o plano
 identifica os executáveis, certifica somente sessões autenticadas por probes
 não generativos e escolhe um único runner elegível. Se nenhum estiver apto, o

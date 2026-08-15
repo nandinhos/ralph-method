@@ -231,12 +231,12 @@ function hasOpenCodeModelSignal(string $output): bool
 
 function hasAgyModelSignal(string $output): bool
 {
-    return preg_match('/^\s*(?:gemini|claude|gpt)[A-Za-z0-9._-]+\s*$/mi', stripAnsi($output)) === 1;
+    return preg_match('/^\s*(?:gemini|claude|gpt)[A-Za-z0-9._-]+(?:\s|$)/mi', stripAnsi($output)) === 1;
 }
 
 function hasAgyAgentSignal(string $output): bool
 {
-    return preg_match('/^\s*\S+\s*$/m', stripAnsi($output)) === 1;
+    return preg_match('/^\s*[A-Za-z0-9._-]+(?:\s|$)/m', stripAnsi($output)) === 1;
 }
 
 function extractHermesProvider(string $output): string

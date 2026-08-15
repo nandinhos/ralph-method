@@ -49,7 +49,7 @@ chmod +x "$fake_bin/opencode"
 printf '%s\n' '#!/usr/bin/env bash' 'case "$*" in' '  --version) printf "%s\\n" "fixture" ;;' '  "status") printf "%s\\n" "Provider: MiniMax" "Model: MiniMax-M3" "MiniMax          ✓ configured" "Other Provider   ✗ not logged in" ;;' '  "auth status MiniMax") printf "%s\\n" "minimax: logged in" ;;' '  *--print*|*exec*|*run*) exit 91 ;;' '  *) exit 2 ;;' 'esac' > "$fake_bin/hermes"
 chmod +x "$fake_bin/hermes"
 
-printf '%s\n' '#!/usr/bin/env bash' 'case "$*" in' '  --version) printf "%s\\n" "1.1.13-fixture" ;;' '  models) [ "${FAKE_AGY_AUTH:-1}" = 1 ] && printf "%s\\n" "gemini-3.7-flash-high" || { printf "%s\\n" "authentication required"; exit 7; } ;;' '  *agents) [ "${FAKE_AGY_AGENTS:-1}" = 1 ] && printf "%s\\n" "bc-harness" "ralph-review" || { printf "%s\\n" "authentication required"; exit 7; } ;;' '  *--print*|*exec*|*run*) exit 91 ;;' '  *) exit 2 ;;' 'esac' > "$fake_bin/agy"
+printf '%s\n' '#!/usr/bin/env bash' 'case "$*" in' '  --version) printf "%s\\n" "1.1.13-fixture" ;;' '  models) [ "${FAKE_AGY_AUTH:-1}" = 1 ] && printf "%s\\n" "gemini-3.7-flash-high     Gemini 3.7 Flash (High)" || { printf "%s\\n" "authentication required"; exit 7; } ;;' '  *agents) [ "${FAKE_AGY_AGENTS:-1}" = 1 ] && printf "%s\\n" "Available agents:" "bc-harness" "ralph-review" || { printf "%s\\n" "authentication required"; exit 7; } ;;' '  *--print*|*exec*|*run*) exit 91 ;;' '  *) exit 2 ;;' 'esac' > "$fake_bin/agy"
 chmod +x "$fake_bin/agy"
 
 printf '%s\n' '#!/usr/bin/env bash' 'case " $* " in' '  *" /bin/true "*) [ "${FAKE_BWRAP_SMOKE:-1}" = 1 ] && exit 0 || exit 1 ;;' '  *) exit 0 ;;' 'esac' > "$fake_bin/bwrap"
