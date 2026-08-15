@@ -88,8 +88,9 @@ preflight() {
   if [ "$mode" = verify ]; then
     [ -n "$repo_root" ] || die 'verify exige repo-root explícito'
     repo_root="$(cd "$repo_root" 2>/dev/null && pwd -P)" || die 'repo-root inválido'
-    grep -Fxq "$agent" < <(cd "$repo_root" && agy --add-dir "$repo_root" agents 2>/dev/null) \
-      || die "agente agy não descoberto: $agent"
+    local agent_file="$repo_root/.agents/agents/$agent/agent.md"
+    [ -f "$agent_file" ] && [ -r "$agent_file" ] \
+      || die "agente agy não descoberto: $agent (esperado em .agents/agents/$agent/agent.md)"
     local checked
     checked="$(policy_json "$repo_root" "$agent")" || die 'política agy não foi comprovada'
     policy_hash="$(POLICY_JSON="$checked" php -r '$v=json_decode(getenv("POLICY_JSON"), true, 512, JSON_THROW_ON_ERROR); echo $v["policy_hash"] ?? "";')"

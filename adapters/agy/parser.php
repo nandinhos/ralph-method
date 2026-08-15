@@ -252,6 +252,9 @@ foreach ($lines as $index => $line) {
         continue;
     }
     if ($type === 'step_update') {
+        if ($conversationId === null) {
+            $malformed ??= 'stream deve iniciar com init';
+        }
         $step = $event['step_update'] ?? null;
         if (! is_array($step)) {
             $malformed ??= 'step_update incompleto';
@@ -297,6 +300,9 @@ foreach ($lines as $index => $line) {
         continue;
     }
     if ($type === 'result') {
+        if ($conversationId === null) {
+            $malformed ??= 'stream deve iniciar com init';
+        }
         $resultCount++;
         $terminalIndex = $index;
         $result = $event['result'] ?? null;

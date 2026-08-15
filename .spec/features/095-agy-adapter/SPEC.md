@@ -38,7 +38,9 @@ Um projeto Linux com `agy` autenticado e `bwrap` operacional pode:
 - `providerDefinitions()` deve registrar probes `models` e `agents` para `agy`;
 - probes não podem invocar `--print`, prompt ou inferência;
 - autenticação exige catálogo de modelo reconhecível;
-- health exige lista de agente reconhecível;
+- health exige CLI `agents` funcional; a presença do agente `ralph-review` é
+  comprovada no preflight pelo arquivo `.agents/agents/ralph-review/agent.md`
+  do workspace, não pela listagem global `agy agents`;
 - suporte operacional exige Linux, `bwrap` executável e token OAuth legível;
 - falha de qualquer requisito mantém `adapter_enabled=false`.
 
@@ -65,7 +67,9 @@ O runner deve expor `preflight`, `run` e `version`.
 
 ### RF-04 — Verificação
 
-- exigir agente `ralph-review` instalado no workspace;
+- exigir agente `ralph-review` instalado no workspace
+  (`.agents/agents/ralph-review/agent.md` no `repo-root`); a listagem global
+  `agy agents` não expõe agentes do workspace;
 - usar `--mode plan` e `--sandbox`, sem `--disable-slash-commands`;
 - executar dentro de `bwrap` com raiz vazia e allowlist explícita;
 - montar read-only somente `/usr`, arquivos mínimos de rede/certificados, o

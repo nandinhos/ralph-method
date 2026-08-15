@@ -45,7 +45,7 @@ chmod +x "$fake_bin/opencode"
 printf '%s\n' '#!/usr/bin/env bash' 'case "$*" in' '  --version) printf "%s\\n" "fixture" ;;' '  "status") printf "%s\\n" "Provider: MiniMax" "Model: MiniMax-M3" "MiniMax          ✓ configured" "Other Provider   ✗ not logged in" ;;' '  "auth status MiniMax") printf "%s\\n" "minimax: logged in" ;;' '  *--print*|*exec*|*run*) exit 91 ;;' '  *) exit 2 ;;' 'esac' > "$fake_bin/hermes"
 chmod +x "$fake_bin/hermes"
 
-printf '%s\n' '#!/usr/bin/env bash' 'case "$*" in' '  --version) printf "%s\\n" "1.1.13-fixture" ;;' '  models) [ "${FAKE_AGY_AUTH:-1}" = 1 ] && printf "%s\\n" "gemini-3.7-flash-high" || { printf "%s\\n" "authentication required"; exit 7; } ;;' '  *agents) [ "${FAKE_AGY_REVIEW_AGENT:-1}" = 1 ] && printf "%s\\n" "ralph-review" || printf "%s\\n" "outro-agente" ;;' '  *--print*|*exec*|*run*) exit 91 ;;' '  *) exit 2 ;;' 'esac' > "$fake_bin/agy"
+printf '%s\n' '#!/usr/bin/env bash' 'case "$*" in' '  --version) printf "%s\\n" "1.1.13-fixture" ;;' '  models) [ "${FAKE_AGY_AUTH:-1}" = 1 ] && printf "%s\\n" "gemini-3.7-flash-high" || { printf "%s\\n" "authentication required"; exit 7; } ;;' '  *agents) [ "${FAKE_AGY_AGENTS:-1}" = 1 ] && printf "%s\\n" "bc-harness" "ralph-review" || { printf "%s\\n" "authentication required"; exit 7; } ;;' '  *--print*|*exec*|*run*) exit 91 ;;' '  *) exit 2 ;;' 'esac' > "$fake_bin/agy"
 chmod +x "$fake_bin/agy"
 printf '%s\n' 'fixture-token' > "$TMP/agy-token"
 
@@ -156,8 +156,8 @@ assert_json "$agy_verified" '
         && ($provider["adapter_enabled"] ?? false) === true ? 0 : 1);
 '
 
-agy_without_review_agent="$(env "${common_env[@]}" FAKE_AGY_REVIEW_AGENT=0 "$ROOT/bin/ralph-init" plan --project "$project" --provider agy --verify-providers)"
-assert_json "$agy_without_review_agent" '
+agy_without_agents="$(env "${common_env[@]}" FAKE_AGY_AGENTS=0 "$ROOT/bin/ralph-init" plan --project "$project" --provider agy --verify-providers)"
+assert_json "$agy_without_agents" '
     $plan = json_decode(getenv("JSON"), true, 512, JSON_THROW_ON_ERROR);
     $provider = $plan["detection"]["providers"]["agy"] ?? [];
     exit(($provider["health_status"] ?? null) === "unhealthy"

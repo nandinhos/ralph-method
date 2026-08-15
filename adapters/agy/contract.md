@@ -44,6 +44,13 @@ workspace atual como confiável. O agente declara `commandExecutionPolicy:
 strict` e `inheritMcp: false`. Um probe real deve observar `ERROR` antes de
 conteúdo ao tentar `view_file` no canário ao lado do token.
 
+O preflight de verify comprova o agente `ralph-review` pela presença de
+`.agents/agents/ralph-review/agent.md` no `repo-root` — a fonte que o `run`
+real consome via `--add-dir` — e não pela listagem global `agy agents`, que
+expõe somente agentes instalados da sessão local. O readiness segue a mesma
+fonte: `agy agents` apenas comprova uma CLI funcional; o agente do workspace é
+validado pelo preflight antes da geração e pela policy como superfície de hash.
+
 Antes da geração, a policy percorre o projeto e rejeita symlink quebrado ou
 resolvido fora de `repo-root`, além de hardlink que compartilhe o inode do token.
 Isso impede que uma ferramenta com path lexicalmente interno atravesse para um

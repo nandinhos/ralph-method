@@ -66,6 +66,9 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 stream_case="${RALPH_TEST_STREAM_CASE:-valid}"
+if [ "$stream_case" = pre_init_other ]; then
+  printf '%s\n' '{"event":"step_update","step_update":{"conversation_id":"conv_outra","step_index":0,"state":"DONE","step_type":"tool","tool_name":"view_file","tool_info":{"parameters":{"AbsolutePath":"REPO_PLACEHOLDER/README.md"},"output":"FULL_FILE_CONTENT"}}}' | sed "s#REPO_PLACEHOLDER#${RALPH_TEST_REPO:?}#"
+fi
 init_model="$model"
 [ "$stream_case" != model_divergence ] || init_model="${model}-fallback"
 printf '{"event":"init","conversation_id":"conv_verify","init":{"model":"%s","cwd":"fixture","tools":[],"permission_mode":"request-review","expanded_commands":[{"name":"plan","type":"system"}]}}\n' "$init_model"
@@ -232,6 +235,7 @@ run_failed_stream_case() {
 }
 
 run_failed_stream_case invalid_json 'JSON inválida'
+run_failed_stream_case pre_init_other 'deve iniciar com init'
 run_failed_stream_case duplicate_result 'exatamente um result'
 run_failed_stream_case second_session 'múltiplas conversas'
 run_failed_stream_case model_divergence 'modelo efetivo diverge'

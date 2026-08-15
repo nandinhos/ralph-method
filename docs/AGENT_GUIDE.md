@@ -548,7 +548,11 @@ chamada de modelo foi consumida ou concluída.
 execução no Ralph. `adapter_enabled` só fica verdadeiro quando a CLI está
 functional e o runner correspondente já está implementado nesta versão.
 OpenCode usa `auth list` e `models`; `agy` usa `models` e `agents`, depois
-comprova Linux, `bwrap` e token OAuth legível. Hermes identifica o provider selecionado
+comprova Linux, `bwrap` e token OAuth legível. A presença do agente
+`ralph-review` no workspace é validada pelo preflight do adapter
+(`.agents/agents/ralph-review/agent.md`) e pela policy como superfície; a
+listagem global `agy agents` expõe somente agentes instalados da sessão local
+e não decide a elegibilidade do agente de verify. Hermes identifica o provider selecionado
 no próprio `status` (ou respeita `RALPH_HERMES_PROVIDER`) e valida
 `auth status <provider>`. O status de outros providers listados pelo Hermes
 não reprova o provider selecionado.

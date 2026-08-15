@@ -103,6 +103,24 @@ commit. A prova passou a sobrepor ao archive apenas mudanças versionáveis do
 checkout e a repetição terminou verde. Nenhuma alegação de promoção, tag ou
 publicação decorre deste relatório.
 
+## Revisão adversarial e correções aplicadas
+
+A revisão adversarial independente encontrou e as correções fecharam:
+
+- **high — preflight verify dependia de `agy agents`**: a listagem global expõe
+  somente agentes instalados da sessão local (`bc-harness`), nunca o agente do
+  workspace, e o preflight falhava com exit `2` no campo real antes da geração.
+  O preflight passou a comprovar `ralph-review` pela presença de
+  `.agents/agents/ralph-review/agent.md` no `repo-root` — a fonte que o `run`
+  realmente consome via `--add-dir` e que a policy já valida como superfície.
+  O readiness segue a mesma fonte: `agy agents` comprova apenas CLI funcional.
+  O preflight real repetido terminou em exit `0` com política verificada.
+- **medium — parser aceitava evento pré-init de outra conversa**: um
+  `step_update` de outra conversa posicionado antes do `init` era projetado e o
+  resultado terminava `completed`. O parser passou a rejeitar qualquer
+  `step_update` ou `result` anterior ao `init` (`stream deve iniciar com init`);
+  o fixture de regressão cobre o caso e reprova a sessão.
+
 ## Decisões e limites
 
 - ADR-0017: reabertura e seam comum de adapters;

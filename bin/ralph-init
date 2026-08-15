@@ -236,7 +236,7 @@ function hasAgyModelSignal(string $output): bool
 
 function hasAgyAgentSignal(string $output): bool
 {
-    return preg_match('/^\s*ralph-review\s*$/m', stripAnsi($output)) === 1;
+    return preg_match('/^\s*\S+\s*$/m', stripAnsi($output)) === 1;
 }
 
 function extractHermesProvider(string $output): string
