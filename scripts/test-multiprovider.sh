@@ -133,6 +133,13 @@ printf '%s\n' \
   '  *) exit 2 ;;' \
   'esac' > "$fake_bin/agy"
 chmod +x "$fake_bin/agy"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'case " $* " in' \
+  '  *" /bin/true "*) [ "${FAKE_BWRAP_SMOKE:-1}" = 1 ] && exit 0 || exit 1 ;;' \
+  '  *) exit 0 ;;' \
+  'esac' > "$fake_bin/bwrap"
+chmod +x "$fake_bin/bwrap"
 printf '%s\n' 'fixture-token' > "$TMP/agy-token"
 
 php_bin="$(command -v php || true)"
