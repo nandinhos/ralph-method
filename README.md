@@ -151,9 +151,10 @@ opt-in.
 
 ## Estado
 
-A versão publicada atual é `0.8.0`, identificada pela tag `v0.8.0`. Ela
-incorpora a manutenção `0.6.1`, consolida a portabilidade do CI em PHP 8.2,
-o fallback seguro quando namespaces não estão disponíveis e adiciona a
+A versão publicada atual é `0.9.0`, identificada pela tag `v0.9.0`. Ela
+consolida o detector legado `bc-harness` e o adapter nativo `agy`
+(FEATURE-095) sob a seam comum de adapters, preservando a portabilidade do CI
+em PHP 8.2, o fallback seguro quando namespaces não estão disponíveis e a
 evolução assistida de instalações externas. O método nasceu da extração do
 núcleo validado no `refactor-radar`, mas não possui dependência de runtime, importação de código,
 banco ou credencial desse produto. O bundle pode ser instalado em qualquer
@@ -162,19 +163,20 @@ checkout Git compatível, conforme a prova em
 instalação reversível, o canal de feedback e o guia operacional sincronizado
 para agentes de IA fazem parte da release.
 
-O Ralph Method está na versão publicada `0.8.0`, com memória episódica
+O Ralph Method está na versão publicada `0.9.0`, com memória episódica
 sanitizada, retenção explícita, índices de engenharia por categoria e tema,
-evolução externa com rollback e verificação de campo no OpenCode.
-Este checkout contém também o candidato do adapter `agy`, reaberto pelo
+evolução externa com rollback, verificação de campo no OpenCode e adapter
+`agy` executável com verify isolado por `bwrap`, reaberto pelo
 [`ADR-0017`](docs/adr/0017-reabertura-agy-e-seam-comum-de-adapters.md), sem
-alterar a versão publicada ou habilitar failover. O estado dos adiamentos está
+habilitar failover. O estado dos adiamentos está
 em [`docs/backlog.md`](docs/backlog.md).
 
-A versão atual é `0.8.0`. Ela adiciona evolução assistida com backup,
-isolamento, aceite e rollback condicional para Ralph externo, mantendo o
-método desacoplado de estado legado. O ciclo foi comprovado em campo pelo
-OpenCode `1.18.15` e está detalhado em
-[`docs/reports/0019-evolucao-opencode-v0-8-0.md`](docs/reports/0019-evolucao-opencode-v0-8-0.md).
+A versão atual é `0.9.0`. Ela adiciona o adapter `agy` como runner de primeira
+classe e consolida a evolução assistida com backup, isolamento, aceite e
+rollback condicional para Ralph externo, mantendo o método desacoplado de
+estado legado. O ciclo foi comprovado em campo pelo
+OpenCode `1.18.15` e pelo `agy 1.1.13`; a promoção está detalhada em
+[`docs/reports/0025-promocao-v0-9-0.md`](docs/reports/0025-promocao-v0-9-0.md).
 
 Consulte [docs/README.md](docs/README.md), [docs/STATUS.md](docs/STATUS.md), [docs/architecture/README.md](docs/architecture/README.md),
 [docs/AGENT_GUIDE.md](docs/AGENT_GUIDE.md) e [docs/roadmap.md](docs/roadmap.md).

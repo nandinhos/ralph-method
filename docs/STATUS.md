@@ -2,9 +2,11 @@
 
 ## Estado atual
 
-A versão publicada atual é `0.8.0`. Este checkout contém o candidato da
-FEATURE-095 para o adapter `agy`; ele não foi promovido, tagueado nem incluído
-em failover.
+A versão publicada atual é `0.9.0`. Ela consolida em `main` o detector legado
+(`bc-harness`, features 091–093) e o adapter `agy` (FEATURE-095), identificada
+pela tag anotada `v0.9.0` após regressão completa, smoke real `agy 1.1.13` e
+revisão adversarial independente sem finding aberto. O relatório da promoção
+está em [`docs/reports/0025-promocao-v0-9-0.md`](reports/0025-promocao-v0-9-0.md).
 
 A versão `0.4.0` foi a primeira promoção para `main`. A versão `0.6.1` foi a
 release de manutenção baseada no merge `ba98dfa` em `main`, recebeu a tag

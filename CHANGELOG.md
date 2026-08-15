@@ -5,7 +5,26 @@ português do Brasil. A versão no arquivo `VERSION` identifica o bundle em
 desenvolvimento; uma versão só é considerada publicada após commit, tag
 anotada e promoção documentada.
 
-## 0.8.1 — em preparação (regressão do detector legado)
+## 0.9.0 — publicada em 2026-08-14
+
+### Adapter nativo `agy` (FEATURE-095)
+
+- adicionado o adapter `agy` como runner de primeira classe sob a seam comum
+  `preflight|run|version` (ADR-0017), com implementação headless, verify
+  isolado por `bwrap` allowlisted (ADR-0018) e resultado normalizado
+  `runner-result 1.1.0` com terminal `result` (ADR-0019), preservando OpenCode
+  `1.0.0`/`step_finish` e `fallback_policy=none`;
+- preflight de verify comprova o agente `ralph-review` pelo arquivo
+  `.agents/agents/ralph-review/agent.md` no workspace, e não pela listagem
+  global `agy agents`, que expõe somente agentes instalados da sessão local;
+- readiness usa `agy agents` apenas como prova de CLI funcional; a presença do
+  agente de verify é validada no preflight e como superfície da policy;
+- parser rejeita `step_update`/`result` anterior ao primeiro `init`, fechando a
+  aceitação de evento de outra conversa pré-init;
+- comprovada a regressão completa, o smoke real `agy 1.1.13` (impl + verify +
+  probe de fronteira) e a revisão adversarial sem finding aberto;
+- relatório numerado `docs/reports/0024-adapter-agy-funcional-2026-08-14.md` e
+  promoção com revisão independente registrada.
 
 ### Detecção e evolução legada `bc-harness`
 
@@ -40,9 +59,9 @@ anotada e promoção documentada.
 
 ### Estado da publicação
 
-O commit da fase e a promoção para `main` aguardam a revisão independente; a
-prova real de campo com o projeto-alvo original permanece obrigatória antes da
-publicação desta release.
+A `0.9.0` consolida o detector legado e o adapter `agy` em `main`, identificada
+pela tag anotada `v0.9.0`, com revisão adversarial independente sem finding
+aberto e CI portátil verde.
 
 ## 0.6.1 — publicada em 2026-08-09
 

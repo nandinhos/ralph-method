@@ -2,8 +2,8 @@
 
 - **Data:** 2026-08-14
 - **Feature:** `FEATURE-095`
-- **Status:** candidato validado localmente; promoção não executada
-- **Versão publicada preservada:** `0.8.0`
+- **Status:** promovido na v0.9.0; promoção registrada no relatório `0025`
+- **Versão publicada:** `0.9.0`
 
 ## Intenção
 
@@ -130,4 +130,4 @@ A revisão adversarial independente encontrou e as correções fecharam:
 - `FEATURE-094` e `fallback_policy=none` permanecem inalterados;
 - o transporte `file_to_argument` é uma limitação conhecida da CLI e pode ser
   visível transitoriamente ao mesmo usuário no process table;
-- a versão publicada continua `0.8.0`; este trabalho é um candidato no checkout.
+- a versão `0.9.0` publica esta entrega; a promoção está no relatório `0025`.

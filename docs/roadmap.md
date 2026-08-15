@@ -121,9 +121,11 @@ regressão que prepara a release desta entrega concluiu:
   de SIGPIPE: CI portátil verde e confirmações diretas reexecutadas, com
   evidência no relatório `0023`.
 
-O commit da fase e a promoção para `main` aguardam a revisão independente
-(regra do `ralph.sh`); a prova real de campo com o projeto-alvo original segue
-como passo obrigatório antes da publicação desta release.
+A promoção foi concluída na `v0.9.0`, junto com o adapter `agy` (FEATURE-095),
+após regressão completa, smoke real `agy 1.1.13` e revisão adversarial sem
+finding aberto; o relatório da promoção é o `0025`. A prova real de campo com
+o projeto-alvo original permanece como passo recomendado para uma futura
+validação de campo do detector.
 
 ## Próxima evolução — memória episódica e taxonomia (`v0.6.0`)
 
