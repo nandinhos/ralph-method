@@ -68,7 +68,10 @@ fi
 ENV_NAME="RALPH_$(echo "$GATE" | tr '[:lower:]' '[:upper:]')_COMMAND"
 [ -n "$COMMAND" ] || COMMAND="${!ENV_NAME:-}"
 if [ -z "$COMMAND" ] && [ "$GATE" = "curation" ] && [ -x "$REPO/bin/ralph-knowledge" ]; then
-  COMMAND="bin/ralph-knowledge --workflow \"$WORKFLOW\" --feature \"$FEATURE\""
+  # FEATURE-096/097: o default de curation pré-release é READ-ONLY (lista
+  # candidatos e confirma que nada bloqueia a entrega); a decisão de retenção
+  # acontece pós-release. Sem ação obrigatória o ralph-knowledge sairia 2.
+  COMMAND="bin/ralph-knowledge candidates --workflow \"$WORKFLOW\" --feature \"$FEATURE\""
 fi
 
 BEFORE="$(git -C "$REPO" status --porcelain)"

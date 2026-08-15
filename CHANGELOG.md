@@ -17,13 +17,22 @@ anotada e promoção documentada.
   re-rodado automaticamente até `--gate-harness-retries` (default 2) e, só
   então, o supervisor registra `recovery_required` com
   `reason=gate_harness_error_limit`;
+- **retry pós-debugging de feature commitada não re-executa o bloco**: após
+  `debugging_verified` com bloco commitado e falha de gate, o supervisor usa
+  `beginGateRetry` (`gate.retry_started` → `awaiting_gates`) e re-roda só o
+  gate pendente — corrige o INC-2026-0007 (7–9 re-execuções do bloco, ~10–16
+  min cada);
 - comando de gate com `exit 0` e stdout vazio é tratado como defeito de
   harness (evidência mínima obrigatória);
 - novo self-test `ralph-control gate-test --gate <gate>`: valida o comando
   configurado em modo fixture (contexto por env, evidência, exit code) sem
-  tocar no workflow/ledger — teria pego o INC-2026-0007 em segundos;
+  tocar no workflow/ledger; usa o `gate-timeout` do gate real (default 900s,
+  `--gate-timeout` para override) — teria pego o INC-2026-0007 em segundos;
+- default do gate `curation` corrigido: pré-release é read-only
+  (`ralph-knowledge candidates`), sem exigir ação de retenção que falharia
+  antes de `feature.released`;
 - `AGENT_GUIDE` documenta a classificação (seção 6.2) e o self-test;
-- regressão dedicada `scripts/test-ralph-gate-recovery.sh`.
+- regressão dedicada `scripts/test-ralph-gate-recovery.sh` (cenários A–D).
 
 ## 0.9.1 — publicada em 2026-08-15
 

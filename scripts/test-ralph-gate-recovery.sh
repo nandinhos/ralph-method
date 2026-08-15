@@ -32,6 +32,7 @@ control() { "$ROOT/bin/ralph-control" "$@"; }
 # Comandos de gate ficam em bin/ para o pipeline usar.
 # always_fail=1 -> o comando de review sempre falha sem saída (harness_error).
 # always_fail=0 -> o comando falha só na 1ª chamada e passa nas seguintes.
+# always_fail=2 -> o comando falha nas 2 primeiras chamadas e passa depois.
 setup_repo() {
   local repo="$1" counter="$2" always_fail="$3"
   mkdir -p "$repo/bin" "$repo/scripts" "$repo/.ralph"
@@ -49,9 +50,11 @@ setup_repo() {
   if [ "$always_fail" = 1 ]; then
     printf '%s\n' '#!/usr/bin/env bash' 'exit 1' > "$repo/bin/faulty-gate.sh"
   else
-    # Contador: falha SEM nenhuma saída (defeito de harness) na 1ª chamada,
-    # passa nas seguintes (retry automático).
-    printf '%s\n' '#!/usr/bin/env bash' "n=\$(cat \"$counter\" 2>/dev/null || echo 0)" "n=\$((n+1))" "echo \"\$n\" > \"$counter\"" 'if [ "$n" -le 1 ]; then exit 1; fi' 'echo "review-ok"' > "$repo/bin/faulty-gate.sh"
+    local fail_until=1
+    [ "$always_fail" != 2 ] || fail_until=2
+    # Contador: falha SEM nenhuma saída (defeito de harness) nas primeiras
+    # `fail_until` chamadas, passa nas seguintes (retry automático).
+    printf '%s\n' '#!/usr/bin/env bash' "n=\$(cat \"$counter\" 2>/dev/null || echo 0)" "n=\$((n+1))" "echo \"\$n\" > \"$counter\"" "if [ \"\$n\" -le $fail_until ]; then exit 1; fi" 'echo "review-ok"' > "$repo/bin/faulty-gate.sh"
   fi
   chmod +x "$repo/bin/faulty-gate.sh"
 
@@ -152,5 +155,54 @@ printf '%s' "$selftest_ok" | grep -q '"classification": "passed"' \
 selftest_bad="$(RALPH_TECHNICAL_REVIEW_COMMAND="bash -c 'exit 1'" "$ROOT/bin/ralph-control" gate-test --gate technical_review 2>&1)"
 printf '%s' "$selftest_bad" | grep -q '"classification": "gate_harness_error"' \
   || fail 'C: gate-test não classificou comando sem evidência como gate_harness_error'
+
+# ── Cenário D: retry pós-debugging de feature commitada re-roda SÓ o gate,
+#    sem nova tentativa de bloco (INC-2026-0007, attempt 7/8). ────────────────
+repo_d="$TMP/repo-d"
+counter_d="$TMP/counter-d"
+printf '0\n' > "$counter_d"
+setup_repo "$repo_d" "$counter_d" 2
+
+# Esgota o limite de harness error do technical_review -> recovery_required.
+supervise_d="$TMP/supervise-d.log"
+set +e
+timeout 25 env \
+  RALPH_TECHNICAL_REVIEW_COMMAND='bash bin/faulty-gate.sh' \
+  RALPH_CURATION_COMMAND='echo curation-ok' \
+  bash -c 'cd "$1" && "$2" supervise --workflow wf_gate_recovery --engine codex --interval 1 --max-retries 0 --gate-harness-retries 1' _ "$repo_d" "$ROOT/bin/ralph-control" > "$supervise_d" 2>&1
+set -e
+grep -q "gate_harness_error_limit\|falhou sem evidência após limite" "$repo_d/.git/ralph-control/events.jsonl" \
+  || fail 'D: não atingiu recovery_required por limite de harness error'
+attempts_d0="$(grep -c '"type": "attempt.started"' "$repo_d/.git/ralph-control/events.jsonl" 2>/dev/null || true)"
+[ "$attempts_d0" -le 1 ] || fail 'D: erro de harness re-executou o bloco antes do debug'
+
+# Corrige o comando de review (o contador agora passa) e registra debug verificado.
+git -C "$repo_d" add bin/faulty-gate.sh
+git -C "$repo_d" commit -qm "chore: corrige comando de review" 2>/dev/null || true
+cat > "$TMP/debug-report.sh" <<'SH'
+#!/usr/bin/env bash
+echo '{"schema_version":"1.1.0","workflow_id":"wf_gate_recovery","feature_key":"FEATURE-GATE-RECOVERY","attempt":1,"status":"verified","incident_id":"INCD-TEST-0001","symptom":"comando de gate sem evidencia","severity":"high","root_cause":"comando de review quebrado (defeito de harness)","correction_plan":"corrigir o comando de gate","hypotheses":[{"id":"H1","statement":"defeito do comando de gate, nao da feature","status":"confirmed"}],"official_references":[{"provider":"official","source":"https://docs.ralph.example/method/gates","section":"recuperacao"}],"validation":{"status":"passed","exit_code":0,"evidence_refs":["bin/faulty-gate.sh"]},"knowledge_candidate":{"title":"Retry de gate sem re-execucao do bloco","summary":"corrigir o comando, nao re-implementar","applicability":{"when":"gate rejeitado por defeito do comando","when_not":"falha da feature"},"limitations":[]}}'
+SH
+chmod +x "$TMP/debug-report.sh"
+(cd "$repo_d" && "$ROOT/bin/ralph-control" debug --workflow wf_gate_recovery --feature FEATURE-GATE-RECOVERY \
+  --command "bash $TMP/debug-report.sh") >"$TMP/debug-d.log" 2>&1 \
+  || { cat "$TMP/debug-d.log"; fail 'D: debug verificado não registrado'; }
+
+# Re-supervise: a feature está commitada + falha de gate -> beginGateRetry
+# re-roda SÓ o gate, sem novo attempt.started.
+supervise_d2="$TMP/supervise-d2.log"
+set +e
+timeout 35 env \
+  RALPH_TECHNICAL_REVIEW_COMMAND='bash bin/faulty-gate.sh' \
+  RALPH_CURATION_COMMAND='echo curation-ok' \
+  bash -c 'cd "$1" && "$2" supervise --workflow wf_gate_recovery --engine codex --interval 1 --max-retries 0 --gate-harness-retries 3' _ "$repo_d" "$ROOT/bin/ralph-control" > "$supervise_d2" 2>&1
+set -e
+grep -q "gate.retry_started" "$repo_d/.git/ralph-control/events.jsonl" \
+  || fail 'D: supervisor não usou beginGateRetry (gate.retry_started ausente)'
+attempts_d1="$(grep -c '"type": "attempt.started"' "$repo_d/.git/ralph-control/events.jsonl" 2>/dev/null || true)"
+printf '%s\n' "D: attempts.started=$attempts_d0 -> $attempts_d1 (esperado estável — sem re-execução do bloco)"
+[ "$attempts_d1" -le "$attempts_d0" ] || fail 'D: retry pós-debugging re-executou o bloco commitado'
+grep -q 'technical_review": *"passed"\|Gate technical_review: passed' "$repo_d/.git/ralph-control/events.jsonl" \
+  || fail 'D: após o retry de gate, technical_review não passou'
 
 printf '%s\n' 'OK: recuperação de gate — erro de harness não re-executa o bloco, retry do comando aprova o gate e gate-test valida o comando.'

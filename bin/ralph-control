@@ -49,7 +49,7 @@ $eventTypes = [
     'workflow.initialized', 'feature.claimed', 'attempt.started', 'block.finished',
     'command.started', 'command.heartbeat', 'command.passed', 'command.failed', 'failure.detected',
     'fix.applied', 'fix.reverted', 'verification.passed', 'evidence.generated',
-    'gate.passed', 'gate.rejected', 'gate.harness_error', 'handoff.generated', 'handoff.committed', 'feature.approved',
+    'gate.passed', 'gate.rejected', 'gate.harness_error', 'gate.retry_started', 'handoff.generated', 'handoff.committed', 'feature.approved',
     'feature.released', 'knowledge.candidate_created', 'knowledge.curated',
     'knowledge.rejected', 'knowledge.skipped', 'knowledge.review_required',
     'debugging.required', 'debugging.started', 'debugging.verified', 'debugging.rejected',
@@ -1886,6 +1886,12 @@ function project(array $workflow, array $events): array
                     // como harness_error para o pipeline re-rodar o comando.
                     $feature['gates'][$event['facts']['gate'] ?? 'unknown'] = 'harness_error';
                     break;
+                case 'gate.retry_started':
+                    // Retomada de gates de feature commitada (sem re-execução
+                    // do bloco): mantém awaiting_gates.
+                    $feature['state'] = 'awaiting_gates';
+                    $feature['gate_retry'] = $event['facts'] ?? [];
+                    break;
                 case 'gate.session.reclaimed':
                     $feature['state'] = 'awaiting_gates';
                     $feature['lease_token_hash'] = $event['lease_token_hash'] ?? null;
@@ -2565,21 +2571,39 @@ function superviseWorkflow(array $arguments): void
 
                     return;
                 }
-                if ($retry >= $maxRetries) {
+                $result = $feature['result'] ?? [];
+                $blockCommitted = (int) ($result['exit_code'] ?? 1) === 0;
+                $hasGateFailure = in_array('rejected', array_values($feature['gates'] ?? []), true)
+                    || in_array('harness_error', array_values($feature['gates'] ?? []), true);
+                if ($blockCommitted && $hasGateFailure) {
+                    // FEATURE-097 (INC-2026-0007): a feature está commitada e a
+                    // falha foi de gate. Re-rodar só o gate (awaiting_gates),
+                    // sem nova sessão de implementação e sem gastar maxRetries
+                    // de re-execução de bloco.
+                    fwrite(STDERR, '[RALPH] retomada de gate sem re-execução do bloco (feature commitada)'."\n");
+                    $retryResult = beginGateRetry(array_merge($arguments, [
+                        'actor' => 'supervisor',
+                        'feature' => $cursor,
+                        'reason' => 'retomada de gate após debugging verificado',
+                    ]));
+                    $lease = $retryResult['lease_token'];
+                    $feature = $retryResult['feature'];
+                } elseif ($retry >= $maxRetries) {
                     supervisorRecordRequiredRecovery($arguments, $feature, supervisorSnapshot($arguments, $workflowId, $staleAfter, $activityStaleAfter), 'systematic debugging concluiu, mas o limite de tentativas foi atingido');
                     printJson(['status' => 'recovery_required', 'workflow_id' => $workflowId, 'feature_key' => $cursor, 'reason' => 'retry_limit_after_debug']);
 
                     return;
+                } else {
+                    $retry++;
+                    $retryResult = beginFailedRetry(array_merge($arguments, [
+                        'actor' => 'supervisor',
+                        'feature' => $cursor,
+                        'reason' => 'retomada após systematic debugging verificado',
+                        'preserve-tree' => true,
+                    ]));
+                    $lease = $retryResult['lease_token'];
+                    $feature = $retryResult['feature'];
                 }
-                $retry++;
-                $retryResult = beginFailedRetry(array_merge($arguments, [
-                    'actor' => 'supervisor',
-                    'feature' => $cursor,
-                    'reason' => 'retomada após systematic debugging verificado',
-                    'preserve-tree' => true,
-                ]));
-                $lease = $retryResult['lease_token'];
-                $feature = $retryResult['feature'];
             } elseif (($feature['state'] ?? null) === 'running') {
                 $stale = markStaleRunningFeature($workflowId, $cursor);
                 fwrite(STDERR, supervisorFeedback(supervisorSnapshot($arguments, $workflowId, $staleAfter, $activityStaleAfter))."\n");
@@ -3230,7 +3254,10 @@ function gateTestCommand(array $arguments): void
     ]);
     unset($environment['RALPH_LEASE'], $environment['RALPH_LEASE_TOKEN']);
     $before = workingTreeFingerprint();
-    $result = runReadOnlyCommand(trim($command), max(5, (int) ($arguments['gate-timeout'] ?? 60)), $environment);
+    // FEATURE-097: o self-test usa o mesmo gate-timeout do supervise real
+    // (default 900s) para não dar falso harness_error em gates longos
+    // (bin/check ou revisão LLM). Aceita --gate-timeout como override.
+    $result = runReadOnlyCommand(trim($command), max(5, (int) ($arguments['gate-timeout'] ?? 900)), $environment);
     $after = workingTreeFingerprint();
     $treeChanged = $before !== $after;
     $exitCode = (int) $result['exit_code'];
@@ -3792,6 +3819,46 @@ function beginFailedRetry(array $arguments): array
         ]));
 
         return ['lease_token' => $token, 'feature' => $newFeature];
+    });
+}
+
+/**
+ * beginGateRetry — retoma apenas o pipeline de gates de uma feature JÁ
+ * commitada (FEATURE-097, INC-2026-0007). Quando o bloco terminou com exit 0
+ * e a falha foi de gate (defeito do comando ou verificação da feature), o
+ * retry NÃO re-executa o bloco: a feature volta a awaiting_gates e o
+ * supervisor re-roda só o gate pendente/rejeitado.
+ *
+ * @return array{lease_token: string, feature: array<string, mixed>}
+ */
+function beginGateRetry(array $arguments): array
+{
+    $workflowId = required($arguments, 'workflow');
+    $featureKey = required($arguments, 'feature');
+
+    return withLock(function () use ($arguments, $workflowId, $featureKey): array {
+        $workflow = loadWorkflowForId($workflowId);
+        $projection = project($workflow, readEvents());
+        $feature = featureFrom($projection, $featureKey);
+        $result = $feature['result'] ?? [];
+        $blockCommitted = (int) ($result['exit_code'] ?? 1) === 0;
+        $hasGateFailure = in_array('rejected', array_values($feature['gates'] ?? []), true)
+            || in_array('harness_error', array_values($feature['gates'] ?? []), true);
+        if (! $blockCommitted || ! $hasGateFailure) {
+            fail('gate retry exige bloco commitado com falha de gate');
+        }
+        // Primeiro muda o estado para awaiting_gates (gate.retry_started), para
+        // que a sessão de gates possa ser retomada; depois cria/reusa a sessão.
+        $repository = currentRepository();
+        appendEvent(eventContext($arguments, $feature, 'gate.retry_started', 'Retomada de gates sem re-execução do bloco commitado', [
+            'attempt' => $feature['attempt'],
+            'reason' => $arguments['reason'] ?? 'retomada de gate após falha',
+            'preserved_tree' => ! $repository['working_tree_clean'],
+        ]));
+        $session = beginGateSession(array_merge($arguments, ['workflow' => $workflowId, 'feature' => $featureKey]));
+        $lease = $session['lease_token'];
+
+        return ['lease_token' => $lease, 'feature' => $feature];
     });
 }
 
