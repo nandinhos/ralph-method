@@ -540,6 +540,96 @@ Não grave o token em `.ralph/agy.env`; o caminho padrão é resolvido pela sess
 local do `agy`, e `RALPH_AGY_TOKEN_FILE` serve somente para um caminho local
 alternativo fora de `PROJECT_ROOT`.
 
+### 3.3.1 Guardrails operacionais recomendados no harness Antigravity
+
+O Ralph Method é o control plane do loop de fases e gates; ele não acopla
+ferramentas de segurança externa como dependência nativa do framework. No
+entanto, quando o desenvolvedor ou o agente interage com o **Antigravity CLI** em
+modo autônomo com auto-aprovação (`--dangerously-skip-permissions` ou `agyy`),
+é **altamente recomendado** configurar um interceptador de ciclo de vida
+(`PreToolUse` hook) no harness para prevenir comandos destrutivos acidentais em
+banco de dados, Git ou sistema de arquivos.
+
+#### 1. Configuração do hook no Harness Antigravity
+
+No diretório de configuração global (`~/.gemini/config/hooks.json`) ou no
+workspace do projeto (`.agents/hooks.json`):
+
+```json
+{
+  "destructive-command-guardrail": {
+    "enabled": true,
+    "PreToolUse": [
+      {
+        "matcher": "run_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.gemini/config/hooks/guard_destructive.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+#### 2. Script interceptador determinístico (`guard_destructive.py`)
+
+O script recebe a chamada da ferramenta em JSON no `stdin` e responde com a
+decisão no `stdout`:
+
+```python
+#!/usr/bin/env python3
+import sys, json, re
+
+# Comandos com bloqueio estrito imediato (decision: deny)
+HARD_BLOCK = [
+    # Banco de Dados destrutivo (Artisan / SQL direto)
+    (r"\bphp\s+artisan\s+(?:migrate:fresh|migrate:reset|db:wipe)\b", "Comando destrutivo de banco de dados bloqueado."),
+    (r"\b(?:DROP\s+DATABASE|DROP\s+SCHEMA|TRUNCATE\s+TABLE)\b", "Operação DDL destrutiva bloqueada."),
+    (r"\bDELETE\s+FROM\s+[`\"']?[a-zA-Z0-9_]+[`\"']?\s*(?:;|\s*$)", "DELETE sem WHERE bloqueado."),
+
+    # Filesystem e SO catastrófico
+    (r"\brm\s+-[rRfF]*\s+(?:/|~|\$HOME|\.git\b)", "Exclusão de diretório raiz, home ou .git bloqueada."),
+    (r"\b(?:mkfs|chmod\s+-[rRfF]*\s+777\s+/)\b", "Comando de formatação ou permissão insegura bloqueado."),
+
+    # Git destrutivo em branches principais
+    (r"\bgit\s+push\b.*(?:-f\b|--force\b).*(?:\bmain\b|\bmaster\b|\bproduction\b)", "Force push em branch protegida bloqueado."),
+]
+
+# Comandos que exigem confirmação explícita (decision: force_ask)
+FORCE_ASK = [
+    (r"\bgit\s+reset\s+--hard\b", "git reset --hard descarta alterações locais."),
+    (r"\bphp\s+artisan\s+migrate:rollback\b", "Reversão de migração exige confirmação."),
+]
+
+payload = json.loads(sys.stdin.read() or "{}")
+cmd = payload.get("toolCall", {}).get("args", {}).get("CommandLine", "")
+
+for pattern, reason in HARD_BLOCK:
+    if re.search(pattern, cmd, re.IGNORECASE):
+        print(json.dumps({"decision": "deny", "reason": f"🛡️ [GUARDRAIL]: {reason}"}))
+        sys.exit(0)
+
+for pattern, reason in FORCE_ASK:
+    if re.search(pattern, cmd, re.IGNORECASE):
+        print(json.dumps({"decision": "force_ask", "reason": f"⚠️ [CONFIRMAR]: {reason}"}))
+        sys.exit(0)
+
+print(json.dumps({"decision": "allow"}))
+```
+
+#### 3. Como restringir mais ou flexibilizar
+
+- **Para restringir mais:** adicione novas expressões regulares na lista
+  `HARD_BLOCK` (ex.: bloquear conexões SSH com produção, bloquear `npm publish`
+  não planejado ou comandos com portas externas de banco).
+- **Para flexibilizar:** mova um padrão de `HARD_BLOCK` para `FORCE_ASK`
+  (permitindo que o usuário aprove manualmente através de prompt interativo caso
+  necessário) ou remova a regex se a operação for permitida na sua esteira.
+
 ### 3.4 Prontidão de providers
 
 A existência de uma CLI não habilita seu adapter. O estado precisa avançar
