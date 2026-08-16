@@ -177,6 +177,7 @@ no [`Relatório 0023`](reports/0023-revalidacao-regressao-release-detector-legad
 | Prontidão de provider | `schemas/provider-readiness.schema.json` | autenticação, diagnóstico seguro e elegibilidade do adapter |
 | Detecção de instalação | `schemas/ralph-installation-detection.schema.json` | Ralph Method gerenciado, Ralph externo ou origem ambígua |
 | Evolução | `schemas/ralph-evolution.schema.json`, `.ralph/evolutions/` | estado persistente, hashes, drift e rollback sem importar estado legado |
+| Migração por origem | `schemas/migration-adapter.schema.json`, ADR-0020 | contrato fechado por origem (bc-harness, knowledge_only); nunca importa ledger/workflow/prompts/credenciais |
 | Adapter OpenCode | `adapters/opencode/` | preflight, execução JSONL, parser fail-closed e resultado normalizado |
 | Adapter agy | `adapters/agy/` | preflight, `stream-json`, parser/policy fail-closed e verify isolado por `bwrap` |
 | Runners Codex/Claude | `scripts/ralph.sh` | integração nativa de execução e revisão do loop |

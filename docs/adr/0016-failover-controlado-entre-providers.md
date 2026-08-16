@@ -1,7 +1,7 @@
 # ADR-0016 — Failover controlado entre providers com continuidade de feature
 
-- **Status:** proposed
-- **Date:** `2026-08-13`
+- **Status:** accepted
+- **Date:** `2026-08-13` (aceito em `2026-08-16`)
 - **Owner:** Equipe do Ralph Method
 
 ## Contexto
@@ -29,7 +29,7 @@ concorrente, perda de contexto ou bypass dos gates. O desenho completo está em
 
 ## Decisão
 
-Propomos a opção C.
+Adotamos a opção C.
 
 O default permanece `fallback_policy=none`. Um workflow poderá optar por uma
 cadeia versionada `explicit_failover`. Na primeira versão, somente

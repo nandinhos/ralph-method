@@ -109,7 +109,7 @@ distintos observáveis pelo readiness na fixture de campo.
 - [x] documentar a separação entre detecção, migração, backup e rollback;
 - [x] implementar `evolve --plan/--apply` com inventário aprovado e backup verificável;
 - [x] implementar `rollback --plan/--apply` com verificação de drift e restauração condicional;
-- [ ] adicionar adapters de migração por origem, sem importar estado desconhecido por inferência;
+- [ ] adicionar adapters de migração por origem, sem importar estado desconhecido por inferência — contrato da primeira origem (`bc-harness`, `knowledge_only`) definido no ADR-0020 e `schemas/migration-adapter.schema.json`; falta a implementação do adapter e a prova de campo;
 - [x] testar backup incompleto e rollback após alteração do usuário;
 - [x] testar recuperação de estado interrompido com reconstrução pelo manifesto;
 - [x] testar SIGKILL real durante rename e espaço insuficiente com fixture de falha de filesystem.

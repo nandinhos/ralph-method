@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ralph-method.local/schemas/migration-adapter.schema.json",
+  "title": "Contrato de adapter de migração por origem do Ralph Method",
+  "type": "object",
+  "required": ["schema_version", "family", "legacy_root", "mode", "importable_kinds", "never_imported", "translate"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "family": {"type": "string", "const": "bc-harness"},
+    "legacy_root": {"type": "string", "pattern": "^[A-Za-z0-9_./-]+$"},
+    "mode": {"const": "knowledge_only"},
+    "importable_kinds": {
+      "type": "array",
+      "items": {"enum": ["handoff", "knowledge_index"]},
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "never_imported": {
+      "type": "array",
+      "items": {"enum": ["ledger", "workflow", "prompts", "credentials", "raw_events", "leases", "proofs"]},
+      "uniqueItems": true
+    },
+    "translate": {
+      "type": "object",
+      "required": ["source_handoff", "source_index", "target"],
+      "additionalProperties": false,
+      "properties": {
+        "source_handoff": {"type": "string", "pattern": "^(docs/|\\.ralph/)"},
+        "source_index": {"type": "string", "pattern": "^docs/"},
+        "target": {"const": "knowledge_candidates"},
+        "field_map": {
+          "type": "object",
+          "required": ["title", "summary"],
+          "properties": {
+            "title": {"type": "string", "minLength": 1},
+            "summary": {"type": "string", "minLength": 1}
+          },
+          "additionalProperties": true
+        }
+      }
+    },
+    "validation": {
+      "type": "object",
+      "required": ["sha256_before", "sha256_after"],
+      "properties": {
+        "sha256_before": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "sha256_after": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -19,8 +19,8 @@ Invariantes para todas as fases:
 
 ## Phase 1: Congelar contratos, compatibilidade e testes vermelhos
 
-- [ ] **Task:** aceitar o ADR-0016 somente quando a implementação desta fase
-  iniciar e manter o plano arquitetural como fonte da especificação.
+- [x] **Task:** aceitar o ADR-0016 e manter o plano arquitetural como fonte da
+  especificação.
   - **Acceptance criteria:** decisão, escopo inicial e gatilhos continuam
     limitados a Codex → OpenCode por `provider_usage_limited`.
 - [ ] **Task:** evoluir `schemas/runner-result.schema.json` para um contrato v2
