@@ -182,8 +182,12 @@ if ($observedModel !== null && $observedProvider !== null) {
     $identitySource = 'event_provider';
 }
 
+// FEATURE-094 (Phase 5): opt-in para o contrato comum v2. O v1 continua o
+// default (migração); o v2 adiciona profile e failure_domain (declarado via
+// rótulo do perfil), preservando sessão, evento terminal e policy proof.
+$resultV2 = in_array('--result-v2', $arguments, true);
 $result = [
-    'schema_version' => '1.0.0',
+    'schema_version' => $resultV2 ? '2.0.0' : '1.0.0',
     'runner' => 'opencode',
     'runner_version' => $runnerVersion,
     'provider' => $provider,
@@ -212,6 +216,21 @@ $result = [
     'error_summary' => $errorSummary,
     'artifact_refs' => [basename($eventsPath)],
 ];
+if ($resultV2) {
+    // profile e failure_domain declarado (rótulo do perfil); nunca inferido do
+    // modelo/alias.
+    $result['profile'] = 'opencode';
+    $failureDomain = clean($provider !== null ? $provider : null);
+    $result['failure_domain'] = $failureDomain !== null ? 'domain_'.substr(hash('sha256', $failureDomain), 0, 32) : null;
+    $result['failure_domain_status'] = $failureDomain !== null ? 'declared' : 'unavailable';
+    $result['failure_domain_source'] = $failureDomain !== null ? 'profile_declared_label' : 'not_exposed';
+    $result['reason_code'] = $status === 'usage_limited' ? 'provider_usage_limited' : null;
+    $result['classification_confidence'] = $status === 'usage_limited' ? 'high' : null;
+    $result['classifier_source'] = $status === 'usage_limited' ? 'opencode_parser_v1' : null;
+    $result['retry_at'] = null;
+    $result['result_commit'] = null;
+    $result['result_tree_hash'] = null;
+}
 
 if ($textOutput !== null) {
     $textTemporary = $textOutput.'.tmp.'.bin2hex(random_bytes(4));

@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ralph-method.local/schemas/execution-policy.schema.json",
+  "title": "Política de execução do Ralph Method (failover controlado)",
+  "description": "Opt-in versionado de continuidade entre providers. O default permanece fallback_policy=none; esta política só existe quando declarada explicitamente no workflow.",
+  "type": "object",
+  "required": ["schema_version", "provider_strategy", "provider_chain", "failover"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "provider_strategy": {"const": "explicit_failover"},
+    "provider_chain": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["runner", "profile", "required_failure_domain_status"],
+        "additionalProperties": false,
+        "properties": {
+          "runner": {"enum": ["codex", "claude", "opencode"]},
+          "profile": {"type": "string", "minLength": 1},
+          "required_failure_domain_status": {"const": "observed"}
+        }
+      }
+    },
+    "failover": {
+      "type": "object",
+      "required": [
+        "eligible_reasons",
+        "short_wait_threshold_seconds",
+        "unknown_reset_cooldown_seconds",
+        "max_switches_per_feature",
+        "max_no_progress_seconds",
+        "when_chain_exhausted"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "eligible_reasons": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"const": "provider_usage_limited"}
+        },
+        "short_wait_threshold_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600
+        },
+        "unknown_reset_cooldown_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 604800
+        },
+        "max_switches_per_feature": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16
+        },
+        "max_no_progress_seconds": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 2592000
+        },
+        "when_chain_exhausted": {
+          "enum": ["capacity_wait_then_recovery", "recovery_required"]
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["provider_chain"],
+        "properties": {"provider_chain": {"type": "array"}}
+      },
+      "then": {
+        "properties": {
+          "provider_chain": {
+            "uniqueItems": true
+          }
+        }
+      }
+    }
+  ]
+}

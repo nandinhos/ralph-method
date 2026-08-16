@@ -91,6 +91,11 @@
 #   RALPH_LIMIT_BUFFER       segundos extras apos o reset (default: 60)
 #   RALPH_HOOK_TIMEOUT       segundos ate TERM no hook (default: 10)
 #   RALPH_HOOK_KILL_AFTER    segundos adicionais ate KILL (default: 2)
+#   RALPH_EXECUTION_POLICY_MODE  explicit_failover quando a política do workflow
+#                            está ativa (FEATURE-094): o limite de uso é
+#                            publicado como runner-result v2 e devolvido ao
+#                            controlador, sem dormir nem relançar o provider.
+#   RALPH_CLASSIFIER_SOURCE  versão do classificador de limite (default: v1)
 #
 # Exportadas para hooks (ex: notify-n8n.sh) durante cada sessao de engine:
 #   RALPH_ENGINE             codex | claude
@@ -195,6 +200,8 @@ PROGRESS_FILE="$PHASES_DIR/.progress"
 MAX_LIMIT_WAITS="${RALPH_MAX_LIMIT_WAITS:-20}"
 LIMIT_WAIT_DEFAULT="${RALPH_LIMIT_WAIT_DEFAULT:-1800}"
 LIMIT_BUFFER="${RALPH_LIMIT_BUFFER:-60}"
+EXECUTION_POLICY_MODE="${RALPH_EXECUTION_POLICY_MODE:-}"
+CLASSIFIER_SOURCE="${RALPH_CLASSIFIER_SOURCE:-ralph_sh_classifier_v1}"
 HOOK_TIMEOUT="${RALPH_HOOK_TIMEOUT:-10}"
 HOOK_KILL_AFTER="${RALPH_HOOK_KILL_AFTER:-2}"
 FEEDBACK_FILE="${RALPH_FEEDBACK_FILE:-.git/ralph-control/feedback/events.jsonl}"
@@ -1119,6 +1126,169 @@ wait_for_reset() {
 }
 
 # ---------------------------------------------------------------------------
+# Classificador de limite de uso (FEATURE-094, Phase 2) — fail-closed
+#
+# Somente assinaturas terminais conhecidas do provider produzem
+# `provider_usage_limited` de confianca alta. Um `429` que venha da saida do
+# projeto (meio do log), texto de arquivo ou erro generico nao classifica.
+# A evidencia nao e persistida em claro: apenas hash + retry_at sanitizado.
+# ---------------------------------------------------------------------------
+
+# Ecoa o JSON de classificacao quando a assinatura terminal e reconhecida;
+# retorna 0 nesse caso, 1 quando nao ha limite classificado.
+classify_usage_limit() {
+  local log_file="$1"
+  local tail_txt pattern epoch retry_at_iso
+  local evidence_hash epoch_clean
+
+  tail_txt=$(tail -n 20 "$log_file" 2>/dev/null || true)
+
+  if [[ "$ENGINE" == "claude" ]]; then
+    pattern='usage limit reached'
+  else
+    pattern='rate limit reached|quota exceeded|usage limit|hit your usage limit|usage limit reached'
+  fi
+
+  grep -qiE "$pattern" <<< "$tail_txt" || return 1
+
+  epoch=$(grep -oiE '(usage limit reached|hit your usage limit)[^0-9]*[0-9]{10,13}' <<< "$tail_txt" \
+    | grep -oE '[0-9]{10,13}' | tail -1 || true)
+
+  if [ -z "$epoch" ]; then
+    epoch=$(grep -oiE 'reset[a-z ]*[0-9]{10,13}' <<< "$tail_txt" \
+      | grep -oE '[0-9]{10,13}' | tail -1 || true)
+  fi
+
+  if [ -z "$epoch" ]; then
+    epoch=$(grep -oiE 'try again at [A-Za-z]{3} [0-9]{1,2}(th|st|nd|rd), [0-9]{4} [0-9]{1,2}:[0-9]{2}' <<< "$tail_txt" \
+      | tail -1 | sed -E 's/try again at //I; s/([0-9]{1,2})(th|st|nd|rd),/\1,/I')
+    if [ -n "$epoch" ]; then
+      epoch="$(date -d "$epoch" +%s 2>/dev/null || echo "")"
+    fi
+  fi
+
+  # Sem horario de reset: o retry_at previsto usa o cooldown padrao, sem
+  # inventar timestamp observado.
+  epoch_clean=0
+  if [[ "$epoch" =~ ^[0-9]+$ ]] && [ "$epoch" -gt 0 ]; then
+    [ "${#epoch}" -ge 13 ] && epoch=$((epoch / 1000))
+    epoch_clean="$epoch"
+    retry_at_iso="$(date -u -d "@$epoch" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo "")"
+  fi
+  retry_at_iso="${retry_at_iso:-}"
+
+  # Hash da evidencia: nunca o texto bruto.
+  evidence_hash="$(printf '%s' "$tail_txt" | sha256sum | cut -d' ' -f1)"
+
+  EVIDENCE_HASH="$evidence_hash" RETRY_AT="$retry_at_iso" EPOCH="$epoch_clean" \
+  CLASSIFIER_SOURCE="$CLASSIFIER_SOURCE" python3 - <<'PY'
+import json
+import os
+
+evidence = os.environ.get('EVIDENCE_HASH', '')
+retry_at = os.environ.get('RETRY_AT', '') or None
+epoch_raw = os.environ.get('EPOCH', '0')
+epoch = int(epoch_raw) if epoch_raw.isdigit() else 0
+print(json.dumps({
+    'reason_code': 'provider_usage_limited',
+    'classification_confidence': 'high',
+    'classifier_source': os.environ.get('CLASSIFIER_SOURCE', 'ralph_sh_classifier_v1'),
+    'evidence_sha256': evidence,
+    'retry_at': retry_at,
+    'epoch': epoch,
+}))
+PY
+  return 0
+}
+
+# Publica o runner-result v2 `usage_limited` no mesmo caminho que os adapters
+# usam (`.result.json` junto ao log), para o controlador importar sob lease.
+publish_runner_result_v2() {
+  local log_file="$1"
+  local classification="$2"
+  local result_file="${log_file}.result.json"
+  local workflow_id feature_key attempt execution_id
+
+  workflow_id="${RALPH_EXECUTION_WORKFLOW_ID:-wf_${RUN_ID}}"
+  feature_key="${RALPH_EXECUTION_FEATURE_KEY:-FEATURE-${RALPH_PHASE_NUM:-0}}"
+  attempt="${RALPH_EXECUTION_ATTEMPT:-${RALPH_PHASE_ATTEMPT:-1}}"
+  execution_id="exec_${RUN_ID}_impl_${RALPH_PHASE_NUM:-0}_${RALPH_PHASE_ATTEMPT:-1}"
+
+  local retry_at
+  retry_at="$(printf '%s' "$classification" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("retry_at") or "")')"
+  if [ -z "$retry_at" ]; then
+    retry_at="$(date -u -d "@$(( $(date +%s) + LIMIT_WAIT_DEFAULT ))" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo "")"
+  fi
+
+  local evidence_hash
+  evidence_hash="$(printf '%s' "$classification" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("evidence_sha256") or "")')"
+
+  WORKFLOW_ID="$workflow_id" \
+  FEATURE_KEY="$feature_key" \
+  ATTEMPT="$attempt" \
+  EXECUTION_ID="$execution_id" \
+  RETRY_AT="$retry_at" \
+  EVIDENCE_HASH="$evidence_hash" \
+  RUNNER_VERSION="${CODEX_RUNNER_VERSION:-unknown}" \
+  CODEX_MODEL="${CODEX_MODEL:-}" \
+  CLASSIFIER_SOURCE="$CLASSIFIER_SOURCE" \
+  python3 - <<'PY' > "$result_file"
+import json
+import os
+
+model = os.environ.get("CODEX_MODEL", "") or None
+result = {
+    "schema_version": "2.0.0",
+    "runner": "codex",
+    "runner_version": os.environ.get("RUNNER_VERSION", "unknown"),
+    "provider": "codex",
+    "requested_model": model,
+    "effective_model": model,
+    "identity_status": "declared",
+    "identity_source": "requested_model",
+    "execution_id": os.environ["EXECUTION_ID"],
+    "execution_mode": "impl",
+    "workflow_id": os.environ["WORKFLOW_ID"],
+    "feature_key": os.environ["FEATURE_KEY"],
+    "attempt": int(os.environ.get("ATTEMPT", "0")),
+    "session_id": None,
+    "status": "usage_limited",
+    "exit_code": 0,
+    "fallback_used": None,
+    "fallback_status": "unknown",
+    "events_seen": 0,
+    "event_bytes": 0,
+    "terminal_event": None,
+    "prompt_sha256": None,
+    "prompt_transport": "file",
+    "permission_policy_hash": None,
+    "permission_policy_status": "not_required",
+    "verification_agent": None,
+    "error_summary": "limite de uso confirmado",
+    # O hash da evidência entra como referência no artifact_refs, nunca o texto
+    # bruto nem um campo fora do contrato v2.
+    "artifact_refs": [
+        "artifact_" + os.environ["FEATURE_KEY"] + "_codex_stderr",
+        "evidence_sha256:" + os.environ.get("EVIDENCE_HASH", ""),
+    ],
+    "profile": "codex",
+    "failure_domain": None,
+    "failure_domain_status": "declared",
+    "failure_domain_source": "profile",
+    "reason_code": "provider_usage_limited",
+    "classification_confidence": "high",
+    "classifier_source": os.environ.get("CLASSIFIER_SOURCE", "ralph_sh_classifier_v1"),
+    "retry_at": os.environ.get("RETRY_AT", None),
+    "result_commit": None,
+    "result_tree_hash": None,
+}
+print(json.dumps(result, ensure_ascii=False))
+PY
+  chmod 600 "$result_file" 2>/dev/null || true
+  echo "$result_file"
+}
+
+# ---------------------------------------------------------------------------
 # Engine
 # ---------------------------------------------------------------------------
 
@@ -1194,9 +1364,25 @@ run_engine() {
       fi
     fi
 
-    local reset_epoch
-    if reset_epoch=$(detect_usage_limit "$log_file"); then
-      wait_for_reset "$reset_epoch"
+    local reset_epoch classification
+    if classification=$(classify_usage_limit "$log_file"); then
+      if [ "$EXECUTION_POLICY_MODE" = "explicit_failover" ]; then
+        # FEATURE-094 (Phase 2): com a política ativa, o limite é publicado
+        # como runner-result v2 e a decisão volta ao controlador. O loop NÃO
+        # dorme, não relança o provider e não consome ciclo de correção.
+        warn "Limite de uso confirmado; devolvendo a decisão ao controlador (explicit_failover)."
+        publish_runner_result_v2 "$log_file" "$classification" >/dev/null
+        emit run_end "LIMITE — decisão devolvida ao controlador (explicit_failover)"
+        return 1
+      fi
+      reset_epoch=$(printf '%s' "$classification" | python3 -c '
+import json,sys
+try:
+    d=json.load(sys.stdin)
+except Exception:
+    d={}
+print(d.get("epoch") or "")' 2>/dev/null || true)
+      wait_for_reset "${reset_epoch:-0}"
       continue
     fi
 

@@ -10,8 +10,8 @@
     "terminal_event", "error_summary", "artifact_refs"
   ],
   "properties": {
-    "schema_version": {"enum": ["1.0.0", "1.1.0"]},
-    "runner": {"enum": ["opencode", "agy"]},
+    "schema_version": {"enum": ["1.0.0", "1.1.0", "2.0.0"]},
+    "runner": {"enum": ["opencode", "agy", "codex", "claude"]},
     "runner_version": {"type": "string", "minLength": 1},
     "provider": {"type": ["string", "null"]},
     "requested_model": {"type": ["string", "null"]},
@@ -42,16 +42,106 @@
     "permission_policy_status": {"enum": ["verified", "not_required", "failed"]},
     "verification_agent": {"type": ["string", "null"]},
     "error_summary": {"type": ["string", "null"]},
-    "artifact_refs": {"type": "array", "items": {"type": "string"}}
+    "artifact_refs": {"type": "array", "items": {"type": "string"}},
+    "profile": {"type": ["string", "null"]},
+    "failure_domain": {"type": ["string", "null"]},
+    "failure_domain_status": {"enum": ["exact", "observed", "declared", "unavailable"]},
+    "failure_domain_source": {"type": ["string", "null"]},
+    "reason_code": {"type": ["string", "null"]},
+    "classification_confidence": {
+      "anyOf": [
+        {"type": "null"},
+        {"enum": ["high", "medium", "low", "unknown"]}
+      ]
+    },
+    "classifier_source": {"type": ["string", "null"]},
+    "retry_at": {
+      "anyOf": [
+        {"type": "null"},
+        {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"}
+      ]
+    },
+    "result_commit": {
+      "anyOf": [
+        {"type": "null"},
+        {"type": "string", "pattern": "^[a-f0-9]{40}$"}
+      ]
+    },
+    "result_tree_hash": {"type": ["string", "null"]}
   },
   "allOf": [
     {
       "if": {"properties": {"schema_version": {"const": "1.0.0"}}},
-      "then": {"properties": {"runner": {"const": "opencode"}}}
+      "then": {
+        "properties": {
+          "runner": {"const": "opencode"},
+          "profile": {"const": null},
+          "failure_domain": {"const": null},
+          "failure_domain_status": {"const": null},
+          "failure_domain_source": {"const": null},
+          "reason_code": {"const": null},
+          "classification_confidence": {"const": null},
+          "classifier_source": {"const": null},
+          "retry_at": {"const": null},
+          "result_commit": {"const": null},
+          "result_tree_hash": {"const": null}
+        }
+      }
     },
     {
       "if": {"properties": {"schema_version": {"const": "1.1.0"}}},
-      "then": {"properties": {"runner": {"const": "agy"}}}
+      "then": {
+        "properties": {
+          "runner": {"const": "agy"},
+          "profile": {"const": null},
+          "failure_domain": {"const": null},
+          "failure_domain_status": {"const": null},
+          "failure_domain_source": {"const": null},
+          "reason_code": {"const": null},
+          "classification_confidence": {"const": null},
+          "classifier_source": {"const": null},
+          "retry_at": {"const": null},
+          "result_commit": {"const": null},
+          "result_tree_hash": {"const": null}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"schema_version": {"const": "2.0.0"}}},
+      "then": {
+        "required": ["profile", "failure_domain_status"],
+        "properties": {
+          "runner": {"enum": ["codex", "claude", "opencode"]},
+          "profile": {"type": "string", "minLength": 1}
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {"failure_domain_status": {"enum": ["exact", "observed"]}},
+              "required": ["failure_domain_status"]
+            },
+            "then": {
+              "required": ["failure_domain", "failure_domain_source"],
+              "properties": {
+                "failure_domain": {"type": "string", "minLength": 1},
+                "failure_domain_source": {"type": "string", "minLength": 1}
+              }
+            }
+          },
+          {
+            "if": {"properties": {"status": {"const": "usage_limited"}}},
+            "then": {
+              "required": ["reason_code", "classification_confidence", "classifier_source", "retry_at"],
+              "properties": {
+                "reason_code": {"const": "provider_usage_limited"},
+                "classification_confidence": {"const": "high"},
+                "classifier_source": {"type": "string", "minLength": 1},
+                "retry_at": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"}
+              }
+            }
+          }
+        ]
+      }
     },
     {
       "if": {"properties": {"status": {"const": "completed"}}},

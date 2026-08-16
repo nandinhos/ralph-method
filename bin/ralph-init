@@ -488,6 +488,49 @@ function verifyProvider(string $provider, string $path, string $root): array
     return $base;
 }
 
+/**
+ * Domínio de falha do provider para a FEATURE-094 (Phase 3).
+ *
+ * O domínio é um rótulo opaco, sem segredos. Na v1 ele vem de um identificador
+ * declarado no perfil do provider (`RALPH_<PROVIDER>_FAILURE_DOMAIN`); o
+ * readiness só o considera `declared` — nunca `observed`/`exact` sem evidência
+ * real de autoridade (credencial, endpoint e conta/projeto). Modelo e alias
+ * nunca são usados para inferir o domínio.
+ *
+ * @return array{failure_domain: ?string, failure_domain_status: string, failure_domain_source: string}
+ */
+function providerFailureDomain(string $provider, string $root): array
+{
+    $profile = $root.'/.ralph/'.$provider.'.env';
+    $label = null;
+    if (is_file($profile)) {
+        foreach (file($profile, FILE_IGNORE_NEW_LINES) ?: [] as $line) {
+            $upper = strtoupper($provider);
+            if (str_starts_with($line, 'RALPH_'.$upper.'_FAILURE_DOMAIN=')) {
+                $value = trim(substr($line, strlen('RALPH_'.$upper.'_FAILURE_DOMAIN=')), " \t\"");
+                if ($value !== '') {
+                    $label = $value;
+                }
+                break;
+            }
+        }
+    }
+    if ($label === null) {
+        return [
+            'failure_domain' => null,
+            'failure_domain_status' => 'unavailable',
+            'failure_domain_source' => 'not_exposed',
+        ];
+    }
+
+    // Rótulo opaco: nunca persistimos o valor bruto; só um fingerprint.
+    return [
+        'failure_domain' => 'domain_'.substr(hash('sha256', $label), 0, 32),
+        'failure_domain_status' => 'declared',
+        'failure_domain_source' => 'profile_declared_label',
+    ];
+}
+
 /** @return array<string, mixed> */
 function detectProject(string $root, bool $verifyProviders = false): array
 {
@@ -521,6 +564,19 @@ function detectProject(string $root, bool $verifyProviders = false): array
         ];
         if ($verifyProviders && $path !== '') {
             $providers[$command] = array_merge($providers[$command], verifyProvider($command, $path, $root));
+        }
+        // FEATURE-094 (Phase 3): readiness expõe o failure_domain opaco para
+        // providers funcionais com adapter habilitado. Não é usado para
+        // seleção nem para fallback; alimenta a decisão de failover no
+        // controlador.
+        if (($providers[$command]['adapter_enabled'] ?? false) === true) {
+            $providers[$command] = array_merge($providers[$command], providerFailureDomain($command, $root));
+        } else {
+            $providers[$command] = array_merge($providers[$command], [
+                'failure_domain' => null,
+                'failure_domain_status' => 'unavailable',
+                'failure_domain_source' => 'adapter_disabled',
+            ]);
         }
     }
 
@@ -1109,7 +1165,8 @@ function managedSources(): array
         'schemas/feedback-event.schema.json', 'schemas/provider-readiness.schema.json',
         'schemas/runner-result.schema.json', 'schemas/readonly-policy-proof.schema.json',
         'schemas/knowledge-candidate.schema.json', 'schemas/ralph-installation-detection.schema.json',
-        'schemas/ralph-evolution.schema.json',
+        'schemas/ralph-evolution.schema.json', 'schemas/execution-policy.schema.json',
+        'schemas/migration-adapter.schema.json',
         'adapters/README.md', 'adapters/opencode/runner.sh',
         'adapters/opencode/parser.php', 'adapters/opencode/policy.php', 'adapters/opencode/contract.md',
         'scripts/opencode-readonly-proof.sh', '.opencode/agents/ralph-review.md',

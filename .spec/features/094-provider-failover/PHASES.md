@@ -23,41 +23,41 @@ Invariantes para todas as fases:
   especificação.
   - **Acceptance criteria:** decisão, escopo inicial e gatilhos continuam
     limitados a Codex → OpenCode por `provider_usage_limited`.
-- [ ] **Task:** evoluir `schemas/runner-result.schema.json` para um contrato v2
+- [x] **Task:** evoluir `schemas/runner-result.schema.json` para um contrato v2
   comum a Codex, Claude e OpenCode, preservando leitura do v1 OpenCode.
   - **Acceptance criteria:** campos comuns, condicionais de revisão e status
     `usage_limited` possuem validação fail-closed.
-- [ ] **Task:** criar `schemas/execution-policy.schema.json` para o opt-in
+- [x] **Task:** criar `schemas/execution-policy.schema.json` para o opt-in
   `explicit_failover` e seus limites obrigatórios.
   - **Acceptance criteria:** cadeia vazia, profile ausente, motivo não
     suportado e limites inválidos são rejeitados.
-- [ ] **Task:** planejar a promoção do ledger para `1.2.0` sem emitir eventos
+- [x] **Task:** planejar a promoção do ledger para `1.2.0` sem emitir eventos
   novos antes de o leitor compatível estar instalado.
   - **Acceptance criteria:** o binário novo lê ledgers `1.0.0` e `1.1.0`; o
     comportamento fail-closed de binários antigos fica documentado e testado.
-- [ ] **Task:** criar a base de `scripts/test-provider-failover.sh` com relógio
+- [x] **Task:** criar a base de `scripts/test-provider-failover.sh` com relógio
   injetável e CLIs fixture, inicialmente vermelha para o novo comportamento.
   - **Acceptance criteria:** a fixture não usa rede, credenciais, geração real
     ou sleeps de cooldown.
-- [ ] **Task:** proteger a regressão do comportamento legado.
+- [x] **Task:** proteger a regressão do comportamento legado.
   - **Acceptance criteria:** workflow sem `execution_policy` continua com
     `fallback_policy=none` e passa em `scripts/test-multiprovider.sh`.
 
 ## Phase 2: Publicar runner-result Codex e classificar rate limit
 
-- [ ] **Task:** fazer o runner nativo Codex produzir `runner-result` v2
+- [x] **Task:** fazer o runner nativo Codex produzir `runner-result` v2
   correlacionado com workflow, feature, attempt e execution ID.
   - **Acceptance criteria:** resultado é sanitizado, referenciado por artifact
     e validado antes de qualquer decisão do controlador.
-- [ ] **Task:** classificar somente assinaturas terminais conhecidas como
+- [x] **Task:** classificar somente assinaturas terminais conhecidas como
   `provider_usage_limited` de confiança alta.
   - **Acceptance criteria:** `429` em saída de teste, texto de arquivo e erro
     genérico não produzem rate limit.
-- [ ] **Task:** registrar `retry_at`, fonte e versão do classificador e hash da
+- [x] **Task:** registrar `retry_at`, fonte e versão do classificador e hash da
   evidência sem persistir o texto bruto no ledger.
   - **Acceptance criteria:** ausência ou ambiguidade de reset usa o estado
     previsto, sem inventar timestamp.
-- [ ] **Task:** devolver a decisão ao controlador quando
+- [x] **Task:** devolver a decisão ao controlador quando
   `explicit_failover` estiver ativo.
   - **Acceptance criteria:** `ralph.sh` não dorme nem relança Codex após o
     limite nesse modo; workflows legados mantêm a espera interna existente.
@@ -65,17 +65,17 @@ Invariantes para todas as fases:
   outcome terminal.
   - **Acceptance criteria:** processo ainda observável resulta em
     `recovery_required`, não em failover.
-- [ ] **Task:** cobrir sanitização e limite de captura.
+- [x] **Task:** cobrir sanitização e limite de captura.
   - **Acceptance criteria:** segredo-canário e bytes UTF-8 inválidos não vazam
     nem quebram o evento terminal.
 
 ## Phase 3: Validar política, domínio de falha e roteamento read-only
 
-- [ ] **Task:** validar `execution_policy` no `ralph-control init` e congelar
+- [x] **Task:** validar `execution_policy` no `ralph-control init` e congelar
   seu hash no workflow ativo.
   - **Acceptance criteria:** drift da política depois do início bloqueia nova
     attempt.
-- [ ] **Task:** estender readiness para produzir `failure_domain` opaco e
+- [x] **Task:** estender readiness para produzir `failure_domain` opaco e
   `failure_domain_status=exact|observed|declared|unavailable`.
   - **Acceptance criteria:** domínio bruto de conta/projeto não é persistido e
     modelo/alias não é usado para inferência.
@@ -83,7 +83,7 @@ Invariantes para todas as fases:
   failover automático.
   - **Acceptance criteria:** domínio igual, declarado ou indisponível deixa o
     destino inelegível.
-- [ ] **Task:** projetar circuitos `closed|open|half_open` exclusivamente do
+- [x] **Task:** projetar circuitos `closed|open|half_open` exclusivamente do
   ledger e do relógio injetado.
   - **Acceptance criteria:** nenhum arquivo sidecar vira fonte autoritativa.
 - [ ] **Task:** implementar `provider-status` e `failover-plan` como comandos
@@ -104,11 +104,11 @@ Invariantes para todas as fases:
 - [ ] **Task:** calcular fingerprint canônico da árvore parcial.
   - **Acceptance criteria:** status Git, staged, unstaged e untracked do
     projeto entram no hash; runtime controlado usa allowlist fechada e testada.
-- [ ] **Task:** adicionar eventos `provider.capacity_limited`,
+- [x] **Task:** adicionar eventos `provider.capacity_limited`,
   `continuation.generated` e `provider.failover_started` ao schema `1.2.0`.
   - **Acceptance criteria:** projeções históricas continuam legíveis pelo
     binário novo e tipos desconhecidos não são ignorados silenciosamente.
-- [ ] **Task:** implementar `beginProviderFailover()` sob `workflow.lock`.
+- [x] **Task:** implementar `beginProviderFailover()` sob `workflow.lock`.
   - **Acceptance criteria:** nova attempt, lease, correlation ID, execution ID
     e fencing token são distintos e monotônicos.
 - [ ] **Task:** bloquear processo vivo, lock anterior, drift, replay e capsule
@@ -120,21 +120,21 @@ Invariantes para todas as fases:
 
 ## Phase 5: Continuar a feature com OpenCode
 
-- [ ] **Task:** selecionar OpenCode somente como próximo membro autorizado da
+- [x] **Task:** selecionar OpenCode somente como próximo membro autorizado da
   cadeia, nunca por fallback interno do adapter.
   - **Acceptance criteria:** destino, profile e policy hash correspondem ao
     manifesto congelado.
-- [ ] **Task:** repetir readiness do OpenCode imediatamente antes do spawn.
+- [x] **Task:** repetir readiness do OpenCode imediatamente antes do spawn.
   - **Acceptance criteria:** autenticação, health, modelo, agente, proof e
     failure domain permanecem válidos.
 - [ ] **Task:** montar contexto de continuidade com a especificação original,
   resumo sanitizado e instrução para inspecionar a árvore existente.
   - **Acceptance criteria:** prompt não contém logs brutos, resposta Codex,
     segredo, lease ou diff serializado.
-- [ ] **Task:** fazer o adapter OpenCode publicar `runner-result` v2.
+- [x] **Task:** fazer o adapter OpenCode publicar `runner-result` v2.
   - **Acceptance criteria:** resultado v1 segue compatível durante a migração
     e o v2 mantém sessão, evento terminal e policy proof.
-- [ ] **Task:** executar implementação e revisão OpenCode em sessões separadas.
+- [x] **Task:** executar implementação e revisão OpenCode em sessões separadas.
   - **Acceptance criteria:** revisão read-only revalida agente, proof,
     fingerprint e ausência de canário.
 - [ ] **Task:** concluir a fixture offline Codex parcial → OpenCode → gates.
@@ -143,15 +143,15 @@ Invariantes para todas as fases:
 
 ## Phase 6: Sustentar espera de capacidade e fila longa
 
-- [ ] **Task:** implementar `provider.capacity_wait_started` e
+- [x] **Task:** implementar `provider.capacity_wait_started` e
   `provider.capacity_wait_finished` com heartbeat.
   - **Acceptance criteria:** espera não ocupa o lock curto do workflow nem usa
     busy loop.
-- [ ] **Task:** aplicar `short_wait_threshold_seconds` sempre em nova attempt
+- [x] **Task:** aplicar `short_wait_threshold_seconds` sempre em nova attempt
   quando a política estiver ativa.
   - **Acceptance criteria:** reset curto não troca runner, mas também não
     reutiliza lease ou fencing.
-- [ ] **Task:** tornar `capacity_wait` reapropriável após crash do supervisor.
+- [x] **Task:** tornar `capacity_wait` reapropriável após crash do supervisor.
   - **Acceptance criteria:** nova instância reconcilia `retry_at`, processos e
     horizonte antes de retomar.
 - [ ] **Task:** manter o circuito Codex aberto nas features seguintes.
@@ -167,19 +167,19 @@ Invariantes para todas as fases:
 
 ## Phase 7: Projetar handoff, trace, monitor e métricas
 
-- [ ] **Task:** incluir `provider_transitions` no handoff final a partir do
+- [x] **Task:** incluir `provider_transitions` no handoff final a partir do
   ledger.
   - **Acceptance criteria:** origem, destino, attempts, motivo, capsule e
     resultados podem ser auditados sem logs brutos.
-- [ ] **Task:** projetar cada sessão no `ralph-trace` com runner, provider,
+- [x] **Task:** projetar cada sessão no `ralph-trace` com runner, provider,
   modelo e identidade comprovada.
   - **Acceptance criteria:** modelo solicitado nunca é relatado como efetivo
     sem evidência.
-- [ ] **Task:** mostrar circuitos, cooldown, runner atual, próxima ação e tempo
+- [x] **Task:** mostrar circuitos, cooldown, runner atual, próxima ação e tempo
   sem progresso no monitor.
   - **Acceptance criteria:** monitor continua sem autoridade de retry ou
     transição.
-- [ ] **Task:** adicionar métricas read-only de attempts, failovers, espera,
+- [x] **Task:** adicionar métricas read-only de attempts, failovers, espera,
   sucesso e esgotamento.
   - **Acceptance criteria:** `ralph-metrics` não muta ledger e não mede tokens
     ou custo.

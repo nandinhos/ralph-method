@@ -10,6 +10,101 @@ e o workflow avançou para a phase-26 sem re-execução do bloco commitado. O
 relatório da promoção está em
 [`docs/reports/0027-promocao-v0-9-2.md`](reports/0027-promocao-v0-9-2.md).
 
+### FEATURE-094 — failover controlado entre providers (em implementação)
+
+A Phase 1 (contratos) está concluída sobre a base `0.9.2`, sem mudar o
+comportamento operacional: o default continua `fallback_policy=none` e nenhum
+evento `1.2.0` é emitido. Entregue:
+
+- `schemas/runner-result.schema.json` aceita o contrato comum `2.0.0`
+  (`codex`/`claude`/`opencode` com `profile`, `failure_domain` e
+  `usage_limited` de confiança alta) com validação fail-closed; os contratos
+  `1.0.0` (opencode) e `1.1.0` (agy) continuam lidos e campos exclusivos do
+  v2 são rejeitados em resultados legados;
+- novo `schemas/execution-policy.schema.json` para o opt-in `explicit_failover`
+  com cadeia e limites obrigatórios;
+- plano de promoção do ledger `1.2.0` em
+  [`architecture/ledger-1.2.0-promotion-plan.md`](architecture/ledger-1.2.0-promotion-plan.md):
+  o binário continua em `1.1.0`, lê `1.0.0`/`1.1.0` e rejeita `1.2.0`
+  (fail-closed) até o leitor compatível ser promovido;
+- base de `scripts/test-provider-failover.sh` com relógio injetável, CLIs
+  fixture, validação jsonschema dos contratos, importação real de v2 pelo
+  controlador e comprovação de que o ledger rejeita `1.2.0` sem leitor.
+  `scripts/ci-portable.sh` inclui o novo teste;
+- RFC `--fail-fast-on-limit` arquivado como supersedido pelo ADR-0016 em
+  `docs/proposals/archived/`.
+
+A Phase 2 (publicação do `runner-result` pelo Codex e classificação de rate
+limit) está concluída sobre a base `0.9.2`, também sem mudar o comportamento
+legado:
+
+- `scripts/ralph.sh` classifica somente assinaturas terminais conhecidas como
+  `provider_usage_limited` de confiança alta (fail-closed: `429` de saída de
+  teste, erro genérico e arquivo ausente não classificam) e publica um
+  `runner-result` v2 `usage_limited` correlacionado (workflow/feature/attempt/
+  execution) com `retry_at`, fonte do classificador (`ralph_sh_classifier_v1`)
+  e hash da evidência — nunca o texto bruto;
+- com `RALPH_EXECUTION_POLICY_MODE=explicit_failover` (sinal do controlador
+  quando a política estiver ativa), o loop devolve a decisão ao controlador
+  sem dormir nem relançar o provider; workflows legados mantêm a espera
+  interna (`wait_for_reset`), comprovado pelo `test-ralph.sh` (167 asserts);
+- a sanitização é comprovada por fixture: segredo-canário emitido pelo provider
+  não vaza para o resultado nem para o ledger.
+
+As demais fases da FEATURE-094 (política/circuitos/roteamento, cápsula, espera
+de capacidade, observabilidade, regressão e campo) permanecem planejadas em
+[`.spec/features/094-provider-failover/PHASES.md`](../.spec/features/094-provider-failover/PHASES.md).
+
+As Phases 3 e 4 (validação de política, circuitos e nova autoridade de
+execução) estão concluídas sobre a base `0.9.2`, mantendo o default
+`fallback_policy=none` para workflows sem opt-in:
+
+- `ralph-control init` valida a `execution_policy` (fail-closed) e congela o
+  hash canônico no workflow ativo; drift da política bloqueia nova attempt no
+  `claim`;
+- o readiness (`ralph-init plan --verify-providers`) expõe `failure_domain`
+  opaco com `failure_domain_status=declared|unavailable` (rótulo do perfil);
+  valor bruto e modelo/alias nunca são usados;
+- circuitos `closed|open|half_open` são derivados **somente** do ledger e do
+  relógio injetável (`RALPH_TEST_CLOCK_EPOCH`), sem sidecar autoritativo;
+  `selectEligibleRunner` pula runner com circuito aberto e exige
+  `adapter_enabled`;
+- o ledger foi promovido para `RALPH_SCHEMA_VERSION=1.2.0` com os eventos
+  `provider.capacity_limited`, `continuation.generated`,
+  `provider.failover_started`, `provider.capacity_wait_started` e
+  `provider.capacity_wait_finished`; binário lê `1.0.0`/`1.1.0` e rejeita
+  `1.3.0` (fail-closed);
+- `provider-status` e `failover-plan` são comandos somente leitura que
+  explicam circuitos, cooldown, seleção e próxima ação sem iniciar provider
+  nem mutar eventos;
+- **failover real comprovado por fixture**: Codex emite `usage_limited`
+  confirmado → `provider.capacity_limited` abre o circuito → o supervisor
+  registra `provider.failover_started` (codex→opencode) com nova attempt,
+  lease e fencing → o OpenCode inicia a continuação. O run com política ativa
+  devolve `provider_failover_pending` ao supervisor (sem debugging indevido) e
+  o loop não dorme nem relança o provider.
+
+As Phases 5–7 também estão concluídas sobre a base `0.9.2`:
+
+- a cápsula de continuidade é uma projeção idempotente e regenerável em
+  `.git/ralph-control/continuations/` com fingerprint canônico da árvore
+  (commit, tree hash, paths staged/unstaged/untracked separando o runtime
+  controlado) e sem segredos ou conteúdo bruto; o evento
+  `continuation.generated` é emitido antes do `provider.failover_started`;
+- o failover é bloqueado se um runner do workflow ainda estiver observável
+  (`recovery_required`, nunca troca com processo vivo);
+- o adapter OpenCode publica `runner-result` v2 por opt-in
+  (`RALPH_OPENCODE_RESULT_V2=1`) com `profile`/`failure_domain` declarado,
+  preservando o v1 como default da migração e a sessão/evento terminal/policy
+  proof;
+- a espera de capacidade é reapropriável: cooldown vencido re-seleciona um
+  runner, o horizonte `max_no_progress_seconds` esgota em `recovery_required`
+  e `short_wait_threshold_seconds` prefere espera curta sem trocar runner;
+- observabilidade: o handoff final inclui `provider_transitions` derivadas do
+  ledger, o monitor expõe `provider_circuits` read-only e o `ralph-metrics`
+  agrega `provider_capacity_limits`, `provider_failovers` e
+  `provider_capacity_waits` sem mutar o ledger nem medir tokens/custo.
+
 ### FEATURE-097 — recuperação de gate
 
 - `gate.rejected` (evidência mostra falha da feature → `debugging_required`) vs
@@ -181,7 +276,8 @@ no [`Relatório 0023`](reports/0023-revalidacao-regressao-release-detector-legad
 | Adapter OpenCode | `adapters/opencode/` | preflight, execução JSONL, parser fail-closed e resultado normalizado |
 | Adapter agy | `adapters/agy/` | preflight, `stream-json`, parser/policy fail-closed e verify isolado por `bwrap` |
 | Runners Codex/Claude | `scripts/ralph.sh` | integração nativa de execução e revisão do loop |
-| Resultado de runner | `schemas/runner-result.schema.json` | OpenCode 1.0/`step_finish` e `agy` 1.1/`result` sob contrato sanitizado |
+| Resultado de runner | `schemas/runner-result.schema.json` | OpenCode 1.0/`step_finish`, `agy` 1.1/`result` e contrato comum 2.0 (`codex`/`claude`/`opencode` com `failure_domain` e `usage_limited` de confiança alta) sob validação fail-closed |
+| Política de execução | `schemas/execution-policy.schema.json` | opt-in `explicit_failover` com cadeia e limites obrigatórios; default continua `fallback_policy=none` |
 | Política read-only OpenCode | `adapters/opencode/policy.php`, `scripts/opencode-readonly-proof.sh` | fingerprint, prova externa e bloqueio fail-closed da revisão |
 | Política read-only agy | `adapters/agy/policy.php`, `.agents/agents/ralph-review/agent.md` | hash versionado, allowlist e isolamento preventivo Linux |
 | Guia de agentes | `docs/AGENT_GUIDE.md` | operação, comunicação e ciclo de vida |

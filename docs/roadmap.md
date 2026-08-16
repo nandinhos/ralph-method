@@ -80,17 +80,17 @@ com nove features ordenadas no workflow candidato do mesmo diretório. O
 bootstrap deve ocorrer em clone dedicado, com `ralph-control supervise` e
 engine `codex`, preservando qualquer runtime histórico do clone atual.
 
-- [ ] evoluir `runner-result` para um contrato comum e validar a política do
+- [x] evoluir `runner-result` para um contrato comum e validar a política do
   workflow sem criar uma segunda fonte de término;
-- [ ] classificar rate limit do Codex com confiança alta e sem falso positivo
+- [x] classificar rate limit do Codex com confiança alta e sem falso positivo
   por saída dos testes do projeto;
-- [ ] projetar circuit breakers e seleção read-only no controlador;
-- [ ] gerar cápsula de continuidade sanitizada e protegida por hashes;
-- [ ] iniciar failover com nova `attempt`, lease, sessão e fencing token;
-- [ ] integrar Codex → OpenCode somente para `provider_usage_limited`;
+- [x] projetar circuit breakers e seleção read-only no controlador;
+- [x] gerar cápsula de continuidade sanitizada e protegida por hashes;
+- [x] iniciar failover com nova `attempt`, lease, sessão e fencing token;
+- [x] integrar Codex → OpenCode somente para `provider_usage_limited`;
 - [ ] manter features seguintes no runner elegível durante o cooldown;
-- [ ] adicionar espera de capacidade com heartbeat e horizonte sem progresso;
-- [ ] projetar transições no handoff, trace, monitor e métricas;
+- [x] adicionar espera de capacidade com heartbeat e horizonte sem progresso;
+- [x] projetar transições no handoff, trace, monitor e métricas;
 - [ ] executar matriz de panes, regressão completa e revisão adversarial;
 - [ ] comprovar continuidade real por script reproduzível em worktree
   descartável do `refactor-radar`;

@@ -30,6 +30,7 @@ checks=(
   scripts/test-ralph-gates-native.sh
   scripts/test-ralph-gate-recovery.sh
   scripts/test-evolution-filesystem.sh
+  scripts/test-provider-failover.sh
 )
 
 for check in "${checks[@]}"; do

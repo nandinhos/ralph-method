@@ -197,6 +197,10 @@ run_engine() {
     fi
   fi
 
+  local v2_flag=()
+  if [ "${RALPH_OPENCODE_RESULT_V2:-0}" = 1 ]; then
+    v2_flag=(--result-v2)
+  fi
   php "$PARSER" \
     --events "$events_file" \
     --result "$result_file" \
@@ -217,7 +221,8 @@ run_engine() {
     --text-output "$text_output" \
     --fallback-status "$fallback_status" \
     --max-event-bytes "${RALPH_OPENCODE_MAX_EVENT_BYTES:-5242880}" \
-    --max-events "${RALPH_OPENCODE_MAX_EVENTS:-10000}"
+    --max-events "${RALPH_OPENCODE_MAX_EVENTS:-10000}" \
+    "${v2_flag[@]}"
 
   cat "$result_file"
   if [ "$mode" = verify ] && [ -s "$text_output" ]; then

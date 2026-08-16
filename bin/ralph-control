@@ -3,8 +3,8 @@
 
 declare(strict_types=1);
 
-const RALPH_SCHEMA_VERSION = '1.1.0';
-const RALPH_COMPATIBLE_SCHEMA_VERSIONS = ['1.0.0', '1.1.0'];
+const RALPH_SCHEMA_VERSION = '1.2.0';
+const RALPH_COMPATIBLE_SCHEMA_VERSIONS = ['1.0.0', '1.1.0', '1.2.0'];
 
 $root = realpath(getcwd()) ?: getcwd();
 $gitCommonDir = trim((string) shell_exec('git rev-parse --git-common-dir 2>/dev/null'));
@@ -56,6 +56,8 @@ $eventTypes = [
     'gate.session.reclaimed', 'feature.advanced', 'recovery.required', 'recovery.retry_started', 'recovery.resolved', 'lease.expired', 'policy.bypass_detected',
     'delegation.started', 'delegation.completed', 'delegation.failed', 'delegation.reconciled',
     'event.rejected',
+    'provider.capacity_limited', 'continuation.generated', 'provider.failover_started',
+    'provider.capacity_wait_started', 'provider.capacity_wait_finished',
 ];
 
 function fail(string $message, int $code = 1): never
@@ -617,7 +619,8 @@ function runnerResults(array $before, array $recorded, string $workflowId, strin
         if (($before[$path] ?? null) === $hash) {
             continue;
         }
-        if (! is_array($result) || ! in_array($result['runner'] ?? null, ['opencode', 'agy'], true)) {
+        if (! is_array($result)
+            || ! in_array($result['runner'] ?? null, ['opencode', 'agy', 'codex', 'claude'], true)) {
             continue;
         }
         if (($result['workflow_id'] ?? null) !== $workflowId
@@ -729,6 +732,9 @@ function validateRunnerResult(array $result): void
         'event_bytes', 'terminal_event', 'prompt_sha256', 'prompt_transport',
         'permission_policy_hash', 'permission_policy_status', 'verification_agent',
         'error_summary', 'artifact_refs',
+        'profile', 'failure_domain', 'failure_domain_status', 'failure_domain_source',
+        'reason_code', 'classification_confidence', 'classifier_source', 'retry_at',
+        'result_commit', 'result_tree_hash',
     ];
     foreach ($required as $field) {
         if (! array_key_exists($field, $result)) {
@@ -742,7 +748,8 @@ function validateRunnerResult(array $result): void
     $runner = $result['runner'] ?? null;
     $schemaVersion = $result['schema_version'] ?? null;
     $contractValid = ($schemaVersion === '1.0.0' && $runner === 'opencode')
-        || ($schemaVersion === '1.1.0' && $runner === 'agy');
+        || ($schemaVersion === '1.1.0' && $runner === 'agy')
+        || ($schemaVersion === '2.0.0' && in_array($runner, ['codex', 'claude', 'opencode'], true));
     if (! $contractValid
         || ! is_string($result['runner_version'])
         || $result['runner_version'] === ''
@@ -814,9 +821,16 @@ function validateRunnerResult(array $result): void
     if ($result['status'] === 'completed'
         && (! is_string($result['session_id'] ?? null)
             || $result['session_id'] === ''
-            || ($result['terminal_event'] ?? null) !== $expectedTerminal
             || $result['events_seen'] < 1)) {
-        fail('resultado concluído sem sessão, evento terminal ou eventos observados');
+        fail('resultado concluído sem sessão ou eventos observados');
+    }
+    if ($schemaVersion !== '2.0.0' && $result['status'] === 'completed'
+        && ($result['terminal_event'] ?? null) !== $expectedTerminal) {
+        fail('resultado concluído sem evento terminal previsto para o runner');
+    }
+    if ($schemaVersion === '2.0.0' && $result['status'] === 'completed'
+        && (! is_string($result['terminal_event'] ?? null) || $result['terminal_event'] === '')) {
+        fail('resultado v2 concluído sem evento terminal');
     }
     if ($runner === 'agy' && $result['status'] === 'completed'
         && (($result['provider'] ?? null) !== 'agy'
@@ -829,6 +843,246 @@ function validateRunnerResult(array $result): void
             || ($result['fallback_status'] ?? null) !== 'not_detected')) {
         fail('resultado agy concluído com identidade, provider ou fallback incompatível');
     }
+    validateRunnerResultV2($schemaVersion, $result);
+}
+
+function validateRunnerResultV2(string $schemaVersion, array $result): void
+{
+    if ($schemaVersion === '2.0.0') {
+        if (! is_string($result['profile'] ?? null) || $result['profile'] === '') {
+            fail('resultado v2 sem profile válido');
+        }
+        $domainStatus = $result['failure_domain_status'] ?? null;
+        if (! in_array($domainStatus, ['exact', 'observed', 'declared', 'unavailable'], true)) {
+            fail('resultado v2 sem failure_domain_status válido');
+        }
+        if (in_array($domainStatus, ['exact', 'observed'], true)
+            && (! is_string($result['failure_domain'] ?? null) || $result['failure_domain'] === ''
+                || ! is_string($result['failure_domain_source'] ?? null) || $result['failure_domain_source'] === '')) {
+            fail('resultado v2 com domínio exact|observed sem origem verificável');
+        }
+        if ($result['status'] === 'usage_limited') {
+            if (($result['reason_code'] ?? null) !== 'provider_usage_limited') {
+                fail('resultado v2 usage_limited sem reason_code suportado');
+            }
+            if (($result['classification_confidence'] ?? null) !== 'high') {
+                fail('resultado v2 usage_limited sem classificação de confiança alta');
+            }
+            if (! is_string($result['classifier_source'] ?? null) || $result['classifier_source'] === '') {
+                fail('resultado v2 usage_limited sem fonte de classificador');
+            }
+            if (! is_string($result['retry_at'] ?? null)
+                || preg_match('/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$/', $result['retry_at']) !== 1) {
+                fail('resultado v2 usage_limited sem retry_at válido');
+            }
+        }
+
+        return;
+    }
+
+    $v2Only = [
+        'profile', 'failure_domain', 'failure_domain_status', 'failure_domain_source',
+        'reason_code', 'classification_confidence', 'classifier_source', 'retry_at',
+        'result_commit', 'result_tree_hash',
+    ];
+    $present = array_values(array_filter(
+        $v2Only,
+        static fn (string $field): bool => array_key_exists($field, $result) && $result[$field] !== null
+    ));
+    if ($present !== []) {
+        fail('resultado legado carrega campos exclusivos do contrato v2: '.implode(', ', $present));
+    }
+}
+
+/**
+ * Valida a execution_policy do workflow (fail-closed, espelho do schema
+ * execution-policy). O default permanece fallback_policy=none: sem
+ * execution_policy, nada muda.
+ *
+ * @param array<string, mixed>|null $policy
+ * @return array{strategy: string, chain: list<array{runner: string, profile: string}>, failover: array<string, mixed>}
+ */
+function validateExecutionPolicy(?array $policy): array
+{
+    if ($policy === null || $policy === []) {
+        return ['strategy' => 'none', 'chain' => [], 'failover' => []];
+    }
+    if (($policy['schema_version'] ?? null) !== '1.0.0') {
+        fail('execution_policy com schema_version inválido');
+    }
+    if (($policy['provider_strategy'] ?? null) !== 'explicit_failover') {
+        fail('execution_policy com provider_strategy não suportada');
+    }
+    $chain = $policy['provider_chain'] ?? null;
+    if (! is_array($chain) || $chain === []) {
+        fail('execution_policy sem provider_chain');
+    }
+    $seen = [];
+    foreach ($chain as $index => $member) {
+        if (! is_array($member)) {
+            fail('execution_policy com membro de cadeia inválido');
+        }
+        $runner = $member['runner'] ?? null;
+        $profile = $member['profile'] ?? null;
+        $required = $member['required_failure_domain_status'] ?? null;
+        if (! in_array($runner, ['codex', 'claude', 'opencode'], true)
+            || ! is_string($profile) || $profile === ''
+            || $required !== 'observed') {
+            fail('execution_policy com membro de cadeia inválido no índice '.$index);
+        }
+        if (isset($seen[$runner])) {
+            fail('execution_policy com runner repetido: '.$runner);
+        }
+        $seen[$runner] = true;
+    }
+    $failover = $policy['failover'] ?? null;
+    if (! is_array($failover)) {
+        fail('execution_policy sem seção failover');
+    }
+    $reasons = $failover['eligible_reasons'] ?? null;
+    if (! is_array($reasons) || $reasons === []
+        || array_diff($reasons, ['provider_usage_limited']) !== []) {
+        fail('execution_policy com eligible_reasons não suportado');
+    }
+    $bounds = [
+        'short_wait_threshold_seconds' => [1, 3600],
+        'unknown_reset_cooldown_seconds' => [1, 604800],
+        'max_switches_per_feature' => [1, 16],
+        'max_no_progress_seconds' => [60, 2592000],
+    ];
+    foreach ($bounds as $field => [$min, $max]) {
+        $value = $failover[$field] ?? null;
+        if (! is_int($value) || $value < $min || $value > $max) {
+            fail("execution_policy com {$field} fora do intervalo permitido");
+        }
+    }
+    if (! in_array($failover['when_chain_exhausted'] ?? null, ['capacity_wait_then_recovery', 'recovery_required'], true)) {
+        fail('execution_policy com when_chain_exhausted inválido');
+    }
+
+    return [
+        'strategy' => 'explicit_failover',
+        'chain' => array_map(static fn (array $member): array => [
+            'runner' => (string) $member['runner'],
+            'profile' => (string) $member['profile'],
+        ], $chain),
+        'failover' => $failover,
+    ];
+}
+
+/**
+ * Congela o hash canônico da execution_policy validada.
+ *
+ * @param array<string, mixed>|null $policy
+ */
+function executionPolicyHash(?array $policy): ?string
+{
+    if ($policy === null || $policy === []) {
+        return null;
+    }
+
+    return hashValue(json_encode(canonical($policy), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR));
+}
+
+/**
+ * Relógio injetável da FEATURE-094. Em produção usa o tempo real; as fixtures
+ * usam RALPH_TEST_CLOCK_EPOCH para testar cooldown sem dormir.
+ */
+function failoverNow(): int
+{
+    $injected = getenv('RALPH_TEST_CLOCK_EPOCH');
+    if (is_string($injected) && preg_match('/^\d+$/', $injected) === 1) {
+        return (int) $injected;
+    }
+
+    return time();
+}
+
+/**
+ * Projeta os circuitos `closed|open|half_open` por runner exclusivamente do
+ * ledger e do relógio injetado. Nenhum arquivo sidecar é fonte de estado.
+ *
+ * @param list<array<string, mixed>> $events
+ * @return array<string, array{state: string, opened_at: int|null, retry_at: int|null, domain: string|null}>
+ */
+function projectProviderCircuits(array $events): array
+{
+    $circuits = [];
+    $now = failoverNow();
+    foreach ($events as $event) {
+        $type = $event['type'] ?? null;
+        if ($type !== 'provider.capacity_limited') {
+            continue;
+        }
+        $facts = is_array($event['facts'] ?? null) ? $event['facts'] : [];
+        $runner = $facts['runner'] ?? null;
+        $domain = $facts['failure_domain'] ?? null;
+        $retryEpoch = is_int($facts['retry_at_epoch'] ?? null) ? $facts['retry_at_epoch'] : null;
+        $key = is_string($runner) ? $runner : 'unknown';
+        $eventEpoch = is_string($event['timestamp'] ?? null) ? strtotime($event['timestamp']) : false;
+        $circuits[$key] = [
+            'state' => 'open',
+            'opened_at' => is_int($eventEpoch) ? $eventEpoch : null,
+            'retry_at' => $retryEpoch,
+            'domain' => is_string($domain) && $domain !== '' ? $domain : null,
+        ];
+    }
+    foreach ($circuits as $key => &$circuit) {
+        $retryAt = $circuit['retry_at'];
+        if ($retryAt !== null && $now >= $retryAt) {
+            $circuit['state'] = 'half_open';
+        }
+    }
+    unset($circuit);
+
+    return $circuits;
+}
+
+/**
+ * Seleciona o primeiro runner elegível da cadeia. Com o circuito aberto ou
+ * cooldown ativo, o runner é pulado; half_open permite o retorno apenas se
+ * nenhum outro da cadeia estiver disponível e elegível (probe no próximo run).
+ *
+ * @param list<array{runner: string, profile: string}> $chain
+ * @param array<string, array{state: string, retry_at: int|null}> $circuits
+ * @param array<string, array<string, mixed>> $readiness  providers -> status
+ */
+function selectEligibleRunner(array $chain, array $circuits, array $readiness): ?array
+{
+    foreach ($chain as $member) {
+        $runner = $member['runner'];
+        $status = $readiness[$runner]['status'] ?? 'unavailable';
+        if (($readiness[$runner]['adapter_enabled'] ?? false) !== true) {
+            continue;
+        }
+        $circuit = $circuits[$runner] ?? ['state' => 'closed'];
+        if (($circuit['state'] ?? 'closed') === 'open') {
+            continue;
+        }
+        // half_open é elegível: o próximo run fará o probe (readiness) e o
+        // sucesso fecha o circuito implicitamente.
+
+        return $member;
+    }
+
+    return null;
+}
+
+/**
+ * Resolve o retry_at em epoch a partir do runner-result v2 usage_limited.
+ */
+function usageLimitRetryEpoch(array $result): ?int
+{
+    $retryAt = $result['retry_at'] ?? null;
+    if (! is_string($retryAt)) {
+        return null;
+    }
+    $epoch = strtotime($retryAt);
+    if ($epoch === false) {
+        return null;
+    }
+
+    return $epoch;
 }
 
 function recordRunnerResult(array $arguments, array $feature, array $result, string $resultPath): void
@@ -897,6 +1151,30 @@ function recordRunnerResult(array $arguments, array $feature, array $result, str
         'idempotency-key' => 'trace:delegation:'.($feature['feature_key'] ?? '').':'.$executionId,
     ]);
     appendEvent(eventContext($traceArguments, $feature, $status, 'Resultado de adapter importado pelo controlador', $facts));
+
+    // FEATURE-094 (Phase 3/4): se o resultado é usage_limited e a política de
+    // execução explicit_failover está ativa, registra provider.capacity_limited
+    // (abre o circuito) e encerra a tentativa atual. O block.finished seguirá
+    // para provider_failover_pending em vez de debugging_required.
+    if (($result['status'] ?? null) === 'usage_limited') {
+        $workflow = loadWorkflowForId($result['workflow_id']);
+        if (($workflow['execution_policy_hash'] ?? null) !== null) {
+            $retryEpoch = usageLimitRetryEpoch($result);
+            appendEvent(eventContext($arguments, $feature, 'provider.capacity_limited', 'Limite de uso confirmado; circuito do runner aberto', [
+                'runner' => $result['runner'],
+                'profile' => $result['profile'] ?? null,
+                'failure_domain' => $result['failure_domain'] ?? null,
+                'failure_domain_status' => $result['failure_domain_status'] ?? 'unavailable',
+                'classification_confidence' => $result['classification_confidence'] ?? null,
+                'reason_code' => $result['reason_code'] ?? null,
+                'retry_at' => $result['retry_at'] ?? null,
+                'retry_at_epoch' => $retryEpoch,
+                'classifier_source' => $result['classifier_source'] ?? null,
+                'execution_id' => $executionId,
+                'attempt' => (int) $result['attempt'],
+            ]));
+        }
+    }
 }
 
 /**
@@ -1871,7 +2149,12 @@ function project(array $workflow, array $events): array
                 case 'attempt.started': $feature['state'] = 'running';
                     break;
                 case 'block.finished':
-                    $feature['state'] = (int) ($event['facts']['exit_code'] ?? 1) === 0 ? 'awaiting_gates' : 'debugging_required';
+                    // FEATURE-094: com failover pendente (rate limit confirmado),
+                    // o bloco não vira debugging_required — o controlador decide
+                    // a próxima tentativa (outro runner ou espera de capacidade).
+                    if (($feature['state'] ?? null) !== 'provider_failover_pending') {
+                        $feature['state'] = (int) ($event['facts']['exit_code'] ?? 1) === 0 ? 'awaiting_gates' : 'debugging_required';
+                    }
                     $feature['result'] = $event['facts'];
                     break;
                 case 'gate.passed': $feature['gates'][$event['facts']['gate'] ?? 'unknown'] = 'passed';
@@ -1953,6 +2236,37 @@ function project(array $workflow, array $events): array
                     $delegation['recorded_at'] = $event['timestamp'];
                     $feature['delegations'][] = $delegation;
                     break;
+                case 'provider.capacity_limited':
+                    // FEATURE-094: rate limit confirmado; encerra a tentativa
+                    // atual e abre o circuito do runner.
+                    $feature['state'] = 'provider_failover_pending';
+                    $feature['provider_capacity'] = $event['facts'] ?? [];
+                    break;
+                case 'continuation.generated':
+                    $feature['continuation'] = $event['facts'] ?? [];
+                    break;
+                case 'provider.failover_started':
+                    $feature['state'] = 'running';
+                    $feature['attempt'] = max($feature['attempt'], (int) ($event['attempt'] ?? 0));
+                    if (isset($event['lease_token_hash'])) {
+                        $feature['lease_token_hash'] = $event['lease_token_hash'];
+                    }
+                    $feature['provider_failover'] = $event['facts'] ?? [];
+                    $feature['gates'] = [];
+                    unset($feature['result']);
+                    break;
+                case 'provider.capacity_wait_started':
+                    $feature['state'] = 'capacity_wait';
+                    $feature['capacity_wait'] = $event['facts'] ?? [];
+                    break;
+                case 'provider.capacity_wait_finished':
+                    if (($event['facts']['outcome'] ?? null) === 'recovery_required') {
+                        $feature['state'] = 'recovery_required';
+                    } else {
+                        $feature['state'] = 'running';
+                    }
+                    $feature['capacity_wait'] = $event['facts'] ?? [];
+                    break;
             }
             unset($feature);
         }
@@ -2001,6 +2315,114 @@ function findEventFor(array $events, string $type, string $featureKey, int $atte
 function repositoryTreeHash(): string
 {
     return hashValue(git('rev-parse HEAD^{tree}'));
+}
+
+/**
+ * Fingerprint canônico da árvore parcial (FEATURE-094, Phase 4b).
+ *
+ * Inclui commit, tree hash e o estado staged+unstaged+untracked do Git. O
+ * runtime controlado usa allowlist fechada (`.phases/`, `.git/ralph-control/`,
+ * `.git/info/exclude`, knowledge-candidates). A lista de paths alterados é
+ * relativa e sem conteúdo.
+ *
+ * @return array{fingerprint: string, commit: string, tree_hash: string, dirty: list<string>, controlled_runtime: list<string>}
+ */
+function continuationTreeFingerprint(): array
+{
+    $commit = git('rev-parse HEAD');
+    $tree = git('rev-parse HEAD^{tree}');
+    $porcelain = git('status --porcelain --untracked-files=all');
+    $lines = array_values(array_filter(preg_split('/\R/', $porcelain) ?: [], static fn (string $line): bool => trim($line) !== ''));
+    $dirty = [];
+    $controlled = [];
+    $allowlist = ['/.phases/', '/.git/ralph-control/', '/.ralph/knowledge-candidates/', '/.git/info/exclude'];
+    foreach ($lines as $line) {
+        $path = substr($line, 3);
+        $relative = '/'.ltrim($path, '/');
+        $isControlled = false;
+        foreach ($allowlist as $prefix) {
+            if (str_starts_with($relative, $prefix)) {
+                $isControlled = true;
+                break;
+            }
+        }
+        if ($isControlled) {
+            $controlled[] = $relative;
+        } else {
+            $dirty[] = $relative;
+        }
+    }
+    sort($dirty, SORT_STRING);
+    sort($controlled, SORT_STRING);
+    $fingerprint = hashValue(implode("\n", array_merge(
+        [$commit, $tree],
+        $dirty,
+        $controlled,
+    )));
+
+    return ['fingerprint' => $fingerprint, 'commit' => $commit, 'tree_hash' => hashValue($tree), 'dirty' => $dirty, 'controlled_runtime' => $controlled];
+}
+
+/**
+ * Cápsula de continuidade (FEATURE-094, Phase 4b): projeção idempotente e
+ * regenerável do ledger, workflow e checkout. Não é fonte de transição; todo
+ * fato importante permanece no ledger.
+ *
+ * @return array{capsule_id: string, path: string, facts: array<string, mixed>}
+ */
+function generateContinuationCapsule(array $arguments, array $feature, string $nextAttempt, array $capacity): array
+{
+    global $runtime;
+    $workflowId = (string) ($arguments['workflow'] ?? '');
+    $featureKey = (string) $feature['feature_key'];
+    $fingerprint = continuationTreeFingerprint();
+    $workflow = loadWorkflowForId($workflowId);
+    $executionId = is_string($capacity['execution_id'] ?? null) ? $capacity['execution_id'] : null;
+    $previousAttempt = (int) $feature['attempt'];
+    $capsuleId = 'CNT-'.$previousAttempt.'-'.$nextAttempt;
+    $directory = $runtime.'/continuations/'.$featureKey;
+    if (! is_dir($directory) && ! mkdir($directory, 0700, true) && ! is_dir($directory)) {
+        fail('não foi possível criar continuations');
+    }
+    $facts = [
+        'capsule_id' => $capsuleId,
+        'workflow_id' => $workflowId,
+        'feature_key' => $featureKey,
+        'previous_attempt' => $previousAttempt,
+        'next_attempt' => (int) $nextAttempt,
+        'source_runner' => $capacity['runner'] ?? null,
+        'reason_code' => $capacity['reason_code'] ?? null,
+        'retry_at' => $capacity['retry_at'] ?? null,
+        'retry_at_epoch' => $capacity['retry_at_epoch'] ?? null,
+        'execution_id' => $executionId,
+        'policy_hash' => $workflow['execution_policy_hash'] ?? null,
+        'base_commit' => $feature['claim']['base_commit'] ?? null,
+        'base_tree_hash' => $feature['claim']['base_tree_hash'] ?? null,
+        'tree' => [
+            'commit' => $fingerprint['commit'],
+            'tree_hash' => $fingerprint['tree_hash'],
+            'fingerprint' => $fingerprint['fingerprint'],
+            'dirty_paths' => $fingerprint['dirty'],
+            'controlled_runtime' => $fingerprint['controlled_runtime'],
+        ],
+        'spec_ref' => $workflow['plan_file'] ?? null,
+        'spec_hash' => $workflow['spec_hash'] ?? $workflow['plan_hash'] ?? null,
+        'quality_command' => $arguments['test-cmd'] ?? null,
+        'artifact_refs' => array_merge(
+            ['artifact_'.$featureKey.'_stdout', 'artifact_'.$featureKey.'_stderr'],
+            $executionId !== null ? ['artifact_'.$featureKey.'_'.$capacity['runner'].'_implementation_events'] : [],
+        ),
+    ];
+    $path = $directory.'/'.$capsuleId.'.json';
+    writeJson($path, [
+        'schema_version' => '1.0.0',
+        'kind' => 'continuation_capsule',
+        'generated_at' => gmdate('Y-m-d\TH:i:s\Z'),
+        'facts' => $facts,
+    ]);
+    @chmod($path, 0600);
+
+    return ['capsule_id' => $capsuleId, 'path' => $path, 'facts' => $facts];
 }
 
 function commitParent(string $commit): string
@@ -2141,7 +2563,7 @@ function supervisorBeginRecoveryRetry(array $arguments, string $workflowId, stri
 }
 
 /** @return array{process: resource, pid: int} */
-function supervisorStartRun(array $arguments, string $workflowId, string $featureKey, string $lease, int $heartbeatInterval, int $retry): array
+function supervisorStartRun(array $arguments, string $workflowId, string $featureKey, string $lease, int $heartbeatInterval, int $retry, ?string $runnerOverride = null): array
 {
     global $root, $runtime;
     $self = escapeshellarg(PHP_BINARY).' '.escapeshellarg(__FILE__);
@@ -2149,8 +2571,9 @@ function supervisorStartRun(array $arguments, string $workflowId, string $featur
         .' --feature '.escapeshellarg($featureKey)
         .' --lease '.escapeshellarg($lease)
         .' --heartbeat-interval '.escapeshellarg((string) $heartbeatInterval);
-    if (is_string($arguments['engine'] ?? null) && trim((string) $arguments['engine']) !== '') {
-        $runCommand .= ' --engine '.escapeshellarg((string) $arguments['engine']);
+    $engine = is_string($runnerOverride) && $runnerOverride !== '' ? $runnerOverride : (string) ($arguments['engine'] ?? '');
+    if ($engine !== '') {
+        $runCommand .= ' --engine '.escapeshellarg($engine);
     }
     if (is_string($arguments['test-cmd'] ?? null) && trim((string) $arguments['test-cmd']) !== '') {
         $runCommand .= ' --test-cmd '.escapeshellarg((string) $arguments['test-cmd']);
@@ -2485,6 +2908,7 @@ function superviseWorkflow(array $arguments): void
 
     $run = null;
     $retry = 0;
+    $failoverTarget = null;
     try {
         while (true) {
             $workflow = loadWorkflowForId($workflowId);
@@ -2560,8 +2984,46 @@ function superviseWorkflow(array $arguments): void
             }
 
             $lease = null;
-            if (in_array($feature['state'] ?? null, ['debugging_required', 'debugging_verified', 'recovery_required'], true)) {
-                $debugResult = ($feature['state'] ?? null) === 'debugging_verified'
+            $failoverRetryReady = false;
+
+            // FEATURE-094 (Phase 6): feature em espera de capacidade. Quando o
+            // cooldown vence, tenta re-selecionar um runner; se o horizonte sem
+            // progresso esgotar, vai para recovery_required.
+            if (($feature['state'] ?? null) === 'capacity_wait') {
+                $waitDecision = supervisorResolveCapacityWait($arguments, $workflowId, $cursor, $feature);
+                if (($waitDecision['status'] ?? null) === 'awaiting_retry') {
+                    $lease = $waitDecision['lease_token'] ?? null;
+                    $feature = $waitDecision['feature'];
+                    $failoverTarget = $waitDecision['target_runner'] ?? null;
+                    $failoverRetryReady = true;
+                } else {
+                    fwrite(STDERR, supervisorFeedback(supervisorSnapshot($arguments, $workflowId, $staleAfter, $activityStaleAfter))."\n");
+                    printJson(array_merge($waitDecision, ['workflow_id' => $workflowId, 'feature_key' => $cursor]));
+
+                    return;
+                }
+            }
+
+            // FEATURE-094 (Phase 4): rate limit confirmado com política ativa.
+            // O controlador decide: espera curta, failover para o próximo
+            // runner da cadeia, ou espera de capacidade/recovery.
+            if (($feature['state'] ?? null) === 'provider_failover_pending') {
+                $failover = supervisorHandleFailover($arguments, $workflowId, $cursor, $feature);
+                if (($failover['status'] ?? null) === 'awaiting_retry') {
+                    $lease = $failover['lease_token'] ?? null;
+                    $feature = $failover['feature'];
+                    $failoverTarget = $failover['target_runner'] ?? null;
+                    $failoverRetryReady = true;
+                } else {
+                    fwrite(STDERR, supervisorFeedback(supervisorSnapshot($arguments, $workflowId, $staleAfter, $activityStaleAfter))."\n");
+                    printJson(array_merge($failover, ['workflow_id' => $workflowId, 'feature_key' => $cursor]));
+
+                    return;
+                }
+            }
+
+            if (! $failoverRetryReady) {
+                if (in_array($feature['state'] ?? null, ['debugging_required', 'debugging_verified', 'recovery_required'], true)) {                $debugResult = ($feature['state'] ?? null) === 'debugging_verified'
                     ? ['status' => 'debugging_verified']
                     : supervisorSystematicDebug($arguments, $workflowId, $cursor);
                 fwrite(STDERR, '[RALPH] systematic debugging: '.($debugResult['status'] ?? 'unknown')."\n");
@@ -2636,8 +3098,10 @@ function superviseWorkflow(array $arguments): void
                     fail('claim do supervisor não devolveu lease', 12);
                 }
             }
+            }
 
-            $run = supervisorStartRun($arguments, $workflowId, $cursor, $lease, $heartbeatInterval, $retry);
+            $run = supervisorStartRun($arguments, $workflowId, $cursor, $lease, $heartbeatInterval, $retry, $failoverTarget);
+            $failoverTarget = null;
             while (true) {
                 $snapshot = supervisorSnapshot($arguments, $workflowId, $staleAfter, $activityStaleAfter);
                 fwrite(STDERR, supervisorFeedback($snapshot)."\n");
@@ -2727,6 +3191,15 @@ function superviseWorkflow(array $arguments): void
                     }
                     if (($feature['state'] ?? null) === 'released') {
                         $run = null;
+                        break;
+                    }
+                    // FEATURE-094: o bloco terminou em provider_failover_pending
+                    // (rate limit confirmado). O supervisor decide a próxima
+                    // tentativa no loop principal; aqui só devolvemos o estado.
+                    if (($feature['state'] ?? null) === 'provider_failover_pending') {
+                        $run = null;
+                        fwrite(STDERR, supervisorFeedback(supervisorSnapshot($arguments, $workflowId, $staleAfter, $activityStaleAfter))."\n");
+
                         break;
                     }
                     if ($retry >= $maxRetries) {
@@ -2838,6 +3311,22 @@ function initWorkflow(array $arguments): void
         $workflow['spec_hash'] ??= $workflow['plan_hash'];
     }
 
+    // FEATURE-094 (Phase 3): execução_policy opcional, fail-closed. O default
+    // permanece fallback_policy=none; só explicit_failover é aceito e o hash
+    // canônico é congelado no workflow ativo para detectar drift.
+    $executionPolicy = isset($workflow['execution_policy']) && is_array($workflow['execution_policy'])
+        ? $workflow['execution_policy']
+        : null;
+    $validatedPolicy = validateExecutionPolicy($executionPolicy);
+    if ($validatedPolicy['strategy'] === 'explicit_failover') {
+        $workflow['execution_policy'] = $executionPolicy;
+        $workflow['execution_policy_hash'] = executionPolicyHash($executionPolicy);
+        $workflow['execution_policy_validated_at'] = gmdate('Y-m-d\TH:i:s\Z');
+    } else {
+        // Sem opt-in: remove qualquer política residual e não materializa nada.
+        unset($workflow['execution_policy'], $workflow['execution_policy_hash'], $workflow['execution_policy_validated_at']);
+    }
+
     $repository = currentRepository();
     $workflow['checkout'] = [
         'worktree_path' => $repository['worktree_path'],
@@ -2896,6 +3385,16 @@ function claimFeature(array $arguments): void
         $planHash = $workflow['plan_hash'] ?? null;
         if (! is_string($planHash) || ! str_starts_with($planHash, 'sha256:')) {
             fail('workflow sem plan_hash válido');
+        }
+        // FEATURE-094 (Phase 3): a execution_policy é congelada no init pelo
+        // hash canônico. Drift no workflow ativo bloqueia nova attempt.
+        $frozenHash = $workflow['execution_policy_hash'] ?? null;
+        if (is_string($frozenHash)) {
+            $currentPolicy = is_array($workflow['execution_policy'] ?? null) ? $workflow['execution_policy'] : null;
+            $currentHash = executionPolicyHash($currentPolicy);
+            if ($currentHash !== $frozenHash) {
+                fail('execution_policy divergiu do hash congelado no init; re-init exigido');
+            }
         }
         $token = 'lease_'.bin2hex(random_bytes(24));
         $feature['attempt'] = (int) $feature['attempt'] + 1;
@@ -3386,6 +3885,25 @@ function generateHandoff(array $arguments): void
             'result_tree_hash' => $feature['result']['result_tree_hash'] ?? null,
             'knowledge_policy' => $workflow['knowledge_policy']['mode'] ?? 'non_blocking',
         ];
+        // FEATURE-094 (Phase 7): seção provider_transitions derivada do ledger.
+        $providerTransitions = [];
+        foreach (readEvents() as $event) {
+            if (($event['type'] ?? null) !== 'provider.failover_started'
+                || ($event['feature_key'] ?? null) !== $featureKey) {
+                continue;
+            }
+            $facts = is_array($event['facts'] ?? null) ? $event['facts'] : [];
+            $providerTransitions[] = [
+                'source_runner' => $facts['source_runner'] ?? null,
+                'target_runner' => $facts['target_runner'] ?? null,
+                'previous_attempt' => $facts['previous_attempt'] ?? null,
+                'new_attempt' => $facts['new_attempt'] ?? null,
+                'capsule_id' => $facts['capsule_id'] ?? null,
+                'mode' => $facts['mode'] ?? null,
+                'timestamp' => $event['timestamp'] ?? null,
+            ];
+        }
+        $summary['provider_transitions'] = $providerTransitions;
         writeJson($output.DIRECTORY_SEPARATOR.'bug-report.json', [
             'schema_version' => RALPH_SCHEMA_VERSION,
             'document_id' => $bugReportId,
@@ -3782,10 +4300,21 @@ function beginFailedRetry(array $arguments): array
             && (($feature['debugging']['validation']['status'] ?? null) === 'passed');
         $failedBlock = ($feature['state'] ?? null) === 'debugging_verified'
             && ((int) ($result['exit_code'] ?? 0) !== 0 || $gateFailure || $verifiedDebugging);
-        if (! $failedBlock && ($feature['state'] ?? null) !== 'recovery_required') {
+        // FEATURE-094: provider_failover_pending (rate limit confirmado) é um
+        // motivo legítimo de nova tentativa; o beginProviderFailover ocorre sob
+        // workflow.lock dentro deste mesmo retry.
+        if (! $failedBlock
+            && ! in_array($feature['state'] ?? null, ['recovery_required', 'provider_failover_pending'], true)) {
             fail('retry exige falha encaminhada ao systematic debugging ou recovery_required');
         }
         $repository = currentRepository();
+        $isFailoverRetry = ($feature['state'] ?? null) === 'provider_failover_pending';
+        if ($isFailoverRetry && ! $repository['working_tree_clean']) {
+            $preserveTree = ($arguments['preserve-tree'] ?? false) === true || ($arguments['preserve-tree'] ?? null) === 'true';
+            if (! $preserveTree) {
+                fail('retry em provider_failover_pending exige --preserve-tree para manter a árvore parcial');
+            }
+        }
         if (($feature['state'] ?? null) === 'recovery_required' && ! $repository['working_tree_clean']) {
             $preserveTree = ($arguments['preserve-tree'] ?? false) === true || ($arguments['preserve-tree'] ?? null) === 'true';
             if (! $preserveTree) {
@@ -3823,6 +4352,273 @@ function beginFailedRetry(array $arguments): array
 }
 
 /**
+ * Decisão do supervisor para `provider_failover_pending` (FEATURE-094).
+ *
+ * Retorna:
+ *   - ['status' => 'awaiting_retry', 'lease_token' => ..., 'feature' => ...]
+ *     quando uma nova attempt deve rodar (mesmo runner por espera curta, ou
+ *     próximo runner da cadeia por failover);
+ *   - ['status' => 'capacity_wait'|'recovery_required', ...] quando não há
+ *     runner elegível ou a política esgotou.
+ *
+ * @return array<string, mixed>
+ */
+function supervisorHandleFailover(array $arguments, string $workflowId, string $featureKey, array $feature): array
+{
+    // FEATURE-094 (Phase 4c): nenhum runner do workflow pode estar vivo antes
+    // de iniciar o target; um runner órfão resulta em recovery, não em
+    // failover. O supervisor atual é ignorado (não é um runner).
+    $activeProcesses = array_values(array_filter(
+        activeWorkflowProcesses($workflowId),
+        static fn (array $process): bool => str_contains((string) ($process['command'] ?? ''), 'ralph-control run')
+            || preg_match('/ralph\.sh|ralph-block|ralph-bloco/', (string) ($process['command'] ?? '')) === 1
+    ));
+    if ($activeProcesses !== []) {
+        return ['status' => 'recovery_required', 'reason' => 'runner do workflow ainda observável; failover recusado'];
+    }
+    $workflow = loadWorkflowForId($workflowId);
+    $policy = validateExecutionPolicy($workflow['execution_policy'] ?? null);
+    if ($policy['strategy'] !== 'explicit_failover' || $policy['chain'] === []) {
+        return ['status' => 'recovery_required', 'reason' => 'failover sem política explicit_failover válida'];
+    }
+    $events = readEvents();
+    $circuits = projectProviderCircuits($events);
+    $capacity = $feature['provider_capacity'] ?? [];
+    $runner = $capacity['runner'] ?? null;
+    $retryEpoch = is_int($capacity['retry_at_epoch'] ?? null) ? $capacity['retry_at_epoch'] : null;
+    $now = failoverNow();
+    $failoverConfig = $policy['failover'];
+    $shortWait = (int) ($failoverConfig['short_wait_threshold_seconds'] ?? 120);
+
+    // Espera curta: o reset do MESMO runner é mais barato que trocar.
+    if (is_string($runner) && $retryEpoch !== null && ($retryEpoch - $now) <= $shortWait) {
+        $retry = beginFailedRetry(array_merge($arguments, [
+            'actor' => 'supervisor',
+            'feature' => $featureKey,
+            'reason' => 'espera curta de capacidade no mesmo runner',
+            'preserve-tree' => true,
+        ]));
+
+        return ['status' => 'awaiting_retry', 'lease_token' => $retry['lease_token'], 'feature' => $retry['feature'], 'mode' => 'short_wait'];
+    }
+
+    // Failover: seleciona o próximo runner elegível da cadeia. O readiness é
+    // a autoridade de elegibilidade; circuitos derivados do ledger excluem o
+    // runner em cooldown.
+    $readiness = [];
+    $planExit = 0;
+    $providerPlan = commandOutput(escapeshellarg(PHP_BINARY).' '.escapeshellarg(dirname(__FILE__).'/../bin/ralph-init').' plan --project '.escapeshellarg($GLOBALS['root']).' --provider auto --verify-providers', $planExit);
+    $decoded = json_decode($providerPlan, true);
+    if (is_array($decoded) && is_array($decoded['detection']['providers'] ?? null)) {
+        $readiness = $decoded['detection']['providers'];
+    }
+    $selected = selectEligibleRunner($policy['chain'], $circuits, $readiness);
+    if ($selected === null) {
+        // Nenhum runner elegível: espera de capacidade ou recovery conforme a
+        // política.
+        $whenExhausted = $failoverConfig['when_chain_exhausted'] ?? 'capacity_wait_then_recovery';
+        if ($whenExhausted === 'recovery_required') {
+            return ['status' => 'recovery_required', 'reason' => 'cadeia esgotada sem espera autorizada'];
+        }
+        appendEvent(eventContext($arguments, $feature, 'provider.capacity_wait_started', 'Cadeia indisponível; espera de capacidade iniciada', [
+            'runner' => $runner,
+            'retry_at' => $capacity['retry_at'] ?? null,
+            'retry_at_epoch' => $retryEpoch,
+            'started_at' => gmdate('Y-m-d\TH:i:s\Z'),
+            'chain' => array_column($policy['chain'], 'runner'),
+        ]));
+
+        return ['status' => 'capacity_wait', 'reason' => 'cadeia esgotada; aguardando capacidade', 'retry_at_epoch' => $retryEpoch];
+    }
+
+    // Fencing distinto e nova authority: o beginFailedRetry já incrementa
+    // attempt e gera novo lease; aqui registramos a transição de failover com
+    // o lease hash da NOVA tentativa (senão o run seguinte perde a autoridade).
+    $previousRunner = is_string($runner) ? $runner : 'codex';
+    $retry = beginFailedRetry(array_merge($arguments, [
+        'actor' => 'supervisor',
+        'feature' => $featureKey,
+        'reason' => 'failover controlado para '.$selected['runner'],
+        'preserve-tree' => true,
+    ]));
+
+    // Cápsula de continuidade: projeção regenerável da árvore parcial, emitida
+    // ANTES do failover_started para que o audit log registre a continuidade
+    // sem que ela seja a fonte de transição.
+    $capsule = generateContinuationCapsule($arguments, $feature, (string) $retry['feature']['attempt'], $capacity);
+    appendEvent(eventContext($arguments, $retry['feature'], 'continuation.generated', 'Cápsula de continuidade gerada', [
+        'capsule_id' => $capsule['capsule_id'],
+        'capsule_path' => str_replace($GLOBALS['root'].'/', '', $capsule['path']),
+        'tree_fingerprint' => $capsule['facts']['tree']['fingerprint'],
+        'previous_attempt' => $feature['attempt'],
+        'next_attempt' => $retry['feature']['attempt'],
+    ]));
+
+    appendEvent(eventContext($arguments, $retry['feature'], 'provider.failover_started', 'Failover controlado iniciado', [
+        'source_runner' => $previousRunner,
+        'target_runner' => $selected['runner'],
+        'target_profile' => $selected['profile'],
+        'previous_attempt' => $feature['attempt'],
+        'new_attempt' => $retry['feature']['attempt'],
+        'capsule_id' => $capsule['capsule_id'],
+        'mode' => 'usage_limited',
+    ]));
+
+    return ['status' => 'awaiting_retry', 'lease_token' => $retry['lease_token'], 'feature' => $retry['feature'], 'mode' => 'failover', 'target_runner' => $selected['runner']];
+}
+
+/**
+ * Resolve a espera de capacidade (FEATURE-094, Phase 6): cooldown vencido
+ * tenta re-selecionar um runner; horizonte sem progresso esgota em recovery.
+ *
+ * @return array<string, mixed>
+ */
+function supervisorResolveCapacityWait(array $arguments, string $workflowId, string $featureKey, array $feature): array
+{
+    $workflow = loadWorkflowForId($workflowId);
+    $policy = validateExecutionPolicy($workflow['execution_policy'] ?? null);
+    $events = readEvents();
+    $circuits = projectProviderCircuits($events);
+    $wait = $feature['capacity_wait'] ?? [];
+    $retryEpoch = is_int($wait['retry_at_epoch'] ?? null) ? $wait['retry_at_epoch'] : null;
+    $startedEpoch = is_string($wait['started_at'] ?? null) ? strtotime($wait['started_at']) : false;
+    $now = failoverNow();
+    $maxNoProgress = (int) (($policy['failover']['max_no_progress_seconds'] ?? null) ?? 21600);
+
+    // Horizonte sem progresso: recovery_required, nunca espera infinita.
+    if (is_int($startedEpoch) && ($now - $startedEpoch) > $maxNoProgress) {
+        appendEvent(eventContext($arguments, $feature, 'provider.capacity_wait_finished', 'Espera de capacidade esgotou o horizonte sem progresso', [
+            'outcome' => 'recovery_required',
+            'reason' => 'max_no_progress_seconds atingido',
+            'max_no_progress_seconds' => $maxNoProgress,
+            'started_at' => $wait['started_at'] ?? null,
+        ]));
+
+        return ['status' => 'recovery_required', 'reason' => 'espera de capacidade sem progresso dentro do horizonte'];
+    }
+
+    // Cooldown ainda vigente: continua a espera (heartbeat no snapshot).
+    if ($retryEpoch !== null && $now < $retryEpoch) {
+        return ['status' => 'capacity_wait', 'reason' => 'cooldown em vigor', 'retry_at_epoch' => $retryEpoch, 'cooldown_seconds_left' => $retryEpoch - $now];
+    }
+
+    // Cooldown vencido: re-seleciona o primeiro runner elegível da cadeia.
+    $readiness = [];
+    $planExit = 0;
+    $providerPlan = commandOutput(escapeshellarg(PHP_BINARY).' '.escapeshellarg(dirname(__FILE__).'/../bin/ralph-init').' plan --project '.escapeshellarg($GLOBALS['root']).' --provider auto --verify-providers', $planExit);
+    $decoded = json_decode($providerPlan, true);
+    if (is_array($decoded) && is_array($decoded['detection']['providers'] ?? null)) {
+        $readiness = $decoded['detection']['providers'];
+    }
+    $selected = selectEligibleRunner($policy['chain'], $circuits, $readiness);
+    if ($selected === null) {
+        // Sem runner ainda: registra nova janela de espera (idempotente) e
+        // continua aguardando.
+        appendEvent(eventContext($arguments, $feature, 'provider.capacity_wait_finished', 'Janela de capacidade encerrada sem runner elegível', [
+            'outcome' => 'continue_wait',
+            'retry_at_epoch' => $retryEpoch,
+        ]));
+        appendEvent(eventContext($arguments, $feature, 'provider.capacity_wait_started', 'Nova janela de espera de capacidade', [
+            'retry_at_epoch' => null,
+            'started_at' => gmdate('Y-m-d\TH:i:s\Z'),
+        ]));
+
+        return ['status' => 'capacity_wait', 'reason' => 'sem runner elegível após cooldown'];
+    }
+
+    // Runner disponível: nova attempt no runner selecionado.
+    $retry = beginFailedRetry(array_merge($arguments, [
+        'actor' => 'supervisor',
+        'feature' => $featureKey,
+        'reason' => 'capacidade disponível para '.$selected['runner'],
+        'preserve-tree' => true,
+    ]));
+    appendEvent(eventContext($arguments, $retry['feature'], 'provider.capacity_wait_finished', 'Capacidade disponível; retomada', [
+        'outcome' => 'resumed',
+        'target_runner' => $selected['runner'],
+        'target_profile' => $selected['profile'],
+        'new_attempt' => $retry['feature']['attempt'],
+    ]));
+
+    return ['status' => 'awaiting_retry', 'lease_token' => $retry['lease_token'], 'feature' => $retry['feature'], 'target_runner' => $selected['runner']];
+}
+
+/**
+ * provider-status — somente leitura. Explica circuitos, cooldown, runner atual
+ * e próxima ação sem iniciar provider nem mutar eventos.
+ */
+function providerStatus(array $arguments): void
+{
+    $workflowId = required($arguments, 'workflow');
+    $workflow = loadWorkflowForId($workflowId);
+    $policy = validateExecutionPolicy($workflow['execution_policy'] ?? null);
+    $events = readEvents();
+    $projection = project($workflow, $events);
+    $circuits = projectProviderCircuits($events);
+    $now = failoverNow();
+    $out = [];
+    foreach ($circuits as $runner => $circuit) {
+        $retryAt = $circuit['retry_at'];
+        $cooldownLeft = $retryAt !== null ? max(0, $retryAt - $now) : null;
+        $out['circuits'][$runner] = [
+            'state' => $circuit['state'],
+            'opened_at' => $circuit['opened_at'],
+            'retry_at' => $retryAt,
+            'cooldown_seconds_left' => $cooldownLeft,
+            'failure_domain' => $circuit['domain'],
+        ];
+    }
+    $cursor = $projection['cursor'];
+    $out['policy'] = $policy['strategy'];
+    $out['chain'] = $policy['chain'];
+    $out['cursor_feature'] = $cursor;
+    $out['now_epoch'] = $now;
+    $out['next_action'] = 'workflow sem política; seleção legada';
+
+    printJson($out);
+}
+
+/**
+ * failover-plan — somente leitura. Calcula qual runner seria selecionado para a
+ * feature atual, com bloqueios e cooldown, sem iniciar provider nem mutar.
+ */
+function failoverPlan(array $arguments): void
+{
+    $workflowId = required($arguments, 'workflow');
+    $workflow = loadWorkflowForId($workflowId);
+    $policy = validateExecutionPolicy($workflow['execution_policy'] ?? null);
+    if ($policy['strategy'] !== 'explicit_failover') {
+        printJson(['status' => 'not_applicable', 'policy' => 'none', 'next_runner' => null, 'reason' => 'sem explicit_failover; fallback_policy=none']);
+
+        return;
+    }
+    $events = readEvents();
+    $circuits = projectProviderCircuits($events);
+    $readiness = [];
+    $planExit = 0;
+    $providerPlan = commandOutput(escapeshellarg(PHP_BINARY).' '.escapeshellarg(dirname(__FILE__).'/../bin/ralph-init').' plan --project '.escapeshellarg($GLOBALS['root']).' --provider auto --verify-providers', $planExit);
+    $decoded = json_decode($providerPlan, true);
+    if (is_array($decoded) && is_array($decoded['detection']['providers'] ?? null)) {
+        $readiness = $decoded['detection']['providers'];
+    }
+    $selected = selectEligibleRunner($policy['chain'], $circuits, $readiness);
+    $out = [
+        'status' => $selected === null ? 'no_eligible_runner' : 'eligible',
+        'next_runner' => $selected['runner'] ?? null,
+        'next_profile' => $selected['profile'] ?? null,
+        'circuits' => $circuits,
+        'chain' => $policy['chain'],
+        'readiness' => array_map(static fn (array $provider): array => [
+            'status' => $provider['status'] ?? 'unavailable',
+            'adapter_enabled' => $provider['adapter_enabled'] ?? false,
+            'failure_domain_status' => $provider['failure_domain_status'] ?? null,
+        ], $readiness),
+    ];
+
+    printJson($out);
+}
+
+/**
  * beginGateRetry — retoma apenas o pipeline de gates de uma feature JÁ
  * commitada (FEATURE-097, INC-2026-0007). Quando o bloco terminou com exit 0
  * e a falha foi de gate (defeito do comando ou verificação da feature), o
@@ -3844,8 +4640,7 @@ function beginGateRetry(array $arguments): array
         $blockCommitted = (int) ($result['exit_code'] ?? 1) === 0;
         $hasGateFailure = in_array('rejected', array_values($feature['gates'] ?? []), true)
             || in_array('harness_error', array_values($feature['gates'] ?? []), true);
-        if (! $blockCommitted || ! $hasGateFailure) {
-            fail('gate retry exige bloco commitado com falha de gate');
+        if (! $blockCommitted || ! $hasGateFailure) {            fail('gate retry exige bloco commitado com falha de gate');
         }
         // Primeiro muda o estado para awaiting_gates (gate.retry_started), para
         // que a sessão de gates possa ser retomada; depois cria/reusa a sessão.
@@ -4349,6 +5144,9 @@ function runControlled(array $arguments): void
         'RALPH_EXECUTION_WORKFLOW_ID' => $workflowId,
         'RALPH_EXECUTION_FEATURE_KEY' => $featureKey,
         'RALPH_EXECUTION_ATTEMPT' => (string) $attempt,
+        // FEATURE-094 (Phase 3): sinaliza a política ao loop para que o rate
+        // limit seja devolvido como runner-result v2 em vez de dormir.
+        'RALPH_EXECUTION_POLICY_MODE' => $workflow['execution_policy']['provider_strategy'] ?? 'none',
     ]);
     unset(
         $environment['RALPH_LEASE_TOKEN'],
@@ -4588,6 +5386,21 @@ function runControlled(array $arguments): void
         fail($reason);
     }
     appendEvent(eventContext($arguments, $feature, 'block.finished', $exitCode === 0 ? 'Bloco controlado terminou' : 'Bloco controlado terminou com falha; systematic debugging requerido', $facts));
+
+    // FEATURE-094 (Phase 4): rate limit confirmado com política ativa termina
+    // o bloco em provider_failover_pending (o circuito já abriu), sem exigir
+    // debugging nem entrar em awaiting_gates.
+    $workflowAfter = loadWorkflowForId($workflowId);
+    $projectionAfter = project($workflowAfter, readEvents());
+    $featureAfter = featureFrom($projectionAfter, $featureKey);
+    $policyActive = ($workflowAfter['execution_policy_hash'] ?? null) !== null;
+    $failoverPending = ($featureAfter['state'] ?? null) === 'provider_failover_pending';
+    if ($policyActive && $failoverPending) {
+        $releaseExecutionLock();
+        printJson(['status' => 'provider_failover_pending', 'feature_key' => $featureKey, 'exit_code' => $exitCode, 'artifacts' => [$prefix.'.stdout.log', $prefix.'.stderr.log']]);
+
+        return;
+    }
     if ($exitCode !== 0) {
         appendEvent(eventContext($arguments, $feature, 'debugging.required', 'Falha do bloco encaminhada para systematic debugging', [
             'reason' => 'block_finished_exit_code',
@@ -5310,6 +6123,10 @@ try {
         case 'debug': debugFeature($arguments);
             break;
         case 'supervise': superviseWorkflow($arguments);
+            break;
+        case 'provider-status': providerStatus($arguments);
+            break;
+        case 'failover-plan': failoverPlan($arguments);
             break;
         case 'continue': continueWorkflow($arguments);
             break;

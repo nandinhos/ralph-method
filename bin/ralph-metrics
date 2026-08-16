@@ -225,6 +225,10 @@ $knowledgeCurated = 0;
 $knowledgeRejected = 0;
 $knowledgeReviewRequired = 0;
 $knowledgeSkipped = 0;
+// FEATURE-094 (Phase 7): métricas de failover read-only.
+$providerFailovers = 0;
+$providerCapacityLimits = 0;
+$providerCapacityWaits = 0;
 $lastEventAt = null;
 
 foreach ($events as $event) {
@@ -327,6 +331,12 @@ foreach ($events as $event) {
         if ($featureId !== null) {
             $features[$featureId]['knowledge_state'] = 'knowledge_review_required';
         }
+    } elseif ($type === 'provider.capacity_limited') {
+        $providerCapacityLimits++;
+    } elseif ($type === 'provider.failover_started') {
+        $providerFailovers++;
+    } elseif ($type === 'provider.capacity_wait_started') {
+        $providerCapacityWaits++;
     } elseif ($type === 'knowledge.skipped') {
         $knowledgeSkipped++;
         if ($featureId !== null) {
@@ -369,6 +379,9 @@ $metrics = [
         'knowledge_rejected' => $knowledgeRejected,
         'knowledge_review_required' => $knowledgeReviewRequired,
         'knowledge_skipped' => $knowledgeSkipped,
+        'provider_capacity_limits' => $providerCapacityLimits,
+        'provider_failovers' => $providerFailovers,
+        'provider_capacity_waits' => $providerCapacityWaits,
         'attempt_duration_seconds' => durationSummary($attemptDurations),
         'recovery_duration_seconds' => durationSummary($recoveryDurations),
     ],

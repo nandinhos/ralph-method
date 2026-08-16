@@ -364,7 +364,53 @@ function monitorSnapshot(string $root, string $workflowId, int $staleAfter, int 
         'processes' => $processes,
         'stale_after_seconds' => $staleAfter,
         'activity_stale_after_seconds' => $activityStaleAfter,
+        // FEATURE-094 (Phase 7): circuitos derivados do ledger, somente leitura.
+        'provider_circuits' => monitorProviderCircuits($root, $workflowId),
     ];
+}
+
+/**
+ * Deriva os circuitos `closed|open|half_open` por runner do ledger
+ * (FEATURE-094). Apenas observação; não possui autoridade de transição.
+ *
+ * @return array<string, array{state: string, retry_at: ?string, domain: ?string}>
+ */
+function monitorProviderCircuits(string $root, string $workflowId): array
+{
+    $runtime = (monitorGitCommonDir($root) ?: $root).DIRECTORY_SEPARATOR.'ralph-control';
+    $eventsFile = $runtime.'/events.jsonl';
+    if (! is_file($eventsFile)) {
+        return [];
+    }
+    $circuits = [];
+    $now = time();
+    foreach (file($eventsFile, FILE_IGNORE_NEW_LINES) ?: [] as $line) {
+        if (trim($line) === '') {
+            continue;
+        }
+        try {
+            $event = json_decode($line, true, 512, JSON_THROW_ON_ERROR);
+        } catch (Throwable) {
+            continue;
+        }
+        if (! is_array($event) || ($event['type'] ?? null) !== 'provider.capacity_limited'
+            || ($event['workflow_id'] ?? null) !== $workflowId) {
+            continue;
+        }
+        $facts = is_array($event['facts'] ?? null) ? $event['facts'] : [];
+        $runner = is_string($facts['runner'] ?? null) ? $facts['runner'] : 'unknown';
+        $retryAt = is_string($facts['retry_at'] ?? null) ? $facts['retry_at'] : null;
+        $retryEpoch = is_int($facts['retry_at_epoch'] ?? null) ? $facts['retry_at_epoch'] : null;
+        $state = $retryEpoch !== null && $now >= $retryEpoch ? 'half_open' : 'open';
+        $circuits[$runner] = [
+            'state' => $state,
+            'retry_at' => $retryAt,
+            'domain' => is_string($facts['failure_domain'] ?? null) ? $facts['failure_domain'] : null,
+        ];
+    }
+    ksort($circuits, SORT_STRING);
+
+    return $circuits;
 }
 
 /** @param array<string, mixed> $snapshot */

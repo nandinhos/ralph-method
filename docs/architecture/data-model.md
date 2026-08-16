@@ -69,9 +69,12 @@ não representa trabalho parcial ainda não staged.
   credenciais, tokens ou prompts.
 - `adapter_enabled` só pode ser verdadeiro quando `status` é `functional` e
   `runner_supported` é verdadeiro.
-- `runner-result` preserva duas variantes 1.x: OpenCode `1.0.0` com terminal
-  `step_finish` e `agy` `1.1.0` com terminal `result`; o controlador valida a
-  combinação e nunca converte uma versão na outra no ledger.
+- `runner-result` preserva as variantes 1.x (OpenCode `1.0.0` com terminal
+  `step_finish` e `agy` `1.1.0` com terminal `result`) e passa a aceitar o
+  contrato comum `2.0.0` (runners `codex`/`claude`/`opencode` com `profile`,
+  `failure_domain` e classificação `usage_limited` de confiança alta); o
+  controlador valida a combinação e nunca converte uma versão na outra no
+  ledger, nem aceita campos exclusivos do v2 em resultados 1.x.
 - `functional` nesta versão significa autenticação confirmada e diagnóstico
   local não generativo aprovado para a CLI; não significa probe real de
   geração.
