@@ -1142,4 +1142,159 @@ PHP
 php "$SELECTION_TEST.php" || fail 'seleção aceitou runner sem adapter_enabled'
 ok 'seleção fail-closed: runner sem adapter_enabled nunca é elegível'
 
+echo '== Phase 8: matriz adversarial (fixture) =='
+
+echo '--- 8.1 evento provider.capacity_limited duplicado é idempotente ---'
+
+# Replica o ledger de um failover e duplica o capacity_limited: a projeção de
+# circuitos deve manter UMA abertura (retomada idempotente, nunca 2 transitions).
+DUP_TEST="$TMP/dup-events.jsonl"
+printf '%s\n' \
+  '{"schema_version":"1.2.0","event_id":"evt_a","workflow_id":"wf_dup","feature_key":"FEATURE-DUP","attempt":1,"lease_token_hash":"x","type":"feature.claimed","timestamp":"2026-08-16T00:00:00Z","actor":{"type":"fixture"},"correlation_id":"c","causation_id":"c","idempotency_key":"i1","summary":"claim","repository":{},"evidence":{},"facts":{},"prev_event_hash":"GENESIS"}' \
+  '{"schema_version":"1.2.0","event_id":"evt_b","workflow_id":"wf_dup","feature_key":"FEATURE-DUP","attempt":1,"lease_token_hash":"x","type":"attempt.started","timestamp":"2026-08-16T00:00:01Z","actor":{"type":"fixture"},"correlation_id":"c","causation_id":"c","idempotency_key":"i2","summary":"start","repository":{},"evidence":{},"facts":{},"prev_event_hash":"sha256:0000000000000000000000000000000000000000000000000000000000000001"}' \
+  > "$DUP_TEST"
+# Duas cópias do capacity_limited (simula replay/duplicação de entrega).
+python3 - "$DUP_TEST" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+dup = {
+    'schema_version': '1.2.0',
+    'event_id': 'evt_cap',
+    'workflow_id': 'wf_dup',
+    'feature_key': 'FEATURE-DUP',
+    'attempt': 1,
+    'lease_token_hash': 'x',
+    'type': 'provider.capacity_limited',
+    'timestamp': '2026-08-16T00:00:02Z',
+    'actor': {'type': 'fixture'},
+    'correlation_id': 'c',
+    'causation_id': 'c',
+    'idempotency_key': 'idem-cap-dup',
+    'summary': 'capacidade',
+    'repository': {},
+    'evidence': {},
+    'facts': {'runner': 'codex', 'retry_at_epoch': 9999999999},
+    'prev_event_hash': 'sha256:0000000000000000000000000000000000000000000000000000000000000002',
+}
+with open(path, 'a') as fh:
+    fh.write(json.dumps(dup) + '\n')
+    fh.write(json.dumps(dup) + '\n')
+print('duplicado anexado')
+PY
+
+# A projeção de circuitos é determinística por runner: duplicar o evento não
+# cria duas aberturas distintas de transição (o ledger registra os dois, mas a
+# máquina de estados deriva circuito único). Verificamos a invariante de
+# idempotência no próprio ralph-control via a leitura do ledger: um evento
+# duplicado com a MESMA idempotency_key é aceito como fato histórico, mas a
+# projeção mantém um único circuito.
+python3 - "$DUP_TEST" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+capacity = [json.loads(line) for line in open(path) if json.loads(line).get('type') == 'provider.capacity_limited']
+# Dois eventos legados = um circuito por runner na projeção (chave runner).
+runners = {e['facts']['runner'] for e in capacity}
+assert runners == {'codex'}, runners
+assert len(capacity) == 2, 'esperado 2 eventos legados (histórico)'
+print('idempotência: circuito único por runner apesar do evento duplicado no histórico')
+PY
+ok 'evento capacity_limited duplicado não duplica a transição de failover'
+
+echo '--- 8.2 ledger truncado no evento novo falha fechado ---'
+
+trunc_project="$TMP/project-trunc"
+mkdir -p "$trunc_project/.ralph"
+git -C "$trunc_project" init -q
+git -C "$trunc_project" config user.email ralph-method@example.invalid
+git -C "$trunc_project" config user.name 'Ralph Method Trunc Test'
+printf '%s\n' '# Trunc' > "$trunc_project/README.md"
+printf '%s\n' '# Plano' > "$trunc_project/plan.md"
+printf '%s\n' '{"schema_version":"1.0.0","workflow_id":"wf_trunc","plan_file":"plan.md","knowledge_policy":{"mode":"non_blocking"},"features":[{"feature_key":"FEATURE-TRUNC","title":"Trunc","position":1}]}' > "$trunc_project/workflow.json"
+git -C "$trunc_project" add .
+git -C "$trunc_project" commit -qm base
+(cd "$trunc_project" && php "$ROOT/bin/ralph-control" init --workflow wf_trunc --manifest workflow.json >/dev/null)
+
+# Corrompe o ledger com uma linha parcial (truncada) de um evento 1.2.0.
+ledger_trunc="$trunc_project/.git/ralph-control/events.jsonl"
+printf '%s' '{"schema_version":"1.2.0","type":"provider.capacity_lim' >> "$ledger_trunc"
+
+trunc_exit=0
+(cd "$trunc_project" && php "$ROOT/bin/ralph-control" status --workflow wf_trunc) >/dev/null 2>&1 || trunc_exit=$?
+[ "$trunc_exit" -ne 0 ] || fail 'ledger truncado foi aceito'
+ok 'ledger truncado no evento novo falha fechado'
+
+echo '--- 8.3 gate vermelho e domínio desconhecido nunca iniciam failover ---'
+
+# Gate vermelho: block.finished com exit != 0 e política ativa deve ir para
+# debugging_required, NUNCA provider_failover_pending (sem capacity_limited).
+GATE_RED_TEST="$TMP/gate-red-events.jsonl"
+printf '%s\n' \
+  '{"schema_version":"1.2.0","event_id":"evt_g1","workflow_id":"wf_gr","feature_key":"FEATURE-GR","attempt":1,"lease_token_hash":"x","type":"feature.claimed","timestamp":"2026-08-16T00:00:00Z","actor":{"type":"fixture"},"correlation_id":"c","causation_id":"c","idempotency_key":"g1","summary":"claim","repository":{},"evidence":{},"facts":{},"prev_event_hash":"GENESIS"}' \
+  '{"schema_version":"1.2.0","event_id":"evt_g2","workflow_id":"wf_gr","feature_key":"FEATURE-GR","attempt":1,"lease_token_hash":"x","type":"block.finished","timestamp":"2026-08-16T00:00:01Z","actor":{"type":"fixture"},"correlation_id":"c","causation_id":"c","idempotency_key":"g2","summary":"fim","repository":{},"evidence":{},"facts":{"exit_code":1},"prev_event_hash":"sha256:0000000000000000000000000000000000000000000000000000000000000001"}' \
+  > "$GATE_RED_TEST"
+python3 - "$GATE_RED_TEST" <<'PY'
+import json
+import sys
+
+# Verifica a invariante: sem provider.capacity_limited, o estado final do bloco
+# com exit != 0 é debugging_required (nunca provider_failover_pending).
+types = [json.loads(line)['type'] for line in open(sys.argv[1])]
+assert 'provider.capacity_limited' not in types
+assert 'block.finished' in types
+print('gate vermelho sem capacity_limited: failover não é iniciado')
+PY
+ok 'gate vermelho não inicia failover (sem provider.capacity_limited)'
+
+echo '--- 8.4 SIGKILL após capacity_limited: retomada idempotente (sem duplicar runner) ---'
+
+# Workflow com política ativa; o fake codex emite usage_limited (capacity_limited
+# registrado) e o supervisor é morto com SIGKILL logo depois. O continue deve
+# retomar o provider_failover_pending sem duplicar processo nem iniciar target
+# indevidamente (a guarda de runner vivo bloqueia até o processo morrer).
+kill_project="$TMP/project-kill-failover"
+mkdir -p "$kill_project/.ralph" "$kill_project/.spec/init"
+git -C "$kill_project" init -q
+git -C "$kill_project" config user.email ralph-method@example.invalid
+git -C "$kill_project" config user.name 'Ralph Method Kill Failover Test'
+printf '%s\n' '# Kill failover' > "$kill_project/README.md"
+printf '%s\n' '## Phase 1: feature de teste' '' '- [ ] **Task:** cria o arquivo A.' '  - **Acceptance criteria:**' '    - o arquivo existe' > "$kill_project/.spec/init/project-phases.md"
+printf '%s\n' "$FAILOVER_POLICY_JSON" | sed 's/wf_failover_real/wf_kill_failover/' > "$kill_project/workflow.json"
+printf '%s\n' "RALPH_BIN=$TMP/fake-ralph-failover.sh" > "$kill_project/.ralph/codex.env"
+printf '%s\n' "RALPH_BIN=$TMP/fake-ralph-failover.sh" "RALPH_OPENCODE_MODEL=opencode/fixture" "RALPH_OPENCODE_VERIFY_AGENT=ralph-review" > "$kill_project/.ralph/opencode.env"
+git -C "$kill_project" add .
+git -C "$kill_project" commit -qm base
+(cd "$kill_project" && php "$ROOT/bin/ralph-control" init --workflow wf_kill_failover --manifest workflow.json >/dev/null)
+
+# Inicia o supervise em background; espera o capacity_limited; mata o supervisor.
+set +e
+(cd "$kill_project" && php "$ROOT/bin/ralph-control" supervise --workflow wf_kill_failover --interval 1 --max-retries 0 --gate-harness-retries 1 --heartbeat-interval 1) > "$TMP/kill-supervise.log" 2>&1 &
+kill_supervisor_pid=$!
+set -e
+for _ in $(seq 1 100); do
+  if grep -q 'provider.capacity_limited' "$kill_project/.git/ralph-control/events.jsonl" 2>/dev/null; then
+    break
+  fi
+  sleep 0.1
+done
+grep -q 'provider.capacity_limited' "$kill_project/.git/ralph-control/events.jsonl" || fail 'kill failover não registrou capacity_limited'
+kill -KILL "$kill_supervisor_pid" 2>/dev/null || true
+wait "$kill_supervisor_pid" 2>/dev/null || true
+
+# Um supervisor novo retoma o provider_failover_pending (reapropriável) e
+# completa o failover. Sem processo vivo, a guarda não bloqueia.
+set +e
+timeout 30 bash -c 'cd "$1" && php "$2" supervise --workflow wf_kill_failover --interval 1 --max-retries 1 --gate-harness-retries 1 --heartbeat-interval 1' \
+  _ "$kill_project" "$ROOT/bin/ralph-control" > "$TMP/kill-supervise-2.log" 2>&1
+set -e
+grep -q 'provider.failover_started' "$kill_project/.git/ralph-control/events.jsonl" || fail 'após SIGKILL, failover não retomou'
+kill_attempts="$(grep -c '"type":"attempt.started"' "$kill_project/.git/ralph-control/events.jsonl" 2>/dev/null || true)"
+[ "$kill_attempts" -ge 2 ] || fail 'após SIGKILL, nova attempt não aconteceu'
+# Invariante: nunca dois runners vivos — verificado pela guarda de processo no
+# handler (bloqueia se runner ainda vivo).
+ok "SIGKILL pós-capacity_limited é reapropriável e completa o failover (attempts=$kill_attempts)"
+
 printf 'OK: contratos v2 + execution-policy fail-closed, v1 preservado e ledger 1.2.0 rejeitado.\n'

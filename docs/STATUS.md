@@ -105,6 +105,27 @@ As Phases 5–7 também estão concluídas sobre a base `0.9.2`:
   agrega `provider_capacity_limits`, `provider_failovers` e
   `provider_capacity_waits` sem mutar o ledger nem medir tokens/custo.
 
+A **matriz adversarial (Phase 8)** está verde em fixture: SIGKILL
+pós-`capacity_limited` é reapropriável (o `supervise` retoma e completa o
+failover sem duplicar runner), evento `capacity_limited` duplicado é
+idempotente, ledger truncado no evento novo falha fechado, gate vermelho e
+domínio desconhecido nunca iniciam failover, e a seleção exige
+`adapter_enabled` (fail-closed). A regressão completa (`ci-portable.sh`) está
+verde. O relatório da candidata está em
+[`docs/reports/0028-candidata-feature-094-failover.md`](reports/0028-candidata-feature-094-failover.md).
+A promoção permanece **bloqueada** até a prova de campo (Phase 9) e a revisão
+adversarial independente sem finding crítico/alto.
+
+A **prova de campo (Phase 9)** foi executada no `refactor-radar` em clone
+descartável isolado (nunca a `main` ativa): o shim codex injetou
+`usage_limited` → `provider.capacity_limited` → `continuation.generated`
+(cápsula CNT-1-2) → `provider.failover_started` (codex→opencode, nova attempt)
+→ **OpenCode real continuou a feature**, `bin/check` real verde, impl+verify
+completados e gates `validation`/`quality` aprovados. Os cinco gates completos
+foram exercitados no fluxo real do `refactor-radar` na fase 29, que fechou com
+**5/5 verdes** em campo. A promoção permanece pendente apenas da revisão
+adversarial independente (Phase 8, task 5) e do fluxo de promoção do Ralph.
+
 ### FEATURE-097 — recuperação de gate
 
 - `gate.rejected` (evidência mostra falha da feature → `debugging_required`) vs

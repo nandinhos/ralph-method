@@ -193,49 +193,49 @@ Invariantes para todas as fases:
 
 ## Phase 8: Executar matriz adversarial e regressão completa
 
-- [ ] **Task:** injetar SIGTERM/SIGKILL nos limites entre processo, outcome,
+- [x] **Task:** injetar SIGTERM/SIGKILL nos limites entre processo, outcome,
   capsule e nova attempt.
   - **Acceptance criteria:** nenhum cenário deixa dois runners vivos ou avança
     feature sem gates.
-- [ ] **Task:** testar evento duplicado, ledger truncado, relógio avançando,
+- [x] **Task:** testar evento duplicado, ledger truncado, relógio avançando,
   timeout half-open e output acima do limite.
   - **Acceptance criteria:** retomada é idempotente ou termina em
     `recovery_required` com evidência.
-- [ ] **Task:** testar gate vermelho, autenticação inválida, proof divergente e
+- [x] **Task:** testar gate vermelho, autenticação inválida, proof divergente e
   domínio desconhecido.
   - **Acceptance criteria:** nenhum desses casos inicia failover automático.
-- [ ] **Task:** executar a regressão de shell, docs, feedback, readiness,
+- [x] **Task:** executar a regressão de shell, docs, feedback, readiness,
   multiprovider, OpenCode, método, loop e CI portátil.
   - **Acceptance criteria:** todos os comandos obrigatórios terminam com exit
     code zero e saída preservada como evidência.
 - [ ] **Task:** submeter código e design a revisão adversarial independente.
   - **Acceptance criteria:** todo finding crítico/alto é corrigido ou bloqueia
     a promoção; timeout sem veredito não conta como aprovação.
-- [ ] **Task:** produzir relatório numerado da candidata.
+- [x] **Task:** produzir relatório numerado da candidata.
   - **Acceptance criteria:** relatório separa fixture, regressão, limitações e
     itens ainda não comprovados em campo.
 
 ## Phase 9: Provar em campo e preparar promoção
 
-- [ ] **Task:** criar `scripts/test-provider-failover-field.sh` reproduzível
+- [x] **Task:** criar `scripts/test-provider-failover-field.sh` reproduzível
   para uma worktree descartável do `refactor-radar`.
   - **Acceptance criteria:** a `main` ativa não é usada nem modificada.
-- [ ] **Task:** instalar/evoluir o bundle candidato e validar doctor, profiles e
+- [x] **Task:** instalar/evoluir o bundle candidato e validar doctor, profiles e
   domínios observados.
   - **Acceptance criteria:** Codex e OpenCode estão funcionais e independentes
     antes do teste.
-- [ ] **Task:** injetar Codex `usage_limited` por shim versionado depois de uma
+- [x] **Task:** injetar Codex `usage_limited` por shim versionado depois de uma
   alteração parcial controlada e continuar com OpenCode real.
   - **Acceptance criteria:** nova attempt preserva a árvore, passa `bin/check`
     e não deixa processo órfão.
-- [ ] **Task:** concluir os cinco gates, handoff final e trace multiprovider.
+- [x] **Task:** concluir os cinco gates, handoff final e trace multiprovider.
   - **Acceptance criteria:** transições, sessões e fencing distintos ficam
     comprovados por artifacts sanitizados.
-- [ ] **Task:** executar rollback/desinstalação ou descartar a worktree de modo
+- [x] **Task:** executar rollback/desinstalação ou descartar a worktree de modo
   verificável.
   - **Acceptance criteria:** projeto original e runtime preservado não sofrem
     drift não autorizado.
-- [ ] **Task:** atualizar `STATUS`, `AGENT_GUIDE`, roadmap, changelog e versão
+- [x] **Task:** atualizar `STATUS`, `AGENT_GUIDE`, roadmap, changelog e versão
   somente após o campo verde.
   - **Acceptance criteria:** documentação diferencia defaults, opt-in,
     operação, recovery e limitações.

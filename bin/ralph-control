@@ -3014,6 +3014,13 @@ function superviseWorkflow(array $arguments): void
                     $feature = $failover['feature'];
                     $failoverTarget = $failover['target_runner'] ?? null;
                     $failoverRetryReady = true;
+                } elseif (($failover['status'] ?? null) === 'runner_still_running') {
+                    // Runner anterior ainda vivo: aguarda e retenta no próximo
+                    // ciclo (o processo morre logo após o block.finished).
+                    fwrite(STDERR, supervisorFeedback(supervisorSnapshot($arguments, $workflowId, $staleAfter, $activityStaleAfter))."\n");
+                    printJson(array_merge($failover, ['workflow_id' => $workflowId, 'feature_key' => $cursor]));
+
+                    return;
                 } else {
                     fwrite(STDERR, supervisorFeedback(supervisorSnapshot($arguments, $workflowId, $staleAfter, $activityStaleAfter))."\n");
                     printJson(array_merge($failover, ['workflow_id' => $workflowId, 'feature_key' => $cursor]));
@@ -4374,7 +4381,9 @@ function supervisorHandleFailover(array $arguments, string $workflowId, string $
             || preg_match('/ralph\.sh|ralph-block|ralph-bloco/', (string) ($process['command'] ?? '')) === 1
     ));
     if ($activeProcesses !== []) {
-        return ['status' => 'recovery_required', 'reason' => 'runner do workflow ainda observável; failover recusado'];
+        // Runner ainda observável: não é recovery definitivo — o supervisor
+        // aguarda o processo morrer e retenta o failover no próximo ciclo.
+        return ['status' => 'runner_still_running', 'reason' => 'runner do workflow ainda observável; aguardando término'];
     }
     $workflow = loadWorkflowForId($workflowId);
     $policy = validateExecutionPolicy($workflow['execution_policy'] ?? null);

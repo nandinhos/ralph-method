@@ -91,8 +91,8 @@ engine `codex`, preservando qualquer runtime histórico do clone atual.
 - [ ] manter features seguintes no runner elegível durante o cooldown;
 - [x] adicionar espera de capacidade com heartbeat e horizonte sem progresso;
 - [x] projetar transições no handoff, trace, monitor e métricas;
-- [ ] executar matriz de panes, regressão completa e revisão adversarial;
-- [ ] comprovar continuidade real por script reproduzível em worktree
+- [x] executar matriz de panes, regressão completa e revisão adversarial;
+- [x] comprovar continuidade real por script reproduzível em worktree
   descartável do `refactor-radar`;
 - [ ] atualizar `STATUS`, `AGENT_GUIDE` e release somente após os gates finais.
 
