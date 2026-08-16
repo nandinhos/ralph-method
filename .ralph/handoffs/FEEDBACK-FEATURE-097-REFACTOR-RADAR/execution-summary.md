@@ -86,28 +86,39 @@
    processo controlado com exit 0 e evento terminal estável, e o retry pós-
    recuperação de um bloco já commitado deve re-rodar só os gates.
 
+7. **CAUSA RAIZ DEFINITIVA da pane — reconciliação de resultados do bloco com
+   múltiplos ciclos (BUG CRÍTICO)**: a phase-26 (implementação nova) confirmou
+   o motivo real de todo o laço: o controlador registra
+   `recovery.required` com `reason="resultado de adapter normativo sem
+   exatamente um sucesso por modo"` quando o bloco precisa de **mais de um
+   ciclo de correção** (2+ sessões de implementação antes do Gate 2 verde).
+   Como o bloco produz múltiplos `*.result.json` de impl, o controlador não
+   reconcilia e declara recuperação → retry → re-executa o bloco inteiro → de
+   novo múltiplos ciclos → loop infinito (~30 min por tentativa). Qualquer fase
+   que precise de correção cai nesse bug. A reconciliação do
+   `block.finished` deve agregar os ciclos do bloco (usar o resultado final de
+   impl bem-sucedido + o verify), em vez de exigir exatamente um resultado por
+   modo.
+
 ## Status final (após as correções)
 
 - `technical_review`: **APROVADO** (veredito da última linha estruturada).
 - `curation`: workaround `scripts/ralph-curate-gate.sh` validado no gate-test.
 - `runtime_evidence`: **passed** (`php artisan about`).
-- **phase-25 NÃO fechou**: o laço de retry do executor controlado (finding 6)
-  re-executa o bloco commitado e falha com exit espúrio / perda de evento
-  terminal. `attempt.started` chegou a **9+**.
-- O supervise foi interrompido para parar o sangramento de re-execuções.
+- **phase-25 fechada** (fix 8f81ea1), **phase-26 BLOQUEADA** pelo bug crítico
+  do finding 7 (bloco com múltiplos ciclos → recovery.required em loop;
+  re-execuções de ~30 min cada; attempt.started chegou a 6+).
+- O supervise foi interrompido para parar o sangramento.
 
-## Resolução (fix 8f81ea1 / HND-2026-0012) — CONFIRMADO
+## Resolução (finding 7) — CONFIRMADO no ralph-method
 
-Com a correção `8f81ea1` (retry pós-debugging de feature commitada não
-re-executa o bloco) aplicada, a phase-25 fechou:
-
-- bloco do attempt 10 concluiu com exit 0 e os cinco gates passaram
-  (validation, quality, runtime_evidence, technical_review, curation);
-- `feature.approved` → `handoff.generated` → `handoff.committed`
-  (`613da63`) → `feature.released` (2026-08-15T21:43:23Z) →
-  `knowledge.candidate_created` → `feature.advanced`;
-- o workflow avançou para **phase-26** (progresso 1/15);
-- árvore limpa; feature commitada em `3729c4e` + handoff `613da63`.
+O finding 7 (bloco com múltiplos ciclos → `recovery.required` em loop) foi
+corrigido no `ralph-control`: a validação normativa agora usa
+`normativeRunnerResults` (primeiro sucesso de impl + verify) em vez de contar
+todos os `*.result.json` de impl do mesmo attempt. Regressão
+`test-ralph-multi-cycle.sh` (2 impls completed + verify) confirma
+`recovery.required: 0`. A phase-26 deve fechar na próxima execução do
+`supervise`.
 
 ## Evidência
 
@@ -117,6 +128,8 @@ re-executa o bloco) aplicada, a phase-25 fechou:
   `scripts/ralph-debug-report.php`).
 - `RPT-2026-0068/0069/0070` (rejeições do technical_review),
   `RPT-2026-0072` (curation default quebrado).
+- Correção do finding 7 no ralph-method: `bin/ralph-control`,
+  `scripts/test-ralph-multi-cycle.sh`.
 
 ## Checklist
 

@@ -17,6 +17,7 @@ checks=(
   scripts/test-multiprovider.sh
   scripts/test-ralph-method.sh
   scripts/test-ralph-reconciliation.sh
+  scripts/test-ralph-multi-cycle.sh
   scripts/test-ralph-noop-approval.sh
   scripts/test-ralph-knowledge.sh
   scripts/test-ralph-metrics.sh

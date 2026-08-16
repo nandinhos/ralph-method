@@ -4511,39 +4511,33 @@ function runControlled(array $arguments): void
     $projection = project($workflow, readEvents());
     $feature = featureFrom($projection, $featureKey);
     checkLease($feature, $lease);
-    $runnerResultEntries = runnerResults($runnerResultBefore, $recordedRunnerIds, $workflowId, $featureKey, $attempt);
+        $runnerResultEntries = runnerResults($runnerResultBefore, $recordedRunnerIds, $workflowId, $featureKey, $attempt);
     if ($generatedRalph && in_array($engine, ['opencode', 'agy'], true) && $exitCode === 0) {
         $contextModes = recordedRunnerContextModes($workflowId, $featureKey, $attempt);
+        // FEATURE-097 (finding 7, projeto-alvo): um bloco com múltiplos ciclos
+        // de correção produz vários *.result.json de impl (cycle-1, cycle-2, ...).
+        // O contrato normativo exige UMA implementação bem-sucedida e UMA revisão,
+        // não "exatamente um arquivo por modo". A validação usa o resultado
+        // selecionado (primeiro sucesso de impl + verify), não a contagem bruta.
+        $normativeRunnerEntries = normativeRunnerResults($runnerResultEntries);
         $successfulCounts = ['impl' => 0, 'verify' => 0];
         $normativeError = null;
-        foreach ($runnerResultEntries as $runnerResultEntry) {
-            $result = $runnerResultEntry['result'];
-            $resultMode = $result['execution_mode'] ?? null;
-            if (! is_string($resultMode) || ! in_array($resultMode, ['impl', 'verify'], true)) {
+        foreach ($normativeRunnerEntries as $runnerResultEntry) {
+            $resultExecutionId = $runnerResultEntry['result']['execution_id'] ?? null;
+            $resultMode = $runnerResultEntry['result']['execution_mode'] ?? null;
+            if (! is_string($resultExecutionId) || ! is_string($resultMode)
+                || ! in_array($resultMode, ['impl', 'verify'], true)
+                || isset($contextModes[$resultExecutionId])) {
                 $normativeError = 'resultado de adapter normativo duplicado ou sem modo único';
                 break;
             }
-            if (($result['status'] ?? null) === 'completed' && ($result['exit_code'] ?? null) === 0) {
-                $successfulCounts[$resultMode]++;
+            if (($runnerResultEntry['result']['status'] ?? null) !== 'completed'
+                || ($runnerResultEntry['result']['exit_code'] ?? null) !== 0) {
+                $normativeError = 'resultado de adapter normativo sem sucesso por modo';
+                break;
             }
-        }
-        $normativeRunnerEntries = normativeRunnerResults($runnerResultEntries);
-        if ($normativeError === null) {
-            foreach ($normativeRunnerEntries as $runnerResultEntry) {
-                $resultExecutionId = $runnerResultEntry['result']['execution_id'] ?? null;
-                $resultMode = $runnerResultEntry['result']['execution_mode'] ?? null;
-                if (! is_string($resultExecutionId) || ! is_string($resultMode) || isset($contextModes[$resultExecutionId])) {
-                    $normativeError = 'resultado de adapter normativo duplicado ou sem modo único';
-                    break;
-                }
-                if (($successfulCounts[$resultMode] ?? 0) !== 1
-                    || ($runnerResultEntry['result']['status'] ?? null) !== 'completed'
-                    || ($runnerResultEntry['result']['exit_code'] ?? null) !== 0) {
-                    $normativeError = 'resultado de adapter normativo sem exatamente um sucesso por modo';
-                    break;
-                }
-                $contextModes[$resultExecutionId] = $resultMode;
-            }
+            $successfulCounts[$resultMode]++;
+            $contextModes[$resultExecutionId] = $resultMode;
         }
         $modeCounts = array_count_values(array_values($contextModes));
         if ($normativeError !== null
