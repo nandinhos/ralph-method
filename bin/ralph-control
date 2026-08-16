@@ -2923,6 +2923,8 @@ function superviseWorkflow(array $arguments): void
     $run = null;
     $retry = 0;
     $failoverTarget = null;
+    $failoverRunnerWaitCycles = 0;
+    $failoverRunnerWaitLimit = max(3, (int) ($arguments['max-retries'] ?? 2) * 4);
     try {
         while (true) {
             $workflow = loadWorkflowForId($workflowId);
@@ -3031,10 +3033,21 @@ function superviseWorkflow(array $arguments): void
                 } elseif (($failover['status'] ?? null) === 'runner_still_running') {
                     // Runner anterior ainda vivo: aguarda e retenta no próximo
                     // ciclo (o processo morre logo após o block.finished).
-                    fwrite(STDERR, supervisorFeedback(supervisorSnapshot($arguments, $workflowId, $staleAfter, $activityStaleAfter))."\n");
-                    printJson(array_merge($failover, ['workflow_id' => $workflowId, 'feature_key' => $cursor]));
+                    // A corrida é benigna: o failover é idempotente e só
+                    // registra provider.failover_started depois que o runner
+                    // desaparece. Se o runner nunca morrer, esgota em
+                    // recovery_required em vez de loop infinito.
+                    $failoverRunnerWaitCycles++;
+                    if ($failoverRunnerWaitCycles >= $failoverRunnerWaitLimit) {
+                        supervisorRecordRequiredRecovery($arguments, $feature, supervisorSnapshot($arguments, $workflowId, $staleAfter, $activityStaleAfter), 'runner anterior do workflow não encerrou dentro do limite de espera do failover');
+                        printJson(array_merge($failover, ['workflow_id' => $workflowId, 'feature_key' => $cursor, 'status' => 'recovery_required']));
 
-                    return;
+                        return;
+                    }
+                    fwrite(STDERR, '[RALPH] failover aguardando término do runner anterior (ciclo '.$failoverRunnerWaitCycles.'/'.$failoverRunnerWaitLimit.")\n");
+                    sleep($interval);
+
+                    continue;
                 } else {
                     fwrite(STDERR, supervisorFeedback(supervisorSnapshot($arguments, $workflowId, $staleAfter, $activityStaleAfter))."\n");
                     printJson(array_merge($failover, ['workflow_id' => $workflowId, 'feature_key' => $cursor]));
