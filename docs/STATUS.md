@@ -126,6 +126,49 @@ foram exercitados no fluxo real do `refactor-radar` na fase 29, que fechou com
 **5/5 verdes** em campo. A promoção permanece pendente apenas da revisão
 adversarial independente (Phase 8, task 5) e do fluxo de promoção do Ralph.
 
+### FEATURE-098 — adapter Cursor (em implementação)
+
+Pedido recebido por handoff (`HO-2026-08-16-001`, `BL-0004`) do agente do
+`cursor-ralph-profile`: promover a CLI Cursor (`agent`/`cursor-agent`) a
+adapter executável do método, no mesmo rito do `agy`. O Cursor é uma IDE com
+LLM embutido, sem API key: a autenticação é a sessão local da conta, e o
+detector do `ralph-init` não procura `CURSOR_API_KEY`. Entregue sobre a base
+`0.9.2`:
+
+- [`ADR-0021`](adr/0021-adapter-cursor.md) e
+  [`PRD`](prd/prd-adapter-cursor.md) definem o contrato: runner `cursor`,
+  `schema_version 1.2.0`, terminal `result`, fallback `none`, prompt ≤ 256 KiB
+  e stream 5 MiB/10k/30 min;
+- o verify v1 do Cursor é **declarado**: `verify --mode ask` com
+  `permission_policy_status=declared`, `permission_policy_hash=null` e
+  `verification_agent=ask` — `verified` é proibido nesta versão e o
+  `ralph-control` rejeita verify cursor sem esse contrato;
+- `schemas/runner-result.schema.json` ganhou o bloco condicional `1.2.0`
+  (runner const `cursor`, campos v2 null, terminal `result`) e `declared` no
+  enum de `permission_policy_status`, com regressão v1/v1.1/v2 preservada;
+- `bin/ralph-control` valida `1.2.0+cursor` (contract e terminal), exclui o
+  cursor do verify geral e aceita o verify declarado; `runnerResults()` e o
+  fluxo normativo (`configuredRalph`/`runControlled`) aceitam o engine
+  `cursor`;
+- `bin/ralph-init` detecta `agent`/`cursor-agent`, autentica via
+  `status --format json` (sessão local) e habilita o adapter somente com
+  modelo explícito; `generatedPaths` e o template `.ralph/cursor.env` cobrem o
+  perfil gerado e o `apply`/`uninstall`;
+- `scripts/ralph.sh` aceita `--engine cursor` na seam (`is_adapter_engine`,
+  fingerprint, preflight, modelo de verify) e valida `RALPH_CURSOR_MODEL`
+  obrigatório;
+- `adapters/cursor/` (`contract.md`, `runner.sh`, `parser.php`) implementa a
+  seam `preflight|run|version`, normaliza `--output-format stream-json` para
+  `runner-result 1.2.0` e falha fechado em JSONL inválido, zero eventos,
+  múltiplos `result`, escrita em verify e modelo divergente, com sanitização
+  dos eventos persistidos;
+- fixture offline `scripts/test-cursor-adapter.sh` (CLI `agent` fake no PATH)
+  comprova preflight impl/verify, run impl e verify declarado, contrato 1.2.0
+  no schema, e o parser fail-closed; incluído no `ci-portable.sh`.
+
+Pendente: prova de campo opt-in e revisão adversarial independente antes da
+promoção.
+
 ### FEATURE-097 — recuperação de gate
 
 - `gate.rejected` (evidência mostra falha da feature → `debugging_required`) vs
@@ -212,10 +255,12 @@ base `0.4.0` mantém a instalação local reversível, doctor, ownership por has
 e canal de feedback para o orquestrador externo; as evoluções `0.5.0` e `0.6.0`
 adicionam hardening do control plane e memória de engenharia versionada.
 
-O escopo operacional deste checkout inclui quatro harnesses: Codex e Claude CLI
-pelos runners nativos do loop, OpenCode pelo adapter certificado e `agy` pelo
-adapter candidato em `adapters/agy/`. O verify `agy` é fail-closed e limitado a
-Linux com `bwrap` allowlisted e file access restrito ao workspace; Hermes
+O escopo operacional deste checkout inclui cinco harnesses: Codex e Claude CLI
+pelos runners nativos do loop, OpenCode pelo adapter certificado, `agy` pelo
+adapter candidato em `adapters/agy/` e Cursor pelo adapter candidato em
+`adapters/cursor/`. O verify `agy` é fail-closed e limitado a
+Linux com `bwrap` allowlisted e file access restrito ao workspace; o verify
+v1 do Cursor é declarado (`--mode ask`, nunca proof); Hermes
 permanece somente na detecção passiva e
 no [`docs/backlog.md`](backlog.md).
 
@@ -296,8 +341,9 @@ no [`Relatório 0023`](reports/0023-revalidacao-regressao-release-detector-legad
 | Migração por origem | `schemas/migration-adapter.schema.json`, ADR-0020 | contrato fechado por origem (bc-harness, knowledge_only); nunca importa ledger/workflow/prompts/credenciais |
 | Adapter OpenCode | `adapters/opencode/` | preflight, execução JSONL, parser fail-closed e resultado normalizado |
 | Adapter agy | `adapters/agy/` | preflight, `stream-json`, parser/policy fail-closed e verify isolado por `bwrap` |
+| Adapter Cursor | `adapters/cursor/` | preflight, `stream-json`, parser 1.2.0 fail-closed e verify v1 declarado (`--mode ask`) |
 | Runners Codex/Claude | `scripts/ralph.sh` | integração nativa de execução e revisão do loop |
-| Resultado de runner | `schemas/runner-result.schema.json` | OpenCode 1.0/`step_finish`, `agy` 1.1/`result` e contrato comum 2.0 (`codex`/`claude`/`opencode` com `failure_domain` e `usage_limited` de confiança alta) sob validação fail-closed |
+| Resultado de runner | `schemas/runner-result.schema.json` | OpenCode 1.0/`step_finish`, `agy` 1.1/`result`, Cursor 1.2/`result` e contrato comum 2.0 (`codex`/`claude`/`opencode` com `failure_domain` e `usage_limited` de confiança alta) sob validação fail-closed |
 | Política de execução | `schemas/execution-policy.schema.json` | opt-in `explicit_failover` com cadeia e limites obrigatórios; default continua `fallback_policy=none` |
 | Política read-only OpenCode | `adapters/opencode/policy.php`, `scripts/opencode-readonly-proof.sh` | fingerprint, prova externa e bloqueio fail-closed da revisão |
 | Política read-only agy | `adapters/agy/policy.php`, `.agents/agents/ralph-review/agent.md` | hash versionado, allowlist e isolamento preventivo Linux |
@@ -331,7 +377,9 @@ provider pode ser certificado como `functional` quando `auth_status` é
 JSONL e prova read-only externa. `agy` usa `models` +
 `--add-dir <repo-root> agents` como probes não generativos, exige exatamente
 `ralph-review` e só habilita o adapter com Linux, `bwrap` operacional e token
-OAuth legível; sua prova real usa isolamento allowlisted. Hermes continua sem
+OAuth legível; sua prova real usa isolamento allowlisted. Cursor é certificado
+com `status --format json` (sessão local da conta, sem API key) + `models` e
+só habilita o adapter com `RALPH_CURSOR_MODEL` explícito. Hermes continua sem
 adapter. Nenhum provider entra como fallback. Nenhum probe inicia geração. Quando nenhum runner
 está disponível, `auto` mantém o plano em `needs_review` sem materializar
 `codex` ou outro executor fictício.
@@ -345,8 +393,8 @@ Os checks portáteis verdes são `scripts/check-shell.sh`,
 `scripts/test-ralph-method.sh`, `scripts/test-ralph-knowledge.sh` e
 `scripts/test-ralph.sh`, `scripts/test-ralph-metrics.sh`, além de `scripts/test-opencode-policy.sh`,
 `scripts/test-opencode-adapter.sh`, `scripts/test-opencode-adversarial.sh`,
-`scripts/test-agy-adapter.sh`, `scripts/test-agy-loop.sh` e
-`scripts/test-agy-control.sh`. As provas reais explícitas são
+`scripts/test-agy-adapter.sh`, `scripts/test-agy-loop.sh`,
+`scripts/test-agy-control.sh` e `scripts/test-cursor-adapter.sh`. As provas reais explícitas são
 `scripts/test-opencode-field.sh` e `scripts/test-agy-field.sh`. Eles cobrem ownership, conflito, idempotência,
 remoção segura, eventos, prontidão de providers, progresso e a regressão do
 loop, capability adversarial, parsing JSONL, política read-only e execução
@@ -373,8 +421,8 @@ Ela prova que a seleção `auto` escolhe somente providers funcionais com
 faz fallback silencioso, bloqueia `apply` explícito não autenticado e mantém
 `fallback_policy=none`. A mesma prova histórica registra no `ralph-trace`
 identidade exata, modelo e sessão dos três harnesses então ativos. A regressão
-atual inclui `agy` como quarto runner sem mudar a política de fallback; Hermes
-continua no backlog sem prioridade.
+atual inclui `agy` como quarto runner e Cursor como quinto, sem mudar a
+política de fallback; Hermes continua no backlog sem prioridade.
 
 Os smoke tests reais dos CLIs também foram comprovados fora do loop: Codex
 retornou exit `0`, JSONL válido, thread e marcador determinístico; Claude

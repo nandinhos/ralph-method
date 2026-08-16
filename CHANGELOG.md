@@ -5,6 +5,29 @@ português do Brasil. A versão no arquivo `VERSION` identifica o bundle em
 desenvolvimento; uma versão só é considerada publicada após commit, tag
 anotada e promoção documentada.
 
+## 0.10.0 — em desenvolvimento
+
+### Adapter Cursor (FEATURE-098)
+
+- schema `runner-result 1.2.0` para o runner `cursor` (terminal `result`,
+  campos v2 null) com `declared` no enum de `permission_policy_status`;
+  contratos v1/v1.1/v2 preservados;
+- `bin/ralph-control` valida `1.2.0+cursor`, aceita o verify declarado
+  (`--mode ask`, hash `null`, agente `ask`) e rejeita `verified` para o
+  cursor; `runnerResults()`/`runControlled` aceitam o engine `cursor`;
+- `bin/ralph-init` detecta a CLI Cursor (`agent`/`cursor-agent`), autentica
+  pela sessão local (`status --format json`, sem API key) e habilita o
+  adapter somente com `RALPH_CURSOR_MODEL` explícito; novo perfil
+  `.ralph/cursor.env` gerado no `apply`;
+- `scripts/ralph.sh` aceita `--engine cursor` (seam de adapters, preflight,
+  fingerprint, modelo de verify) e exige modelo explícito;
+- `adapters/cursor/` implementa a seam `preflight|run|version`, normaliza
+  `--output-format stream-json` para `runner-result 1.2.0` e falha fechado em
+  JSONL inválido, zero eventos, múltiplos `result`, escrita em verify e modelo
+  divergente, sanitizando eventos persistidos;
+- fixture offline `scripts/test-cursor-adapter.sh` incluída no
+  `ci-portable.sh`.
+
 ## 0.9.2 — publicada em 2026-08-15
 
 ### Recuperação de gate distinta (FEATURE-097)

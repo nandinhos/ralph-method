@@ -1,6 +1,6 @@
 # Integrações condicionais de harnesses e providers
 
-O Ralph Method possui quatro harnesses executáveis nesta linha. A tabela
+O Ralph Method possui cinco harnesses executáveis nesta linha. A tabela
 abaixo distingue runners nativos, adapters dedicados e detecção passiva:
 
 | Harness | Implementação atual | Estado |
@@ -10,10 +10,11 @@ abaixo distingue runners nativos, adapters dedicados e detecção passiva:
 | OpenCode | adapter explícito em `adapters/opencode/` | certificado em campo |
 | Hermes | readiness passiva | backlog, prioridade nenhuma |
 | agy | adapter explícito em `adapters/agy/` | candidato funcional; verify Linux allowlisted |
+| Cursor | adapter explícito em `adapters/cursor/` | candidato funcional; verify v1 declarado (ask) |
 
-No contrato técnico, OpenCode e `agy` possuem diretórios de adapter dedicados;
-Codex e Claude são runners nativos do loop. Todos passam pelo mesmo contrato de
-trace e gates, sem receber autoridade do controlador.
+No contrato técnico, OpenCode, `agy` e Cursor possuem diretórios de adapter
+dedicados; Codex e Claude são runners nativos do loop. Todos passam pelo mesmo
+contrato de trace e gates, sem receber autoridade do controlador.
 
 Um adapter só pode ser habilitado quando o instalador registrar o provider
 como `functional` e com `runner_supported=true` em `.ralph/providers.json`. A
@@ -70,3 +71,19 @@ divergência de modelo, múltiplas conversas ou terminais e qualquer política
 incompleta. A prova direta isolada pode ser repetida com
 `bash scripts/test-agy-field.sh`; ela exige sessão local autenticada e não faz
 parte da CI sem credenciais.
+
+## Adapter Cursor
+
+O adapter em `adapters/cursor/` implementa a mesma seam `preflight|run|version`
+e publica `runner-result 1.2.0` com terminal `result`. O Cursor é uma IDE com
+LLM embutido: a autenticação é a sessão local da conta (sem API key), e a CLI
+pode aparecer como `cursor-agent` ou `agent`. O modelo é sempre explícito via
+`RALPH_CURSOR_MODEL` (sem default).
+
+A verificação v1 é declarada: `verify --mode ask`, com
+`permission_policy_status=declared`, `permission_policy_hash=null` e
+`verification_agent=ask`. Ela nunca é uma prova read-only com hash — `verified`
+é proibido nesta versão e o parser reprova qualquer escrita observada em modo
+verify. O parser normaliza `--output-format stream-json` e falha fechado em
+JSONL inválido, zero eventos, múltiplos eventos `result`, modelo divergente e
+escrita em verify, além de sanitizar eventos persistidos.

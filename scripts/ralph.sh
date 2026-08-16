@@ -157,6 +157,9 @@ AGY_EFFORT="${RALPH_AGY_EFFORT:-high}"
 AGY_AGENT="${RALPH_AGY_AGENT:-}"
 AGY_VERIFY_AGENT="${RALPH_AGY_VERIFY_AGENT:-ralph-review}"
 AGY_PRINT_TIMEOUT="${RALPH_AGY_PRINT_TIMEOUT:-30m}"
+CURSOR_MODEL="${RALPH_CURSOR_MODEL:-}"
+CURSOR_TIMEOUT="${RALPH_CURSOR_TIMEOUT:-1800}"
+CURSOR_VERIFY_MODE="${RALPH_CURSOR_VERIFY_MODE:-ask}"
 ENGINE_RESULT_FILE=""
 ADAPTER_SURFACE_FINGERPRINT=""
 
@@ -172,6 +175,9 @@ export RALPH_AGY_EFFORT="$AGY_EFFORT"
 export RALPH_AGY_AGENT="$AGY_AGENT"
 export RALPH_AGY_VERIFY_AGENT="$AGY_VERIFY_AGENT"
 export RALPH_AGY_PRINT_TIMEOUT="$AGY_PRINT_TIMEOUT"
+export RALPH_CURSOR_MODEL="$CURSOR_MODEL"
+export RALPH_CURSOR_TIMEOUT="$CURSOR_TIMEOUT"
+export RALPH_CURSOR_VERIFY_MODE="$CURSOR_VERIFY_MODE"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -244,7 +250,7 @@ format_duration() {
 }
 
 is_adapter_engine() {
-  [[ "$ENGINE" == opencode || "$ENGINE" == agy ]]
+  [[ "$ENGINE" == opencode || "$ENGINE" == agy || "$ENGINE" == cursor ]]
 }
 
 adapter_runner_path() {
@@ -258,6 +264,11 @@ adapter_surface_fingerprint() {
       "$SCRIPT_DIR/../adapters/agy/parser.php"
       "$SCRIPT_DIR/../adapters/agy/policy.php"
       "$(pwd)/.agents/agents/ralph-review/agent.md"
+    )
+  elif [ "$ENGINE" = cursor ]; then
+    paths+=(
+      "$SCRIPT_DIR/../adapters/cursor/parser.php"
+      "$SCRIPT_DIR/../adapters/cursor/contract.md"
     )
   else
     paths+=(
@@ -675,7 +686,7 @@ preflight_checks() {
   esac
 
   if $VERIFY_ONLY && ! is_adapter_engine; then
-    fail "--verify-only exige uma engine com adapter (opencode ou agy)."
+    fail "--verify-only exige uma engine com adapter (opencode, agy ou cursor)."
     exit 1
   fi
 
@@ -710,6 +721,18 @@ preflight_checks() {
         exit 1
         ;;
     esac
+  elif [[ "$ENGINE" == "cursor" ]]; then
+    if [[ -z "$CURSOR_MODEL" ]]; then
+      fail "RALPH_CURSOR_MODEL é obrigatório para o engine cursor (defina no .ralph/cursor.env)."
+      exit 1
+    fi
+    case "$CURSOR_VERIFY_MODE" in
+      ask) ;;
+      *)
+        fail "RALPH_CURSOR_VERIFY_MODE invalido: '$CURSOR_VERIFY_MODE'. Use ask (verify v1 é declarado, nunca policy proof)."
+        exit 1
+        ;;
+    esac
   fi
 
   # O modelo de verificacao e explicito por engine, com override opcional.
@@ -720,6 +743,8 @@ preflight_checks() {
   elif is_adapter_engine; then
     if [[ "$ENGINE" == "agy" ]]; then
       VERIFY_MODEL="$AGY_MODEL"
+    elif [[ "$ENGINE" == "cursor" ]]; then
+      VERIFY_MODEL="$CURSOR_MODEL"
     else
       VERIFY_MODEL="$OPENCODE_MODEL"
     fi

@@ -22,7 +22,7 @@
 | lock de instalação | `.ralph/install.lock` | `ralph-init`, preservado para coordenação local |
 | feedback do loop | `.git/ralph-control/feedback/events.jsonl` | `ralph.sh` |
 | métricas derivadas | stdout de `bin/ralph-metrics` | consumidor do projeto/orquestrador, sem persistência implícita |
-| perfis de execução | `.ralph/codex.env`, `.ralph/claude.env`, `.ralph/opencode.env`, `.ralph/agy.env` | instalador/usuário; nunca contêm credenciais |
+| perfis de execução | `.ralph/codex.env`, `.ralph/claude.env`, `.ralph/opencode.env`, `.ralph/agy.env`, `.ralph/cursor.env` | instalador/usuário; nunca contêm credenciais |
 
 ## Modelo proposto para failover controlado
 

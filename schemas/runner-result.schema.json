@@ -10,8 +10,8 @@
     "terminal_event", "error_summary", "artifact_refs"
   ],
   "properties": {
-    "schema_version": {"enum": ["1.0.0", "1.1.0", "2.0.0"]},
-    "runner": {"enum": ["opencode", "agy", "codex", "claude"]},
+    "schema_version": {"enum": ["1.0.0", "1.1.0", "1.2.0", "2.0.0"]},
+    "runner": {"enum": ["opencode", "agy", "cursor", "codex", "claude"]},
     "runner_version": {"type": "string", "minLength": 1},
     "provider": {"type": ["string", "null"]},
     "requested_model": {"type": ["string", "null"]},
@@ -39,7 +39,7 @@
         {"type": "string", "pattern": "^[a-f0-9]{64}$"}
       ]
     },
-    "permission_policy_status": {"enum": ["verified", "not_required", "failed"]},
+    "permission_policy_status": {"enum": ["verified", "not_required", "failed", "declared"]},
     "verification_agent": {"type": ["string", "null"]},
     "error_summary": {"type": ["string", "null"]},
     "artifact_refs": {"type": "array", "items": {"type": "string"}},
@@ -93,6 +93,24 @@
       "then": {
         "properties": {
           "runner": {"const": "agy"},
+          "profile": {"const": null},
+          "failure_domain": {"const": null},
+          "failure_domain_status": {"const": null},
+          "failure_domain_source": {"const": null},
+          "reason_code": {"const": null},
+          "classification_confidence": {"const": null},
+          "classifier_source": {"const": null},
+          "retry_at": {"const": null},
+          "result_commit": {"const": null},
+          "result_tree_hash": {"const": null}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"schema_version": {"const": "1.2.0"}}},
+      "then": {
+        "properties": {
+          "runner": {"const": "cursor"},
           "profile": {"const": null},
           "failure_domain": {"const": null},
           "failure_domain_status": {"const": null},
@@ -168,13 +186,49 @@
       "then": {"properties": {"terminal_event": {"const": "result"}}}
     },
     {
-      "if": {"properties": {"execution_mode": {"const": "verify"}}},
+      "if": {
+        "properties": {"runner": {"const": "cursor"}, "status": {"const": "completed"}},
+        "required": ["runner", "status"]
+      },
+      "then": {"properties": {"terminal_event": {"const": "result"}}}
+    },
+    {
+      "if": {
+        "allOf": [
+          {"properties": {"execution_mode": {"const": "verify"}}},
+          {
+            "not": {
+              "allOf": [
+                {"properties": {"schema_version": {"const": "1.2.0"}}},
+                {"properties": {"runner": {"const": "cursor"}}}
+              ]
+            }
+          }
+        ]
+      },
       "then": {
         "required": ["permission_policy_hash", "permission_policy_status", "verification_agent"],
         "properties": {
           "permission_policy_hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
           "permission_policy_status": {"const": "verified"},
           "verification_agent": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    {
+      "if": {
+        "allOf": [
+          {"properties": {"execution_mode": {"const": "verify"}}},
+          {"properties": {"schema_version": {"const": "1.2.0"}}},
+          {"properties": {"runner": {"const": "cursor"}}}
+        ]
+      },
+      "then": {
+        "required": ["permission_policy_status", "permission_policy_hash", "verification_agent"],
+        "properties": {
+          "permission_policy_status": {"const": "declared"},
+          "permission_policy_hash": {"const": null},
+          "verification_agent": {"const": "ask"}
         }
       }
     },

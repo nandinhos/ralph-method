@@ -82,7 +82,7 @@ function arguments(array $argv): array
     if (! in_array($result['command'], ['plan', 'apply', 'evolve', 'rollback', 'uninstall', 'doctor'], true)) {
         fail('comando inválido; use plan, apply, evolve, rollback, uninstall ou doctor', 2);
     }
-    if (! in_array($result['provider'], ['auto', 'codex', 'claude', 'opencode', 'hermes', 'agy'], true)) {
+    if (! in_array($result['provider'], ['auto', 'codex', 'claude', 'opencode', 'hermes', 'agy', 'cursor'], true)) {
         fail('provider inválido', 2);
     }
 
@@ -202,6 +202,12 @@ function providerDefinitions(): array
             'runner_supported' => true,
             'capabilities' => ['execution', 'model_selection', 'diagnostics'],
         ],
+        'cursor' => [
+            'auth' => ['args' => ['status', '--format', 'json'], 'classifier' => 'cursor_status'],
+            'health' => ['args' => ['models'], 'classifier' => 'cursor_models'],
+            'runner_supported' => true,
+            'capabilities' => ['execution', 'model_selection', 'diagnostics'],
+        ],
     ];
 }
 
@@ -237,6 +243,19 @@ function hasAgyModelSignal(string $output): bool
 function hasAgyAgentSignal(string $output): bool
 {
     return preg_match('/^\s*[A-Za-z0-9._-]+(?:\s|$)/m', stripAnsi($output)) === 1;
+}
+
+function hasCursorStatusSignal(string $output): bool
+{
+    // Cursor é IDE com sessão local: o status --format json indica autenticação
+    // quando contém conta/email/org (ou o equivalente da CLI), sem API key.
+    return preg_match('/"(?:account|email|org|user|authenticated|active)"\s*:/i', stripAnsi($output)) === 1
+        || preg_match('/logged\s+in|authenticated|active\s+account/i', stripAnsi($output)) === 1;
+}
+
+function hasCursorModelSignal(string $output): bool
+{
+    return preg_match('/^\s*[A-Za-z0-9][A-Za-z0-9._\/-]+(?:\s|$)/mi', stripAnsi($output)) === 1;
 }
 
 function extractHermesProvider(string $output): string
@@ -298,6 +317,18 @@ function classifyAuth(array $result, string $classifier): string
 
         return hasAgyModelSignal($output) ? 'authenticated' : 'unknown';
     }
+    if ($classifier === 'cursor_status') {
+        // Cursor é IDE com sessão local: sem API key. O status --format json
+        // autenticado contém conta/sessão ativa; exit 0 + sinal = autenticado.
+        if (($result['exit'] ?? 1) !== 0) {
+            return hasUnauthenticatedSignal($output) ? 'unauthenticated' : 'unknown';
+        }
+        if (hasUnauthenticatedSignal($output)) {
+            return 'unauthenticated';
+        }
+
+        return hasCursorStatusSignal($output) ? 'authenticated' : 'unknown';
+    }
     if (hasUnauthenticatedSignal($output)) {
         return 'unauthenticated';
     }
@@ -351,6 +382,12 @@ function healthPassed(string $classifier, array $result, ?string $providerTarget
     }
     if ($classifier === 'agy_agents') {
         return hasAgyAgentSignal($output);
+    }
+    if ($classifier === 'cursor_status') {
+        return hasCursorStatusSignal($output);
+    }
+    if ($classifier === 'cursor_models') {
+        return hasCursorModelSignal($output);
     }
     if ($classifier === 'hermes_status') {
         return $providerTarget !== null && hermesHealthPassed($result, $providerTarget);
@@ -534,11 +571,21 @@ function providerFailureDomain(string $provider, string $root): array
 /** @return array<string, mixed> */
 function detectProject(string $root, bool $verifyProviders = false): array
 {
-    $commands = ['codex', 'claude', 'opencode', 'hermes', 'agy'];
+    $commands = ['codex', 'claude', 'opencode', 'hermes', 'agy', 'cursor'];
     $definitions = providerDefinitions();
     $providers = [];
     foreach ($commands as $command) {
-        $path = trim((string) shell_exec('command -v '.escapeshellarg($command).' 2>/dev/null'));
+        // A CLI Cursor pode ser `cursor-agent` ou `agent`; a identidade canônica
+        // permanece `cursor`.
+        $candidate = $command;
+        if ($command === 'cursor') {
+            if (trim((string) shell_exec('command -v cursor-agent 2>/dev/null')) !== '') {
+                $candidate = 'cursor-agent';
+            } else {
+                $candidate = 'agent';
+            }
+        }
+        $path = trim((string) shell_exec('command -v '.escapeshellarg($candidate).' 2>/dev/null'));
         $version = null;
         if ($path !== '') {
             $result = commandResult(commandLine($path, ['--version']), $root, 5);
@@ -645,7 +692,7 @@ function selectProvider(array $detected, string $requested): ?string
 /** @return list<string> */
 function providerOrder(): array
 {
-    return ['codex', 'claude', 'opencode', 'hermes', 'agy'];
+    return ['codex', 'claude', 'opencode', 'hermes', 'agy', 'cursor'];
 }
 
 /** @return list<string> */
@@ -1173,13 +1220,14 @@ function managedSources(): array
         'adapters/agy/runner.sh', 'adapters/agy/parser.php',
         'adapters/agy/policy.php', 'adapters/agy/contract.md',
         '.agents/agents/ralph-review/agent.md',
+        'adapters/cursor/runner.sh', 'adapters/cursor/parser.php', 'adapters/cursor/contract.md',
     ];
 }
 
 /** @return list<string> */
 function generatedPaths(): array
 {
-    return ['.ralph/method.json', '.ralph/providers.json', '.ralph/codex.env', '.ralph/claude.env', '.ralph/opencode.env', '.ralph/agy.env'];
+    return ['.ralph/method.json', '.ralph/providers.json', '.ralph/codex.env', '.ralph/claude.env', '.ralph/opencode.env', '.ralph/agy.env', '.ralph/cursor.env'];
 }
 
 /** @return array<string, string> */
@@ -1190,6 +1238,7 @@ function generatedProfiles(): array
         '.ralph/claude.env' => "# Gerado pelo Ralph Method; altere somente se quiser uma política local.\nRALPH_BIN=scripts/ralph.sh\nRALPH_VERIFY_MODEL=sonnet\n",
         '.ralph/opencode.env' => "# Gerado pelo Ralph Method; defina um modelo e uma prova read-only externa antes de executar.\nRALPH_BIN=scripts/ralph.sh\nRALPH_OPENCODE_MODEL=\nRALPH_OPENCODE_VARIANT=\nRALPH_OPENCODE_AGENT=\nRALPH_OPENCODE_AUTO=1\nRALPH_OPENCODE_PURE=1\nRALPH_OPENCODE_VERIFY_AGENT=ralph-review\nRALPH_OPENCODE_VERIFY_POLICY_PROOF=\nRALPH_VERIFY_MODEL=\n",
         '.ralph/agy.env' => "# Gerado pelo Ralph Method; verify exige Linux, bwrap e token OAuth local do agy.\nRALPH_BIN=scripts/ralph.sh\nRALPH_AGY_MODEL=\nRALPH_AGY_EFFORT=high\nRALPH_AGY_AGENT=\nRALPH_AGY_VERIFY_AGENT=ralph-review\nRALPH_AGY_PRINT_TIMEOUT=30m\nRALPH_VERIFY_MODEL=\n",
+        '.ralph/cursor.env' => "# Gerado pelo Ralph Method. Cursor e IDE com LLM embutido: auth e a sessao local da conta (sem API key). Defina o modelo explicitamente.\nRALPH_BIN=scripts/ralph.sh\nRALPH_CURSOR_MODEL=\nRALPH_CURSOR_TIMEOUT=1800\nRALPH_CURSOR_VERIFY_MODE=ask\nRALPH_VERIFY_MODEL=\n",
     ];
 }
 

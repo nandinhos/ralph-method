@@ -90,6 +90,7 @@ Ralph for instalado em outro projeto ou receber outro harness.
 | Adapter comum | `scripts/ralph.sh` + `adapters/<runner>/runner.sh` | Despachar `preflight`, `run` e `version` | Não conhece flags do provider nem interpreta JSONL bruto. |
 | agy | `adapters/agy/` | Executar e normalizar Antigravity CLI | Impl pode mutar; verify exige isolamento allowlisted Linux e nunca grava ledger. |
 | agy | `.agents/agents/ralph-review/agent.md` | Restringir a revisão às ferramentas de leitura | É defesa em profundidade; a fronteira preventiva é `bwrap`. |
+| Cursor | `adapters/cursor/` | Executar e normalizar a CLI Cursor (`agent`/`cursor-agent`) | Impl pode mutar; verify v1 é declarado (`--mode ask`), nunca proof, e nunca grava ledger. |
 
 ### Contratos versionados
 
@@ -100,7 +101,7 @@ Ralph for instalado em outro projeto ou receber outro harness.
 | Detecção de instalação | `schemas/ralph-installation-detection.schema.json` | Classificar Ralph Method e Ralph externo | Expõe sinais relativos e hashes sem conteúdo; não migra ou importa runtime desconhecido. |
 | Evolução | `schemas/ralph-evolution.schema.json`, `.ralph/evolutions/` | Controlar backup, isolamento e rollback | Registra estado `EVL-YYYYMMDD-NNNN`, hashes e drift; o modo `quarantine_only` não importa ledger, workflow, prompts ou credenciais. |
 | Readiness | `schemas/provider-readiness.schema.json` | Validar autenticação e capacidade | Separa `functional`, `runner_supported` e `adapter_enabled`; não prova geração real. |
-| Runner | `schemas/runner-result.schema.json` | Validar resultado normalizado | Preserva OpenCode 1.0 e aceita `agy` 1.1 com terminais próprios; não faz transição de estado. |
+| Runner | `schemas/runner-result.schema.json` | Validar resultado normalizado | Preserva OpenCode 1.0 e aceita `agy` 1.1 e Cursor 1.2 com terminais próprios; não faz transição de estado. |
 | Política read-only | `schemas/readonly-policy-proof.schema.json` | Validar prova externa | Garante fingerprint e status da política; não substitui a revisão independente. |
 
 ### Documentação, evidência e operação
@@ -127,7 +128,7 @@ Ralph for instalado em outro projeto ou receber outro harness.
 | Artefatos | `.git/ralph-control/artifacts/` | Guardar evidências de execução | Referenciado pelo ledger e protegido por hash; não deve conter segredos. |
 | Relatórios locais | `.git/ralph-control/reports/` | Armazenar projeções operacionais | Mantém relatórios do runtime sem transformar evento bruto em documentação curada. |
 | Instalação | `.ralph/method.json`, `.ralph/providers.json` | Descrever método e readiness instalados | São metadados locais e não substituem workflow, lease ou gates. |
-| Perfis | `.ralph/codex.env`, `.ralph/claude.env`, `.ralph/opencode.env`, `.ralph/agy.env` | Configurar runners por projeto | São gerados com ownership; credenciais não devem ser gravadas neles. |
+| Perfis | `.ralph/codex.env`, `.ralph/claude.env`, `.ralph/opencode.env`, `.ralph/agy.env`, `.ralph/cursor.env` | Configurar runners por projeto | São gerados com ownership; credenciais não devem ser gravadas neles. |
 | Handoffs | `.ralph/handoffs/<feature_key>/` | Preservar entrega por feature | Contêm resumo, incidentes e evidências versionáveis; não contêm raciocínio privado. |
 
 ## Princípio central

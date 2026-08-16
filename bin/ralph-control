@@ -620,7 +620,7 @@ function runnerResults(array $before, array $recorded, string $workflowId, strin
             continue;
         }
         if (! is_array($result)
-            || ! in_array($result['runner'] ?? null, ['opencode', 'agy', 'codex', 'claude'], true)) {
+            || ! in_array($result['runner'] ?? null, ['opencode', 'agy', 'codex', 'claude', 'cursor'], true)) {
             continue;
         }
         if (($result['workflow_id'] ?? null) !== $workflowId
@@ -749,6 +749,7 @@ function validateRunnerResult(array $result): void
     $schemaVersion = $result['schema_version'] ?? null;
     $contractValid = ($schemaVersion === '1.0.0' && $runner === 'opencode')
         || ($schemaVersion === '1.1.0' && $runner === 'agy')
+        || ($schemaVersion === '1.2.0' && $runner === 'cursor')
         || ($schemaVersion === '2.0.0' && in_array($runner, ['codex', 'claude', 'opencode'], true));
     if (! $contractValid
         || ! is_string($result['runner_version'])
@@ -796,7 +797,7 @@ function validateRunnerResult(array $result): void
         fail('resultado de runner com fallback inválido');
     }
     if (array_key_exists('permission_policy_status', $result)
-        && ! in_array($result['permission_policy_status'], ['verified', 'not_required', 'failed'], true)) {
+        && ! in_array($result['permission_policy_status'], ['verified', 'not_required', 'failed', 'declared'], true)) {
         fail('resultado de runner com permission_policy_status inválido');
     }
     if (array_key_exists('permission_policy_hash', $result)
@@ -805,6 +806,7 @@ function validateRunnerResult(array $result): void
         fail('resultado de runner com permission_policy_hash inválido');
     }
     if ($result['execution_mode'] === 'verify'
+        && ! ($schemaVersion === '1.2.0' && $runner === 'cursor')
         && (($result['permission_policy_status'] ?? null) !== 'verified'
             || ! is_string($result['permission_policy_hash'] ?? null)
             || preg_match('/^[a-f0-9]{64}$/', (string) $result['permission_policy_hash']) !== 1
@@ -817,7 +819,7 @@ function validateRunnerResult(array $result): void
             || ($result['permission_policy_hash'] ?? null) !== null)) {
         fail('resultado impl carrega política read-only indevida');
     }
-    $expectedTerminal = $runner === 'agy' ? 'result' : 'step_finish';
+    $expectedTerminal = ($runner === 'agy' || $runner === 'cursor') ? 'result' : 'step_finish';
     if ($result['status'] === 'completed'
         && (! is_string($result['session_id'] ?? null)
             || $result['session_id'] === ''
@@ -842,6 +844,14 @@ function validateRunnerResult(array $result): void
             || ($result['fallback_used'] ?? null) !== false
             || ($result['fallback_status'] ?? null) !== 'not_detected')) {
         fail('resultado agy concluído com identidade, provider ou fallback incompatível');
+    }
+    if ($runner === 'cursor' && $result['execution_mode'] === 'verify') {
+        // verify v1 do cursor é declarado: --mode ask nunca é policy proof.
+        if (($result['permission_policy_status'] ?? null) !== 'declared'
+            || ($result['permission_policy_hash'] ?? null) !== null
+            || ($result['verification_agent'] ?? null) !== 'ask') {
+            fail('verify cursor sem contrato declared (--mode ask, hash null, agent ask)');
+        }
     }
     validateRunnerResultV2($schemaVersion, $result);
 }
@@ -1106,10 +1116,14 @@ function recordRunnerResult(array $arguments, array $feature, array $result, str
         fail("resultado {$executionId} tem modo incompatível com o artefato");
     }
     if ($executionMode === 'verify') {
-        if (($result['permission_policy_status'] ?? null) !== 'verified') {
-            fail("resultado verify {$executionId} sem política read-only verificada");
+        $isCursorDeclared = ($result['runner'] ?? null) === 'cursor'
+            && ($result['permission_policy_status'] ?? null) === 'declared';
+        if (! $isCursorDeclared) {
+            if (($result['permission_policy_status'] ?? null) !== 'verified') {
+                fail("resultado verify {$executionId} sem política read-only verificada");
+            }
+            validateRunnerPolicyEvidence($result);
         }
-        validateRunnerPolicyEvidence($result);
     }
     $status = ($result['status'] ?? null) === 'completed' ? 'delegation.completed' : 'delegation.failed';
     $artifactRole = $executionMode === 'verify' ? 'verification' : 'implementation';
@@ -5009,8 +5023,8 @@ function configuredRalph(array $arguments): string
 {
     global $root;
     $engine = (string) ($arguments['engine'] ?? 'codex');
-    if (! in_array($engine, ['codex', 'claude', 'opencode', 'agy'], true)) {
-        fail('engine inválido; use codex, claude, opencode ou agy');
+    if (! in_array($engine, ['codex', 'claude', 'opencode', 'agy', 'cursor'], true)) {
+        fail('engine inválido; use codex, claude, opencode, agy ou cursor');
     }
     $profile = $root.'/.ralph/'.$engine.'.env';
     $ralph = null;
@@ -5319,7 +5333,7 @@ function runControlled(array $arguments): void
     $feature = featureFrom($projection, $featureKey);
     checkLease($feature, $lease);
         $runnerResultEntries = runnerResults($runnerResultBefore, $recordedRunnerIds, $workflowId, $featureKey, $attempt);
-    if ($generatedRalph && in_array($engine, ['opencode', 'agy'], true) && $exitCode === 0) {
+    if ($generatedRalph && in_array($engine, ['opencode', 'agy', 'cursor'], true) && $exitCode === 0) {
         $contextModes = recordedRunnerContextModes($workflowId, $featureKey, $attempt);
         // FEATURE-097 (finding 7, projeto-alvo): um bloco com múltiplos ciclos
         // de correção produz vários *.result.json de impl (cycle-1, cycle-2, ...).

@@ -7,9 +7,10 @@
 - contrato_de_feedback: `schemas/feedback-event.schema.json`
 
 Escopo deste checkout: Codex e Claude CLI operam pelos runners nativos do loop;
-OpenCode e `agy` operam por adapters executáveis. O verify `agy` exige Linux,
-`bwrap`, token OAuth local e agente workspace. Hermes permanece somente em
-detecção passiva e no backlog sem prioridade.
+OpenCode, `agy` e Cursor operam por adapters executáveis. O verify `agy` exige
+Linux, `bwrap`, token OAuth local e agente workspace; o verify v1 do Cursor é
+declarado (`--mode ask`, nunca proof). Hermes permanece somente em detecção
+passiva e no backlog sem prioridade.
 
 Esta versão de manutenção consolida a portabilidade do CI em PHP 8.2, a
 supervisão sem namespace privilegiado e a documentação pós-promoção. Este
@@ -126,6 +127,7 @@ Leia o JSON completo:
 mensagem generativa para testar o modelo. Codex e Claude CLI usam runners
 nativos; OpenCode exige modelo explícito e revisão read-only comprovada; `agy`
 exige modelo explícito e isolamento Linux funcional para habilitar o adapter;
+Cursor exige modelo explícito (`RALPH_CURSOR_MODEL`) e sessão local da conta;
 Hermes permanece em readiness passiva.
 
 Se o plano não produzir runner elegível, não materialize configuração fictícia
@@ -668,7 +670,10 @@ comprova Linux, `bwrap` e token OAuth legível. A presença do agente
 `ralph-review` no workspace é validada pelo preflight do adapter
 (`.agents/agents/ralph-review/agent.md`) e pela policy como superfície; a
 listagem global `agy agents` expõe somente agentes instalados da sessão local
-e não decide a elegibilidade do agente de verify. Hermes identifica o provider selecionado
+e não decide a elegibilidade do agente de verify. O Cursor usa
+`status --format json` e `models`; por ser IDE com sessão local, o probe não
+procura API key e o adapter só habilita com CLI `agent`/`cursor-agent`
+presente e `RALPH_CURSOR_MODEL` definido. Hermes identifica o provider selecionado
 no próprio `status` (ou respeita `RALPH_HERMES_PROVIDER`) e valida
 `auth status <provider>`. O status de outros providers listados pelo Hermes
 não reprova o provider selecionado.
@@ -702,6 +707,7 @@ modelo ou por uma mensagem textual do CLI; use os campos do plano.
 | `selected_provider=claude` e `adapter_enabled=true` | runner nativo Claude CLI; perfil `.ralph/claude.env` | aplicar e executar pelo loop |
 | `selected_provider=opencode` e `adapter_enabled=true` | adapter OpenCode; preencher modelo/agente e prova read-only | aplicar, configurar e validar antes da revisão |
 | `selected_provider=agy` e `adapter_enabled=true` | adapter `agy`; preencher modelo/effort e preservar token fora do projeto | aplicar e validar preflight impl/verify antes do loop |
+| `selected_provider=cursor` e `adapter_enabled=true` | adapter Cursor; preencher `RALPH_CURSOR_MODEL` (sem default) no `.ralph/cursor.env` | aplicar e validar preflight impl/verify antes do loop |
 | `selected_provider=null` ou `mode=needs_review` | nenhum executor autorizado | não executar; corrigir prontidão ou solicitar decisão |
 | Hermes detectado sem adapter | readiness apenas | não promover; registrar ou consultar backlog |
 
@@ -748,6 +754,12 @@ salve credenciais ou a saída integral em prompt, ledger ou documentação.
 - **agy:** use `.ralph/agy.env`, preencha `RALPH_AGY_MODEL` e, se necessário,
   `RALPH_VERIFY_MODEL`. Não copie credenciais. O verify só pode avançar após
   `adapters/agy/runner.sh preflight --mode verify --repo-root "$PROJECT_ROOT"`.
+- **cursor:** use `.ralph/cursor.env`, preencha `RALPH_CURSOR_MODEL`
+  (obrigatório, sem default). A auth é a sessão local da conta da IDE (sem API
+  key). O verify v1 é declarado (`--mode ask`, `permission_policy_status=
+  declared`, hash `null`); o preflight do adapter reprova `verified`. Valide com
+  `adapters/cursor/runner.sh preflight --mode verify --repo-root
+  "$PROJECT_ROOT"`.
 - **Hermes:** não configure execução nesta versão. A presença da CLI não
   implica adapter; o agente deve manter `needs_review` ou seguir o backlog.
 
@@ -814,7 +826,7 @@ O instalador cria uma cópia local dos componentes, `.ralph/method.json`,
 Providers aceitos pelo instalador:
 
 ```text
-auto | codex | claude | opencode | hermes | agy
+auto | codex | claude | opencode | hermes | agy | cursor
 ```
 
 `auto` só materializa como executor o provider com `adapter_enabled=true`. Se
