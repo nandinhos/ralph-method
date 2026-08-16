@@ -1,7 +1,7 @@
 # Relatório 0027 — promoção da v0.9.2
 
 **Versão:** `0.9.2`
-**Commit promovido:** `8f81ea1` (HEAD da `main`)
+**Commit promovido:** `6b42689` (HEAD da `main`)
 **Branch de destino:** `main`
 **Tag:** `v0.9.2` anotada
 **Data:** 2026-08-15
@@ -10,11 +10,12 @@
 ## Resultado
 
 A `v0.9.2` publica a **FEATURE-097** — recuperação de gate distinta entre
-defeito do comando e falha da feature — sobre a base `0.9.1`. A correção foi
-**confirmada em campo** pelo `refactor-radar` (INC-2026-0007): a phase-25
-fechou com os 5 gates e o workflow avançou para a phase-26 sem re-execução do
-bloco commitado. A tag anotada `v0.9.2` aponta para o commit `8f81ea1`,
-publicada em `origin/main`.
+defeito do comando e falha da feature — sobre a base `0.9.1`, além do teste de
+resiliência a falha de filesystem na evolução assistida
+(`test-evolution-filesystem.sh`). A correção foi **confirmada em campo** pelo
+`refactor-radar` (INC-2026-0007): a phase-25 fechou com os 5 gates e o
+workflow avançou para a phase-26 sem re-execução do bloco commitado. A tag
+anotada `v0.9.2` aponta para o commit `6b42689`, publicada em `origin/main`.
 
 ## Pré-condições verificadas
 
@@ -47,6 +48,20 @@ publicada em `origin/main`.
 - os 6 findings do HND-2026-0011 foram endereçados (default de curation,
   timeout do gate-test, retry re-executando bloco, exit espúrio, LLM sem
   evidência, executor instável).
+
+## Resiliência a falha de filesystem (item do roadmap 0.8.0)
+
+A v0.9.2 incorpora o `scripts/test-evolution-filesystem.sh`, que fecha o item
+"testar SIGKILL real durante rename e espaço insuficiente com fixture de falha
+de filesystem":
+
+- **SIGKILL real durante o rename de publicação** (fase `installing`): o
+  `evolve --apply` é interrompido no meio de `commitStagedFiles`; o rollback
+  restaura a árvore legada (incluindo symlink interno e modos) sem deixar
+  instalação nova;
+- **falha de filesystem no destino** (diretório read-only, simulando espaço
+  insuficiente): o `evolve` falha fechado, o estado vira `recovery_required` e
+  o rollback restaura a árvore legada.
 
 ## Limites registrados
 
