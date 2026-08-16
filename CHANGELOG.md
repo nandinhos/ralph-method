@@ -5,7 +5,7 @@ português do Brasil. A versão no arquivo `VERSION` identifica o bundle em
 desenvolvimento; uma versão só é considerada publicada após commit, tag
 anotada e promoção documentada.
 
-## 0.10.0 — em desenvolvimento
+## 0.10.0 — publicada em 2026-08-16
 
 ### Adapter Cursor (FEATURE-098)
 

@@ -9,7 +9,7 @@
 
 ## Pedido (resumo executivo)
 
-Promover a CLI Cursor (`agent` / `cursor-agent`) a quarto adapter executável do
+Promover a CLI Cursor (`agent` / `cursor-agent`) a quinto runner executável do
 Ralph Method, no mesmo rito do agy (FEATURE-095 / ADR-0017): schema
 `runner-result` `1.2.0` com runner `cursor`, detector/probe não generativo no
 `ralph-init`, adapter na seam `preflight|run|version`, perfil

@@ -2,13 +2,24 @@
 
 ## Estado atual
 
-A versão publicada atual é `0.9.2`. Ela publica a FEATURE-097 (recuperação
-de gate distinta entre defeito do comando e falha da feature) sobre a base
-`0.9.1`, identificada pela tag anotada `v0.9.2`. A correção foi confirmada em
-campo pelo `refactor-radar` (INC-2026-0007): a phase-25 fechou com os 5 gates
-e o workflow avançou para a phase-26 sem re-execução do bloco commitado. O
-relatório da promoção está em
-[`docs/reports/0027-promocao-v0-9-2.md`](reports/0027-promocao-v0-9-2.md).
+A versão publicada atual é `0.10.0`. Ela publica a **FEATURE-094** (failover
+controlado Codex → OpenCode) e a **FEATURE-098** (adapter Cursor) sobre a base
+`0.9.2`. A tag anotada `v0.10.0` aponta para o commit promovido, publicada em
+`origin/main`. A FEATURE-098 foi promovida sem campo opt-in real (a CLI
+headless `agent`/`cursor-agent` ainda não está disponível nesta máquina); a
+prova real de inferência permanece uma política futura, separada e opt-in, no
+mesmo rito do `agy`. O relatório da promoção está em
+[`docs/reports/0030-promocao-v0-10-0.md`](reports/0030-promocao-v0-10-0.md).
+
+### FEATURE-094 — failover controlado entre providers (publicada na v0.10.0)
+
+A FEATURE-094 torna operacional a continuidade Codex → OpenCode quando o Codex
+confirma `provider_usage_limited` de alta confiança e o workflow opta pela
+política `explicit_failover`. O default permanece `fallback_policy=none`;
+workflows sem a política mantêm exatamente o comportamento legado. A
+implementação (Phases 1–9), a matriz adversarial (Phase 8) e a prova de campo
+(Phase 9, `refactor-radar`, 5/5 gates) foram concluídas; a revisão adversarial
+independente não encontrou finding crítico/alto.
 
 ### FEATURE-094 — failover controlado entre providers (em implementação)
 
@@ -166,8 +177,13 @@ detector do `ralph-init` não procura `CURSOR_API_KEY`. Entregue sobre a base
   comprova preflight impl/verify, run impl e verify declarado, contrato 1.2.0
   no schema, e o parser fail-closed; incluído no `ci-portable.sh`.
 
-Pendente: prova de campo opt-in e revisão adversarial independente antes da
-promoção.
+Pendente: a prova de campo opt-in (com a CLI headless real e sessão
+autenticada) permanece uma política futura, separada e opt-in — a FEATURE-098
+foi promovida na v0.10.0 no mesmo rito do `agy` (o campo real do agy também
+não faz parte da CI sem credenciais). A revisão adversarial independente foi
+realizada: 10/10 claims sustentadas e os 3 findings de baixa severidade
+corrigidos (schema `failure_domain_status` com null, parser sem código morto,
+usage do ralph-init com `cursor`).
 
 ### FEATURE-097 — recuperação de gate
 

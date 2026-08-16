@@ -12,7 +12,7 @@ Itens adiados conscientemente, sem prioridade nesta linha de desenvolvimento.
 ## Handoff Cursor (HO-2026-08-16-001)
 
 Origem: agente em `cursor-ralph-profile` (perfil Cursor com plugin 1:1 do
-bc-harness). Pedido: promover a CLI Cursor (`agent`/`cursor-agent`) a quarto
+bc-harness). Pedido: promover a CLI Cursor (`agent`/`cursor-agent`) a quinto
 adapter executável do Ralph Method (runner `cursor`, schema `1.2.0`, verify v1
 `--mode ask` com `permission_policy_status=declared` — nunca `verified` nesta
 v1), no mesmo rito do agy (FEATURE-095 / ADR-0017).

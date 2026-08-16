@@ -8,11 +8,12 @@ adversarial independente **pendentes** antes da promoção.
 
 ## Resultado
 
-A FEATURE-098 torna o Cursor (CLI `agent`/`cursor-agent`) o terceiro adapter
-executável do Ralph Method, no mesmo rito do `agy` (ADR + PRD + schema +
-adapter na seam + fixtures offline). O Cursor é uma IDE com LLM embutido e sem
-API key: a autenticação é a sessão local da conta, e o detector do
-`ralph-init` não procura `CURSOR_API_KEY`. O contrato `runner-result 1.2.0`
+A FEATURE-098 torna o Cursor (CLI `agent`/`cursor-agent`) o quinto runner
+executável do Ralph Method (Codex, Claude, OpenCode, agy, Cursor) e o terceiro
+adapter na seam (opencode, agy, cursor), no mesmo rito do `agy` (ADR + PRD +
+schema + adapter na seam + fixtures offline). O Cursor é uma IDE com LLM
+embutido e sem API key: a autenticação é a sessão local da conta, e o detector
+do `ralph-init` não procura `CURSOR_API_KEY`. O contrato `runner-result 1.2.0`
 tem terminal `result` e verify v1 **declarado** (`--mode ask`,
 `permission_policy_status=declared`, hash `null`, agente `ask`) — `verified` é
 proibido nesta versão.

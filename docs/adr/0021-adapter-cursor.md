@@ -17,7 +17,7 @@ ou WSL). O Cursor já possui um perfil com plugin 1:1 do `bc-harness`
 torna candidato a runner executável do Ralph Method no mesmo rito do agy
 (FEATURE-095 / ADR-0017).
 
-O handoff HO-2026-08-16-001 pede a promoção do Cursor a quarto adapter
+O handoff HO-2026-08-16-001 pede a promoção do Cursor a quinto runner
 executável. Este ADR reabre o escopo de harnesses (ADR-0007) para incluir o
 Cursor como adapter, sem alterar a autoridade do control plane nem permitir
 fallback automático.
@@ -32,7 +32,7 @@ fallback automático.
 
 ## Decisão
 
-Adotar a opção B: **runner `cursor`** como quarto adapter executável, com
+Adotar a opção B: **runner `cursor`** como quinto runner executável, com
 contrato `runner-result` `1.2.0` e **verify v1 declarado** (`--mode ask`,
 `permission_policy_status=declared`, `permission_policy_hash=null` — nunca
 `verified` sem prova mecânica equivalente à do OpenCode). Fallback permanece
