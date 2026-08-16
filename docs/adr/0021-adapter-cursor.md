@@ -9,8 +9,11 @@
 O Cursor é uma **IDE com LLMs embutidos**, não um serviço de API com chave
 própria. Sua autenticação é a **sessão local da conta Cursor** (login do
 operador no editor/CLI headless `agent`/`cursor-agent`), nunca uma
-`CURSOR_API_KEY`. O Cursor já possui um perfil com plugin 1:1 do `bc-harness`
-(`cursor-ralph-profile`) e uma CLI headless que emite `stream-json`, o que o
+`CURSOR_API_KEY`. O Cursor possui CLI própria (headless), instalada separada
+do editor (`irm 'https://cursor.com/install?win32=true' | iex` no Windows); no
+Windows a CLI roda no PowerShell e o runner do método continua bash (Git Bash
+ou WSL). O Cursor já possui um perfil com plugin 1:1 do `bc-harness`
+(`cursor-ralph-profile`) e a CLI headless que emite `stream-json`, o que o
 torna candidato a runner executável do Ralph Method no mesmo rito do agy
 (FEATURE-095 / ADR-0017).
 

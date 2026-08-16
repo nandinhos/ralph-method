@@ -1,7 +1,11 @@
 # Adapter Cursor — contrato da seam
 
-Runner: `cursor` (CLI headless `agent`/`cursor-agent`).
+Runner: `cursor` (CLI headless `agent`/`cursor-agent`, instalada à parte da IDE).
 Resultado: `runner-result` `schema_version=1.2.0`, terminal de sucesso `result`.
+
+O Cursor possui CLI própria (headless), instalada separada do editor; no
+Windows ela roda no PowerShell e o runner do método continua bash (Git Bash ou
+WSL).
 
 ## Comandos
 
@@ -21,21 +25,24 @@ adapters/cursor/runner.sh run --repo-root DIR --prompt-file FILE --events-file F
 - `RALPH_CURSOR_MAX_EVENT_BYTES` — limite do stream (default 5242880).
 - `RALPH_CURSOR_MAX_EVENTS` — limite de eventos (default 10000).
 - `RALPH_CURSOR_VERIFY_MODE` — `ask` (v1; não configura policy proof).
-- `RALPH_CURSOR_CLI` — binário (`agent` ou `cursor-agent`); default: auto-detect.
+- `RALPH_CURSOR_CLI` — binário (`agent` ou `cursor-agent`), caminho absoluto ou
+  comando no PATH; default: auto-detect `agent`/`cursor-agent`.
 
 Nenhuma `CURSOR_API_KEY`: a autenticação é a sessão local da conta Cursor.
 
 ## Cursor é uma IDE com LLM embutido (sem API key)
 
-Autenticação = sessão local da conta Cursor (login do operador). O probe de
-readiness não procura chave; `agent status --format json` + `agent models` são
-a autoridade. O modelo é o LLM selecionado na sessão/workspace; o perfil pode
-fixar `RALPH_CURSOR_MODEL`.
+Autenticação = sessão local da conta Cursor (login do operador, `agent
+login`). O probe de readiness não procura chave; `agent status --format json` +
+`agent models` são a autoridade. O modelo é o LLM selecionado na
+sessão/workspace; o perfil pode fixar `RALPH_CURSOR_MODEL`.
 
 ## Impl
 
 ```
 agent -p --force --trust --output-format stream-json \
+  --workspace "$REPO_ROOT" --model "$RALPH_CURSOR_MODEL" < "$PROMPT_FILE"
+```
   --workspace "$REPO_ROOT" --model "$RALPH_CURSOR_MODEL" < "$PROMPT_FILE"
 ```
 

@@ -19,7 +19,10 @@ die() {
   exit 2
 }
 
-# Cursor é IDE com LLM embutido: a CLI pode ser `agent` ou `cursor-agent`.
+# Cursor é IDE com LLM embutido: a CLI pode ser `agent`, `cursor-agent` ou um
+# bridge do harness do editor apontado por RALPH_CURSOR_CLI (caminho absoluto
+# ou comando no PATH). O harness do editor (cursor-ralph-profile) é o
+# consumidor canônico; não existe CLI headless obrigatória.
 cursor_cli() {
   if [ -n "${RALPH_CURSOR_CLI:-}" ]; then
     printf '%s' "$RALPH_CURSOR_CLI"
@@ -29,6 +32,16 @@ cursor_cli() {
     printf 'cursor-agent'
   else
     printf 'agent'
+  fi
+}
+
+cursor_cli_available() {
+  local cli
+  cli="$(cursor_cli)"
+  if [[ "$cli" == */* ]]; then
+    [ -x "$cli" ]
+  else
+    command -v "$cli" >/dev/null 2>&1
   fi
 }
 
@@ -57,7 +70,9 @@ preflight() {
     esac
   done
 
-  command -v "$(cursor_cli)" >/dev/null 2>&1 || die 'CLI Cursor não encontrada (agent ou cursor-agent)'
+  if ! cursor_cli_available; then
+    die 'CLI do Cursor não encontrada (defina RALPH_CURSOR_CLI ou instale agent/cursor-agent)'
+  fi
   command -v php >/dev/null 2>&1 || die 'PHP não encontrado'
   [ -f "$PARSER" ] || die 'parser cursor ausente'
   [[ "$mode" == impl || "$mode" == verify ]] || die "modo inválido: $mode"
