@@ -734,6 +734,15 @@ failover_project="$TMP/project-failover-real"
 failover_bin="$TMP/failover-bin"
 mkdir -p "$failover_project/.ralph" "$failover_project/.spec/init" "$failover_bin"
 
+# Fake opencode determinístico para o readiness usado pelo
+# supervisorHandleFailover (ralph-init plan --verify-providers). Sem ele o
+# teste dependeria de um opencode real no PATH (presente no host do dev, mas
+# ausente na CI remota), tornando o failover intermitente.
+printf '%s\n' '#!/usr/bin/env bash' 'case "$*" in' '  --version) printf "opencode-fixture 1.0.0\\n" ;;' '  "auth list") printf "\\033[0m\\n●  OpenRouter api\\n" ;;' '  models) printf "openrouter/model-a\\n" ;;' '  *) exit 2 ;;' 'esac' > "$failover_bin/opencode"
+chmod +x "$failover_bin/opencode"
+php_bin_path="$(command -v php)"
+failover_path="$failover_bin:$(dirname "$php_bin_path"):/usr/bin:/bin"
+
 cat > "$TMP/fake-ralph-failover.sh" <<'SH'
 #!/usr/bin/env bash
 set -uo pipefail
@@ -905,7 +914,7 @@ set -e
 ok 'workflow de failover inicializado com execution_policy'
 
 set +e
-timeout 45 bash -c 'cd "$1" && RALPH_OPENCODE_VERIFY_POLICY_PROOF="$2" RALPH_OPENCODE_VERIFY_AGENT=ralph-review php "$3" supervise --workflow wf_failover_real --interval 1 --max-retries 1 --gate-harness-retries 1 --heartbeat-interval 1' \
+PATH="$failover_path" timeout 45 bash -c 'cd "$1" && RALPH_OPENCODE_VERIFY_POLICY_PROOF="$2" RALPH_OPENCODE_VERIFY_AGENT=ralph-review php "$3" supervise --workflow wf_failover_real --interval 1 --max-retries 1 --gate-harness-retries 1 --heartbeat-interval 1' \
   _ "$failover_project" "$failover_proof" "$ROOT/bin/ralph-control" > "$TMP/failover-supervise.log" 2>&1
 supervise_rc=$?
 set -e
@@ -1287,7 +1296,7 @@ wait "$kill_supervisor_pid" 2>/dev/null || true
 # Um supervisor novo retoma o provider_failover_pending (reapropriável) e
 # completa o failover. Sem processo vivo, a guarda não bloqueia.
 set +e
-timeout 30 bash -c 'cd "$1" && php "$2" supervise --workflow wf_kill_failover --interval 1 --max-retries 1 --gate-harness-retries 1 --heartbeat-interval 1' \
+PATH="$failover_path" timeout 30 bash -c 'cd "$1" && php "$2" supervise --workflow wf_kill_failover --interval 1 --max-retries 1 --gate-harness-retries 1 --heartbeat-interval 1' \
   _ "$kill_project" "$ROOT/bin/ralph-control" > "$TMP/kill-supervise-2.log" 2>&1
 set -e
 grep -q 'provider.failover_started' "$kill_project/.git/ralph-control/events.jsonl" || fail 'após SIGKILL, failover não retomou'
