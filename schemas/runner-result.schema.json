@@ -45,7 +45,7 @@
     "artifact_refs": {"type": "array", "items": {"type": "string"}},
     "profile": {"type": ["string", "null"]},
     "failure_domain": {"type": ["string", "null"]},
-    "failure_domain_status": {"enum": ["exact", "observed", "declared", "unavailable"]},
+    "failure_domain_status": {"enum": ["exact", "observed", "declared", "unavailable", null]},
     "failure_domain_source": {"type": ["string", "null"]},
     "reason_code": {"type": ["string", "null"]},
     "classification_confidence": {

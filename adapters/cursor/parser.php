@@ -236,12 +236,12 @@ if ($errorSummary === null && $exitCode !== 0) {
     $errorSummary = "Cursor terminou com exit code {$exitCode}";
     $status = 'failed';
 }
-if ($errorSummary === null && ! $terminal) {
-    $errorSummary = 'sem evento terminal result';
-    $status = 'failed';
-}
 if ($errorSummary === null && count($events) === 0) {
     $errorSummary = 'sem eventos observados';
+    $status = 'failed';
+}
+if ($errorSummary === null && ! $terminal) {
+    $errorSummary = 'sem evento terminal result';
     $status = 'failed';
 }
 if ($errorSummary === null && $modelObserved !== null && $modelObserved !== $requestedModel) {

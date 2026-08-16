@@ -74,7 +74,7 @@ function arguments(array $argv): array
             continue;
         }
         if (in_array($argument, ['--help', '-h'], true)) {
-            echo "uso: bin/ralph-init plan|apply|evolve|rollback|uninstall|doctor --project <path> [--provider auto|codex|claude|opencode|hermes|agy] [--verify-providers] [--evolution EVL-YYYYMMDD-NNNN] [--accept] [--apply]\n";
+            echo "uso: bin/ralph-init plan|apply|evolve|rollback|uninstall|doctor --project <path> [--provider auto|codex|claude|opencode|hermes|agy|cursor] [--verify-providers] [--evolution EVL-YYYYMMDD-NNNN] [--accept] [--apply]\n";
             exit(0);
         }
         fail("argumento desconhecido: {$argument}", 2);
