@@ -28,6 +28,23 @@ Decisões de contrato v1 (não negociar em silêncio):
 - identidade canônica `cursor` (não `cursor-agent` como provider separado);
 - CLI aceita `agent` ou `cursor-agent`; rodar por bash (WSL/Git Bash no Windows).
 
+### Cursor é uma IDE com LLM embutido — sem API_KEY
+
+O Cursor é um **editor (IDE) com LLMs embutidos**, não um serviço de API com
+chave própria. A autenticação é a **sessão local da conta Cursor** (login do
+operador no editor/CLI), nunca uma `CURSOR_API_KEY`. Consequências para o
+adapter:
+
+- a detecção/probe do `ralph-init` NÃO exige nem procura API_KEY; a presença da
+  CLI + sessão autenticada (ex.: `agent status --format json`) é a autoridade;
+- o modelo é o LLM selecionado na sessão/workspace do Cursor, não uma chave a
+  configurar — o perfil `.ralph/cursor.env` deve permitir fixar o modelo, mas a
+  auth vem da sessão local;
+- `CURSOR_API_KEY` nunca é gravada em arquivo versionado (nem existe como
+  conceito deste adapter);
+- a identidade do provider é `cursor` (a IDE/CLI headless), e o `effective_model`
+  é observado do stream (nunca inventado).
+
 Fora de escopo (fail-closed): alterar máquina de estados/lease/fencing do
 `ralph-control`, fallback automático Cursor↔outros providers, persistir
 `CURSOR_API_KEY`, portar o plugin bc-harness para dentro do método, promover
