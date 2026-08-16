@@ -60,6 +60,19 @@ Hermes, tratar `/loop` do Cursor IDE como `ralph-control`.
   `.spec/features/098-cursor-adapter/` + fixtures offline + campo opt-in.
 - Regra do backlog: não autoriza implementação automática.
 
+## Status no ralph-method (atualização)
+
+- **FEATURE-098 concluída** (commit `3332324`, pushed em `origin/main`):
+  ADR-0021, PRD, schema `1.2.0`, adapter `adapters/cursor/`, loop
+  `--engine cursor`, perfil `.ralph/cursor.env`, fixture offline
+  `test-cursor-adapter.sh` (CI portátil 24 testes verde) e docs
+  sincronizadas. Backlog `BL-0004` marcado como entregue.
+- **Campo opt-in e revisão adversarial independente** pendentes antes da
+  promoção; relatório da candidata em
+  [`docs/reports/0029-candidata-feature-098-cursor.md`](../../docs/reports/0029-candidata-feature-098-cursor.md).
+- Handoff de resposta: `HND-2026-0014` em
+  [`RESPOSTA-FEATURE-098-CURSOR`](../RESPOSTA-FEATURE-098-CURSOR/).
+
 ## Próximo passo no perfil Cursor (quando o adapter oficial existir)
 
 1. Alinhar `cursor-ralph-profile/adapters/cursor` ao contrato oficial (PHP,
