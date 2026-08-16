@@ -208,7 +208,7 @@ Invariantes para todas as fases:
   multiprovider, OpenCode, método, loop e CI portátil.
   - **Acceptance criteria:** todos os comandos obrigatórios terminam com exit
     code zero e saída preservada como evidência.
-- [ ] **Task:** submeter código e design a revisão adversarial independente.
+- [x] **Task:** submeter código e design a revisão adversarial independente.
   - **Acceptance criteria:** todo finding crítico/alto é corrigido ou bloqueia
     a promoção; timeout sem veredito não conta como aprovação.
 - [x] **Task:** produzir relatório numerado da candidata.

@@ -3,7 +3,7 @@
 **Versão candidata:** sobre a base `0.9.2` + commits das fases 1–8
 **Commit de referência:** `39ea59c` (fases 1–7) + matriz adversarial (Phase 8)
 **Data:** 2026-08-16
-**Status:** candidata — promoção **bloqueada** até a prova de campo (Phase 9) e a revisão adversarial independente sem finding crítico/alto.
+**Status:** candidata — prova de campo (Phase 9) **concluída**; revisão adversarial independente **realizada** sem finding crítico/alto; promoção **pendente** do fluxo de release do Ralph (Phase 9, task 7).
 
 ## Resultado
 
@@ -12,8 +12,9 @@ Codex confirma `provider_usage_limited` de alta confiança e o workflow opta
 pela política `explicit_failover`. O default permanece `fallback_policy=none`;
 workflows sem a política mantêm exatamente o comportamento legado.
 
-Este relatório separa o que foi comprovado por **fixture offline** (fases 1–8)
-do que **ainda não** foi comprovado **em campo** (Phase 9).
+Este relatório separa o que foi comprovado por **fixture offline** (fases 1–8),
+o que foi comprovado **em campo** (Phase 9) e o que permanece **pendente** da
+promoção.
 
 ## Fixture comprovada (offline, sem rede/credenciais/geração real)
 
@@ -59,10 +60,19 @@ do que **ainda não** foi comprovado **em campo** (Phase 9).
   curation verdes);
 - **matriz de panes exaustiva** (SIGTERM em todos os limites, ledger truncado
   em todos os pontos, fila longa multi-feature) ainda não é exaustiva;
-- revisão adversarial independente ainda não realizada (Phase 8, task 5);
 - **promoção pendente**: STATUS/AGENT_GUIDE/roadmap/changelog/versão ainda não
-  declaram o failover como entregue; isso ocorre após a revisão adversarial
-  independente sem finding crítico/alto e a promoção pelo Ralph (Phase 9, task 7).
+  declaram o failover como entregue; isso ocorre no fluxo de promoção pelo Ralph
+  (Phase 9, task 7).
+
+## Revisão adversarial independente (Phase 8, task 5)
+
+Revisão refute-first com agente independente, rodando os artefatos literais
+(validador jsonschema, testes, ledger real de campo, CI portátil). Veredito:
+**sem finding crítico/alto** — as 8 claims verificadas (schema v2 sem quebrar
+v1/v1.1, loop devolve o rate limit sem dormir/relançar, cadeia de eventos de
+failover, drift da policy bloqueia claim, circuitos só do ledger, CI verde,
+sanitização sem vazamento, campo + 5/5 gates) se sustentaram com evidência de
+execução real.
 
 ## Decisões de desenho desta candidata
 
