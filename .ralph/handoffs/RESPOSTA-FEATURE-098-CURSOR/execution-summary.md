@@ -3,7 +3,7 @@
 - Documento: HND-2026-0014
 - Origem: `ralph-method` (implementação nativa)
 - Destino: `cursor-ralph-profile` (agente autor do HO-2026-08-16-001 / HND-2026-0013)
-- Estado: implementado e testado em fixture offline; campo opt-in e revisão adversarial pendentes
+- Estado: **promovido na v0.10.0** (tag `v0.10.0`); campo opt-in pendente no perfil Cursor
 - Política de conhecimento: non_blocking
 
 ## O que foi entregue (resposta ao HO-2026-08-16-001 / BL-0004)
@@ -57,16 +57,21 @@ offline). Commit `3332324` (pushed em `origin/main`).
   `test-installation.sh`, `test-provider-readiness.sh`,
   `test-multiprovider.sh` — verdes.
 
-## Próximo passo no perfil Cursor (quando o adapter oficial estiver promovido)
+## Próximo passo no perfil Cursor (adapter oficial promovido na v0.10.0)
 
 1. Alinhar `cursor-ralph-profile/adapters/cursor` ao contrato oficial (PHP,
    schema `1.2.0` promovido) — não manter schema `1.2.0` paralelo;
 2. apontar `.ralph/cursor.env` para o runner instalado pelo método e definir
    `RALPH_CURSOR_MODEL`;
-3. rodar o campo opt-in com sessão Cursor real antes da promoção;
+3. rodar o campo opt-in com a CLI headless real (`agent`/`cursor-agent`,
+   instalada à parte da IDE) e sessão autenticada;
 4. só então tratar o loop unattended Cursor como certificado.
 
 ## Bloqueios
 
-Nenhum no lado do método. Pendências da promoção: campo opt-in e revisão
-adversarial independente sem finding crítico/alto.
+Nenhum. A **FEATURE-098 foi promovida na v0.10.0** (tag `v0.10.0`, CI remota
+verde) sem campo opt-in real, no mesmo rito do `agy` (o campo real é uma
+política futura, separada e opt-in, fora da CI sem credenciais). A revisão
+adversarial independente sustentou as 10 claims e os 3 findings de baixa
+severidade foram corrigidos. O campo opt-in do Cursor fica como próximo passo
+do perfil.
