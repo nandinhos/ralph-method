@@ -7,6 +7,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # Esta lista é a fronteira oficial da CI sem credenciais. Provas que exigem
 # provider real permanecem explícitas e fora deste job, para não transformar
 # autenticação do desenvolvedor em dependência oculta da qualidade do método.
+# apps/cockpit/ (Laravel/Postgres/Reverb) fica de fora: o núcleo não se testa
+# com framework de produto.
 checks=(
   scripts/check-doc-sync.sh
   scripts/check-shell.sh
@@ -30,6 +32,7 @@ checks=(
   scripts/test-agy-control.sh
   scripts/test-ralph-gates-native.sh
   scripts/test-ralph-gate-recovery.sh
+  scripts/test-ralph-dirty-reconcile.sh
   scripts/test-evolution-filesystem.sh
   scripts/test-provider-failover.sh
 )

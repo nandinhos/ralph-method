@@ -384,6 +384,7 @@ O agente nunca deve:
 | curadoria de entrega | confirmar os cinco gates e o handoff | não é curadoria de memória |
 | `ralph-trace` | registrar delegações e identidade de provider | não aprova nem libera |
 | `ralph-monitor` | mostrar saúde, processo, progresso e último feedback | não faz retry, recovery ou avanço |
+| cockpit (`apps/cockpit/`) | projetar fatos ao vivo; disparar `supervise` com preflight verde (plano declarado presente); diagnosticar (`debug` read-only, stderr do supervisor) e recover quando o orquestrador está travado; pausar com SIGTERM o supervise que ele mesmo iniciou | não aprova gate, não altera lease, não escolhe a próxima feature, não cria o plano ausente |
 | `ralph-metrics` | agregar o ledger em JSON/Markdown | não muta eventos, estados, gates ou custo/token |
 | hook | observar eventos e emitir fatos | não muda estado global |
 | orquestrador externo | exibir andamento e encaminhar decisões ao controlador | não interpreta feedback como aprovação |
@@ -496,7 +497,14 @@ Os destinos são:
 O consumidor deve usar `run_id`, `workflow_id`, `feature_key`, `attempt` e
 `event` para correlacionar a tela. Ele pode apresentar uma mensagem amigável,
 mas deve sempre consultar `ralph-control status` para decisões. Feedback
-ausente ou atrasado significa falta de observabilidade, não aprovação.
+ausente ou atrasado significa falta de observabilidade, não aprovação. O
+Trace Cockpit (`apps/cockpit/`, ADR-0022) é esse consumidor visual:
+lê JSONL, ledger e `ralph-monitor`; dispara `supervise` só com preflight
+verde (incluindo o arquivo de plano declarado no manifesto); com a fila
+travada, corre `debug` (diagnóstico read-only sobre ledger e stderr do
+supervisor) e `recover` no controlador e relança o supervise com
+`--debug-command`; nunca substitui o status do controlador nem aprova
+gate. Recover não cria `plan.md` ausente.
 
 Para uma revisão OpenCode, o controlador exige `RALPH_OPENCODE_VERIFY_AGENT`
 e uma prova externa. O runner recebe essa prova por
@@ -1156,6 +1164,26 @@ Ao detectar uma pane:
 
 Uma queda de energia ou encerramento do terminal não autoriza avanço silencioso.
 O estado incompleto deve ser reconciliado pelo controlador.
+
+### 8.1 Árvore suja deixada por bloco interrompido
+
+Quando um bloco é interrompido (SIGTERM ou gate interno) e deixa a árvore com
+trabalho não commitado, o retry **não aborta mais no preflight**: em retry com
+`claim.recovery=true`, o controlador emite `RALPH_RECONCILE_DIRTY=1` para o
+bloco, e o `ralph.sh` audita a árvore (`git status --short`) e continua sobre o
+trabalho parcial. O abort fail-closed "Arvore de trabalho suja" permanece para
+uso direto/interativo sem o sinal.
+
+Diagnóstico de falha exige causa classificada (`cause_kind`:
+`harness_defect`, `feature_bug`, `capacity` ou `unknown`). Relatório de debug
+sem `cause_kind` é rejeitado (`debugging.rejected`), e `feature_bug` exige
+evidência existente no repositório (`evidence_refs`). Após debug verificado:
+
+- bloco não commitado → o controlador re-executa o bloco (continua o trabalho);
+- bloco commitado com defeito de harness/capacidade → retry de gate;
+- bloco commitado com bug real (`feature_bug`) → `recovery_required`
+  (`feature_bug_committed`): a correção de código exige intervenção explícita,
+  não é resumida silenciosamente a um retry de gates.
 
 ## 9. Atualização do Ralph Method
 

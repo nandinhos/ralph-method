@@ -3071,12 +3071,23 @@ function superviseWorkflow(array $arguments): void
                 $blockCommitted = (int) ($result['exit_code'] ?? 1) === 0;
                 $hasGateFailure = in_array('rejected', array_values($feature['gates'] ?? []), true)
                     || in_array('harness_error', array_values($feature['gates'] ?? []), true);
-                if ($blockCommitted && $hasGateFailure) {
+                // Incidente 0018 (Camada B): a causa classificada no relatório
+                // de systematic debugging orienta a retomada.
+                //   - bloco NÃO commitado (árvore parcial preservada) → re-executa
+                //     o bloco (a Camada A autoriza o preflight a continuar);
+                //   - commitado + harness_defect/capacity + falha de gate → re-roda
+                //     só os gates (FEATURE-097);
+                //   - commitado + feature_bug → recovery_required explícito: o
+                //     código commitado tem bug e re-rodar gates não o corrigiria;
+                //     re-executar o bloco sobrescreveria uma fase já commitada.
+                $causeKind = $feature['debugging']['cause_kind'] ?? null;
+                $reconcileBlock = ! $blockCommitted;
+                if ($blockCommitted && $hasGateFailure && $causeKind !== 'feature_bug') {
                     // FEATURE-097 (INC-2026-0007): a feature está commitada e a
                     // falha foi de gate. Re-rodar só o gate (awaiting_gates),
                     // sem nova sessão de implementação e sem gastar maxRetries
                     // de re-execução de bloco.
-                    fwrite(STDERR, '[RALPH] retomada de gate sem re-execução do bloco (feature commitada)'."\n");
+                    fwrite(STDERR, '[RALPH] retomada de gate sem re-execução do bloco (feature commitada, causa '.($causeKind ?? 'unknown').')'."\n");
                     $retryResult = beginGateRetry(array_merge($arguments, [
                         'actor' => 'supervisor',
                         'feature' => $cursor,
@@ -3084,7 +3095,12 @@ function superviseWorkflow(array $arguments): void
                     ]));
                     $lease = $retryResult['lease_token'];
                     $feature = $retryResult['feature'];
-                } elseif ($retry >= $maxRetries) {
+                } elseif ($blockCommitted && $causeKind === 'feature_bug') {
+                    supervisorRecordRequiredRecovery($arguments, $feature, supervisorSnapshot($arguments, $workflowId, $staleAfter, $activityStaleAfter), 'bloco commitado com bug real de código; re-rodar gates não corrigiria; exige re-implementação explícita');
+                    printJson(['status' => 'recovery_required', 'workflow_id' => $workflowId, 'feature_key' => $cursor, 'reason' => 'feature_bug_committed']);
+
+                    return;
+                } elseif ($retry >= $maxRetries && ! $reconcileBlock) {
                     supervisorRecordRequiredRecovery($arguments, $feature, supervisorSnapshot($arguments, $workflowId, $staleAfter, $activityStaleAfter), 'systematic debugging concluiu, mas o limite de tentativas foi atingido');
                     printJson(['status' => 'recovery_required', 'workflow_id' => $workflowId, 'feature_key' => $cursor, 'reason' => 'retry_limit_after_debug']);
 
@@ -3094,7 +3110,7 @@ function superviseWorkflow(array $arguments): void
                     $retryResult = beginFailedRetry(array_merge($arguments, [
                         'actor' => 'supervisor',
                         'feature' => $cursor,
-                        'reason' => 'retomada após systematic debugging verificado',
+                        'reason' => ($reconcileBlock ? 're-execução do bloco sobre a árvore parcial preservada' : 'retomada após systematic debugging verificado'),
                         'preserve-tree' => true,
                     ]));
                     $lease = $retryResult['lease_token'];
@@ -4729,6 +4745,14 @@ function debugReportErrors(array $report, string $workflowId, string $featureKey
             $errors[] = "campo obrigatório ausente: {$field}";
         }
     }
+    // Incidente 0018 (Camada B): causa classificada para decidir a retomada.
+    // harness_defect = defeito do comando/harness (retomada de gates basta);
+    // feature_bug = defeito do código do bloco (requer re-executar o bloco);
+    // capacity = limite de provider; unknown = diagnóstico não conclui.
+    $causeKind = $report['cause_kind'] ?? null;
+    if (! in_array($causeKind, ['harness_defect', 'feature_bug', 'capacity', 'unknown'], true)) {
+        $errors[] = 'cause_kind obrigatório e precisa ser harness_defect, feature_bug, capacity ou unknown';
+    }
     if (($report['workflow_id'] ?? null) !== $workflowId || ($report['feature_key'] ?? null) !== $featureKey || (int) ($report['attempt'] ?? -1) !== $attempt) {
         $errors[] = 'contexto do relatório não corresponde à tentativa';
     }
@@ -4772,6 +4796,18 @@ function debugReportErrors(array $report, string $workflowId, string $featureKey
     $validation = $report['validation'] ?? null;
     if (! is_array($validation) || ($validation['status'] ?? null) !== 'passed' || (int) ($validation['exit_code'] ?? -1) !== 0 || ! is_array($validation['evidence_refs'] ?? null) || $validation['evidence_refs'] === []) {
         $errors[] = 'validação do diagnóstico não está verde ou não possui evidência';
+    } else {
+        // Incidente 0018 (Camada C): um diagnóstico que alega causa de CÓDIGO
+        // deve ancorar a evidência em arquivos que existem no repositório; um
+        // relatório genérico que referencia caminhos inexistentes não é fiel ao
+        // estado e não pode "verificar".
+        if ($causeKind === 'feature_bug') {
+            foreach ($validation['evidence_refs'] as $reference) {
+                if (! is_string($reference) || ! is_file($GLOBALS['root'].'/'.ltrim($reference, '/'))) {
+                    $errors[] = 'validação feature_bug referencia evidência inexistente no repo: '.(is_string($reference) ? $reference : '?');
+                }
+            }
+        }
     }
     $candidate = $report['knowledge_candidate'] ?? null;
     if (! is_array($candidate) || ! is_string($candidate['title'] ?? null) || ! is_string($candidate['summary'] ?? null) || ! is_array($candidate['applicability'] ?? null) || ! is_array($candidate['limitations'] ?? null)) {
@@ -4950,6 +4986,7 @@ function runSystematicDebug(array $arguments): array
             'document_id' => $documentId,
             'incident_id' => $report['incident_id'],
             'root_cause' => $report['root_cause'],
+            'cause_kind' => $report['cause_kind'],
             'confirmed_hypotheses' => count(array_filter($report['hypotheses'], static fn (mixed $hypothesis): bool => is_array($hypothesis) && ($hypothesis['status'] ?? null) === 'confirmed')),
             'official_reference_count' => count($report['official_references']),
             'knowledge_candidate' => $report['knowledge_candidate'],
@@ -5183,6 +5220,12 @@ function runControlled(array $arguments): void
         // FEATURE-094 (Phase 3): sinaliza a política ao loop para que o rate
         // limit seja devolvido como runner-result v2 em vez de dormir.
         'RALPH_EXECUTION_POLICY_MODE' => $workflow['execution_policy']['provider_strategy'] ?? 'none',
+        // Incidente 0018 (Camada A): retry com árvore parcial preservada
+        // autoriza o preflight do ralph.sh a continuar sobre o trabalho do
+        // próprio bloco em vez de abortar. Só o controlador (claim recovery)
+        // define este sinal; chamadas diretas/interativas do ralph.sh mantêm o
+        // abort fail-closed em árvore suja.
+        'RALPH_RECONCILE_DIRTY' => (($feature['claim']['recovery'] ?? false) === true) ? '1' : '0',
     ]);
     unset(
         $environment['RALPH_LEASE_TOKEN'],

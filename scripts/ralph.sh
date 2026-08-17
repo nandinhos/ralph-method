@@ -809,10 +809,22 @@ preflight_checks() {
 
   # Arvore limpa: 'git add -A' da primeira fase engoliria trabalho nao commitado.
   if [ -n "$(git status --porcelain)" ]; then
-    fail "Arvore de trabalho suja. ralph commita por fase e engoliria suas mudancas."
-    fail "Commite ou stashe antes de rodar:"
-    git status --short | sed 's/^/    /'
-    exit 1
+    if [ "${RALPH_RECONCILE_DIRTY:-0}" = "1" ]; then
+      # Incidente 0018 (Camada A): retry do bloco com árvore parcial preservada
+      # pelo controlador. O trabalho sujo é do próprio bloco interrompido; o
+      # preflight audita e deixa o loop continuar sobre ele (o commit por fase
+      # acontece no fluxo normal). O abort fail-closed permanece para uso
+      # direto/interativo (sem o sinal do controlador).
+      log "Arvore suja autorizada pelo controlador (recovery preserve-tree); continuando sobre o trabalho parcial."
+      while IFS= read -r suja_line; do
+        log "    $suja_line"
+      done < <(git status --short)
+    else
+      fail "Arvore de trabalho suja. ralph commita por fase e engoliria suas mudancas."
+      fail "Commite ou stashe antes de rodar:"
+      git status --short | sed 's/^/    /'
+      exit 1
+    fi
   fi
 
   resolve_test_cmd

@@ -5,6 +5,28 @@ português do Brasil. A versão no arquivo `VERSION` identifica o bundle em
 desenvolvimento; uma versão só é considerada publicada após commit, tag
 anotada e promoção documentada.
 
+## 0.10.1 — em desenvolvimento
+
+### Correção: bloco deixa árvore suja e o retry trava (incidente 0018)
+
+- `bin/ralph-control` emite `RALPH_RECONCILE_DIRTY=1` para o bloco quando a
+  feature está em retry com `claim.recovery=true`; `scripts/ralph.sh`, com o
+  sinal, audita a árvore (`git status --short`) e continua sobre o trabalho
+  parcial em vez de abortar no preflight — o abort fail-closed permanece para
+  uso direto/interativo;
+- diagnóstico de debug exige `cause_kind` (`harness_defect`, `feature_bug`,
+  `capacity`, `unknown`); relatório sem causa é rejeitado
+  (`debugging.rejected`) e o `cause_kind` é persistido no `debugging.verified`;
+- `feature_bug` exige `evidence_refs` existentes no repositório (evidência
+  falsa é rejeitada);
+- decisão pós-debugging: bloco não commitado re-executa o bloco; bloco
+  commitado com defeito de harness/capacidade usa `beginGateRetry`; bloco
+  commitado com `feature_bug` encaminha a `recovery_required`
+  (`feature_bug_committed`), sem resumir correção de código a retry de gates;
+- novo teste `scripts/test-ralph-dirty-reconcile.sh` (camadas A/B/C) incluído
+  na CI portátil; fixture do `test-ralph-gate-recovery.sh` atualizado com
+  `cause_kind`.
+
 ## 0.10.0 — publicada em 2026-08-16
 
 ### Adapter Cursor (FEATURE-098)
