@@ -1,0 +1,183 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ralph-method.dev/schemas/monitor-snapshot.schema.json",
+  "title": "Snapshot do monitor do Ralph Method",
+  "description": "Contrato somente leitura publicado por bin/ralph-monitor. Quem consome (supervisor, painel, orquestrador externo) depende deste formato; ele nunca carrega segredo, prompt, resposta de provider ou lease em claro.",
+  "type": "object",
+  "required": ["schema_version", "generated_at", "project", "health", "workflow_id"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0.0"
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "project": {
+      "type": "object",
+      "required": ["path", "name"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "health": {
+      "description": "capacity_wait e provider_failover existem para que uma execução parada por provider nunca seja publicada como ok.",
+      "enum": [
+        "ok",
+        "complete",
+        "process_missing",
+        "heartbeat_stale",
+        "activity_stale",
+        "gates_stale",
+        "capacity_wait",
+        "provider_failover",
+        "debugging",
+        "blocked",
+        "error"
+      ]
+    },
+    "workflow_id": { "type": "string" },
+    "message": {
+      "type": "string",
+      "description": "Presente apenas quando health é error."
+    },
+    "cursor": { "type": ["string", "null"] },
+    "state": { "type": ["string", "null"] },
+    "position": { "type": ["integer", "string", "null"] },
+    "title": { "type": ["string", "null"] },
+    "attempt": { "type": ["integer", "null"] },
+    "total_features": { "type": "integer", "minimum": 0 },
+    "completed_features": { "type": "integer", "minimum": 0 },
+    "progress": {
+      "type": "object",
+      "required": ["feature_percent", "gate_percent", "estimated_percent", "completed_features", "total_features", "passed_gates", "total_gates"],
+      "properties": {
+        "feature_percent": { "type": "number", "minimum": 0, "maximum": 100 },
+        "gate_percent": { "type": "number", "minimum": 0, "maximum": 100 },
+        "estimated_percent": { "type": "number", "minimum": 0, "maximum": 100 },
+        "completed_features": { "type": "integer", "minimum": 0 },
+        "total_features": { "type": "integer", "minimum": 0 },
+        "passed_gates": { "type": "integer", "minimum": 0 },
+        "total_gates": { "type": "integer", "minimum": 0 },
+        "feature_bar": { "type": "string" },
+        "gate_bar": { "type": "string" },
+        "estimated_bar": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "features": {
+      "description": "Projeção completa: sem ela o painel só sabe quantas features faltam, não quais.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["feature_key", "state", "knowledge_state", "attempt", "done", "current", "gates"],
+        "properties": {
+          "feature_key": { "type": ["string", "null"] },
+          "position": { "type": ["integer", "string", "null"] },
+          "title": { "type": ["string", "null"] },
+          "state": { "type": "string" },
+          "knowledge_state": { "type": "string" },
+          "attempt": { "type": "integer", "minimum": 0 },
+          "done": { "type": "boolean" },
+          "current": { "type": "boolean" },
+          "gates": { "$ref": "#/$defs/gates" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "gates": { "$ref": "#/$defs/gates" },
+    "timeline": {
+      "description": "Recorte declarado do ledger. Nunca o objeto facts inteiro: ele carrega caminhos, sessões e recortes de execução.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["event_id", "type", "timestamp"],
+        "properties": {
+          "event_id": { "type": ["string", "null"] },
+          "type": { "type": ["string", "null"] },
+          "summary": { "type": ["string", "null"] },
+          "feature_key": { "type": ["string", "null"] },
+          "attempt": { "type": ["integer", "null"] },
+          "timestamp": { "type": ["string", "null"] },
+          "age_seconds": { "type": ["integer", "null"] },
+          "gate": { "type": ["string", "null"] },
+          "runner": { "type": ["string", "null"] },
+          "exit_code": { "type": ["integer", "null"] }
+        },
+        "additionalProperties": false
+      }
+    },
+    "runner": {
+      "type": "object",
+      "required": ["name", "provider", "model", "source"],
+      "properties": {
+        "name": { "type": ["string", "null"] },
+        "provider": { "type": ["string", "null"] },
+        "model": { "type": ["string", "null"] },
+        "source": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "event_count": { "type": ["integer", "null"] },
+    "last_event": {
+      "type": "object",
+      "properties": {
+        "type": { "type": ["string", "null"] },
+        "summary": { "type": ["string", "null"] },
+        "timestamp": { "type": ["string", "null"] },
+        "age_seconds": { "type": ["integer", "null"] },
+        "idle_seconds": { "type": ["integer", "null"] },
+        "cpu_milli": { "type": ["integer", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "loop_feedback": { "type": ["object", "null"] },
+    "processes": {
+      "description": "Somente runners. Observadores read-only são excluídos para não mascarar process_missing.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["pid", "age", "command"],
+        "properties": {
+          "pid": { "type": "integer" },
+          "age": { "type": "integer" },
+          "command": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "stale_after_seconds": { "type": "integer", "minimum": 1 },
+    "activity_stale_after_seconds": { "type": "integer", "minimum": 1 },
+    "provider_circuits": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["state", "retry_at", "domain"],
+        "properties": {
+          "state": { "enum": ["closed", "open", "half_open"] },
+          "retry_at": { "type": ["string", "null"] },
+          "domain": { "type": ["string", "null"] }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "gates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["gate", "status"],
+        "properties": {
+          "gate": { "enum": ["validation", "quality", "runtime_evidence", "technical_review", "curation"] },
+          "status": { "enum": ["pending", "passed", "rejected", "harness_error"] }
+        },
+        "additionalProperties": false
+      }
+    }
+  }
+}

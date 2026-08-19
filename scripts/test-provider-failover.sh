@@ -1279,8 +1279,10 @@ git -C "$kill_project" commit -qm base
 (cd "$kill_project" && php "$ROOT/bin/ralph-control" init --workflow wf_kill_failover --manifest workflow.json >/dev/null)
 
 # Inicia o supervise em background; espera o capacity_limited; mata o supervisor.
+# O exec faz o subshell virar o próprio php: sem ele, $! aponta para o subshell
+# e o SIGKILL deixa o supervisor vivo segurando o lock do checkout.
 set +e
-(cd "$kill_project" && php "$ROOT/bin/ralph-control" supervise --workflow wf_kill_failover --interval 1 --max-retries 0 --gate-harness-retries 1 --heartbeat-interval 1) > "$TMP/kill-supervise.log" 2>&1 &
+(cd "$kill_project" && exec php "$ROOT/bin/ralph-control" supervise --workflow wf_kill_failover --interval 1 --max-retries 0 --gate-harness-retries 1 --heartbeat-interval 1) > "$TMP/kill-supervise.log" 2>&1 &
 kill_supervisor_pid=$!
 set -e
 for _ in $(seq 1 100); do

@@ -5,6 +5,29 @@ português do Brasil. A versão no arquivo `VERSION` identifica o bundle em
 desenvolvimento; uma versão só é considerada publicada após commit, tag
 anotada e promoção documentada.
 
+## Não publicado
+
+### Acompanhamento por projeto (0031)
+
+- `schemas/monitor-snapshot.schema.json` 1.0.0: contrato versionado do snapshot
+  do monitor, com identidade do projeto, saúde, projeção completa de features,
+  os cinco gates por nome, timeline sanitizada do ledger, runner corrente e
+  circuitos de provider;
+- `bin/ralph-monitor` descobre o `workflow_id` em
+  `<git-common-dir>/ralph-control/workflow.json` quando `--workflow` é omitido;
+- `bin/ralph-monitor serve --project <path>` (repetível) sobe um painel local
+  somente leitura em loopback, com um cartão por checkout; só existem `GET /` e
+  `GET /api/projects`, escrita responde 405 e rota desconhecida 404;
+- saúde deixa de publicar `ok` para execução parada por provider:
+  `capacity_wait` e `provider_failover` passam a ser estados próprios;
+- a lista de processos conta apenas runners; monitor, métricas, trace, doctor e
+  comandos de leitura do controlador não escondem mais `process_missing`;
+- features concluídas voltam a ser só `approved` e `released` (os estados
+  `knowledge_*` vivem em `knowledge_state`);
+- `scripts/test-provider-failover.sh` Phase 8.4 passa a matar o supervisor real
+  (`exec php` no subshell), provando a retomada idempotente após SIGKILL;
+- nova regressão `scripts/test-monitor-ui.sh` na CI portátil.
+
 ## 0.10.0 — publicada em 2026-08-16
 
 ### Adapter Cursor (FEATURE-098)

@@ -183,7 +183,40 @@ gates → timeline.
 cada `health` por fixture; teste de render da UI sem rede; sincronizar
 `AGENT_GUIDE`, `STATUS` e `CHANGELOG`.
 
-## 7. Não-objetivos
+## 7. Estado da implementação
+
+Decisão do responsável: `--project` repetível agora, índice do usuário depois.
+Esta entrega fecha F0–F5 na forma stateless; o índice em
+`~/.config/ralph-method/projects.json` continua fora de escopo.
+
+| Item | Estado | Onde |
+|---|---|---|
+| D1 observador contado como runner | corrigido | `monitorIsRunnerProcess()`; observador vivo não esconde `process_missing` |
+| D2 saúde de `capacity_wait`/failover | corrigido | `monitorHealth()` publica `capacity_wait` e `provider_failover` |
+| D3 snapshot achatado | corrigido | `features` com `state`, `attempt`, `knowledge_state` e gates por nome |
+| D4 sem timeline nem agregados | corrigido | `timeline` (recorte declarado) e `progress` |
+| D5 runner corrente ausente | corrigido | `runner` derivado de delegação e failover |
+| D6 mockup sem dados | corrigido | painel servido por `ralph-monitor serve`, alimentado pela API local |
+| D7 sem visão multi-projeto | corrigido na forma A | `--project` repetível, um cartão por checkout |
+| D8 `--workflow` obrigatório | corrigido | descoberta em `<git-common-dir>/ralph-control/workflow.json` |
+| D9 resíduo em `doneStates` | corrigido | terminais são `approved` e `released` |
+| D10 Phase 8.4 não provava a retomada | corrigido | `exec php` no subshell: o SIGKILL atinge o supervisor, não o shell |
+
+A correção de D10 não foi por grupo de processos como previsto em F0: bastou
+`exec` no subshell para que o PID capturado fosse o do supervisor. `setsid` +
+`kill -PGID` mataria também o que o teste ainda precisa observar.
+
+O contrato é `schemas/monitor-snapshot.schema.json` (`schema_version` 1.0.0) e a
+regressão é `scripts/test-monitor-ui.sh`, já na CI portátil. Ela prova o schema,
+a descoberta do workflow, a distinção observador/runner com processo real, a
+classificação de saúde, o isolamento de projeto inválido, a recusa de escrita
+(405/404) e a integridade do ledger depois do painel.
+
+Fora de escopo desta entrega, na ordem sugerida: índice do usuário (F3-B),
+`started_at`/`elapsed_seconds` no contrato, e contadores históricos de recovery
+e failover no snapshot — hoje eles vivem só no `ralph-metrics`.
+
+## 8. Não-objetivos
 
 Nenhuma ação de controle na interface, nenhum estado global obrigatório,
 nenhum dado sensível (prompt, token, resposta) na superfície observável.

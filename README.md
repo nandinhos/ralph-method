@@ -26,7 +26,7 @@ A evolução publicada está registrada no [CHANGELOG](CHANGELOG.md); a versão 
 ```text
 bin/ralph-control       autoridade e ledger
 bin/ralph-trace         registro/relatório de delegação
-bin/ralph-monitor       snapshot de saúde
+bin/ralph-monitor       snapshot de saúde e painel local somente leitura
 bin/ralph-block         uma feature por invocação
 scripts/ralph.sh        loop de fases do harness
 scripts/ralph-hook.sh   observabilidade best-effort
