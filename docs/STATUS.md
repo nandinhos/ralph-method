@@ -340,7 +340,7 @@ no [`Relatório 0023`](reports/0023-revalidacao-regressao-release-detector-legad
 |---|---|---|
 | Control plane | `bin/ralph-control` | estado, lease, fencing, gates e ledger |
 | Trace | `bin/ralph-trace` | fatos de delegação e relatório `TRC` |
-| Monitor | `bin/ralph-monitor` | snapshot operacional sem transição |
+| Monitor | `bin/ralph-monitor` | snapshot operacional versionado e painel local somente leitura, sem transição |
 | Métricas | `bin/ralph-metrics` | agregação JSON/Markdown somente leitura do ledger |
 | Bloco | `bin/ralph-block`, `bin/ralph-bloco` | uma feature por execução |
 | Loop | `scripts/ralph.sh` | sessões por fase e gates externos |

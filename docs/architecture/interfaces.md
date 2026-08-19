@@ -10,7 +10,8 @@ ralph-init uninstall --project <path> [--apply]
 ralph-doctor --project <path> [--verify-providers]
 bin/ralph-control <command> ...
 bin/ralph-trace record|report|tree ...
-bin/ralph-monitor --workflow <id> [--interval 30]
+bin/ralph-monitor [--workflow <id>] [--interval 30] [--once] [--json]
+bin/ralph-monitor serve --project <path> [--project <path> ...] [--host 127.0.0.1] [--port 7777]
 bin/ralph-metrics [--workflow <id>] [--feature <key>] [--format json|markdown]
 bin/ralph-knowledge candidates
 bin/ralph-knowledge retrieve --query <texto> [--category <id>] [--topic <id>] [--stack <id>] [--domain <id>] [--limit N]
@@ -218,6 +219,29 @@ evento JSON inválido.
 `bin/ralph-monitor` continua sendo somente leitura. Além do snapshot do
 workflow, ele mostra o último evento do JSONL do loop e permite detectar
 processo ausente, heartbeat parado, gates sem atividade e workflow bloqueado.
+
+O snapshot é um contrato versionado: `schemas/monitor-snapshot.schema.json`
+(`schema_version` 1.0.0). Ele publica identidade do projeto, saúde, projeção
+completa de features, os cinco gates obrigatórios por nome, o recorte declarado
+da timeline do ledger, o runner corrente e os circuitos de provider. A timeline
+nunca carrega o objeto `facts`, lease ou prompt. `--workflow` é opcional: sem
+ele o monitor descobre o identificador em
+`<git-common-dir>/ralph-control/workflow.json`.
+
+Saúde não é binária. `capacity_wait` e `provider_failover` existem para que uma
+execução parada por limite de provider nunca seja publicada como `ok`. A lista
+de processos conta apenas runners: monitor, métricas, trace, doctor e comandos
+de leitura do controlador são excluídos, senão um observador vivo mascararia
+`process_missing`.
+
+`bin/ralph-monitor serve` sobe um painel local somente leitura em loopback com
+um cartão por checkout informado em `--project` (repetível). Ele expõe apenas
+`GET /` e `GET /api/projects`; qualquer outra rota responde 404 e qualquer
+método de escrita responde 405. Não há estado fora dos checkouts: a lista de
+projetos vem da linha de comando, cada projeto resolve o próprio
+`<git-common-dir>/ralph-control/`, e um caminho inválido vira cartão de erro sem
+derrubar o painel. Aprovar gate, liberar lease, iniciar feature e recovery
+continuam exclusivos do `ralph-control`.
 
 `bin/ralph-metrics` também é somente leitura. Ele agrega `events.jsonl` em
 JSON ou Markdown, aceita filtros por workflow/feature e calcula contagens de

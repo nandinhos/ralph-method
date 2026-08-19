@@ -255,6 +255,21 @@ bin/ralph-monitor \
   --interval 30
 ```
 
+Para acompanhar vários checkouts ao mesmo tempo, o painel local (somente
+leitura, loopback, sem estado fora dos checkouts):
+
+```bash
+bin/ralph-monitor serve \
+  --project ~/code/projeto-a \
+  --project ~/code/projeto-b \
+  --port 7777
+```
+
+O painel só expõe `GET /` e `GET /api/projects`, ambos derivados do contrato
+`schemas/monitor-snapshot.schema.json`. Ele não aprova gate, não libera lease,
+não inicia feature e não executa recovery: essas decisões continuam sendo
+comandos do `ralph-control`.
+
 O monitor e o hook observam; decisões usam sempre o controlador:
 
 ```bash
@@ -383,7 +398,7 @@ O agente nunca deve:
 | revisão técnica | verificar código e critérios em modo read-only | deve ser independente do implementador |
 | curadoria de entrega | confirmar os cinco gates e o handoff | não é curadoria de memória |
 | `ralph-trace` | registrar delegações e identidade de provider | não aprova nem libera |
-| `ralph-monitor` | mostrar saúde, processo, progresso e último feedback | não faz retry, recovery ou avanço |
+| `ralph-monitor` | mostrar saúde, processo, progresso e último feedback; servir o painel local | não faz retry, recovery ou avanço |
 | `ralph-metrics` | agregar o ledger em JSON/Markdown | não muta eventos, estados, gates ou custo/token |
 | hook | observar eventos e emitir fatos | não muda estado global |
 | orquestrador externo | exibir andamento e encaminhar decisões ao controlador | não interpreta feedback como aprovação |

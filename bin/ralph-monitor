@@ -11,6 +11,27 @@ declare(strict_types=1);
  * e apontar ausência de heartbeat ou de processo.
  */
 
+/**
+ * Versão do contrato publicado em schemas/monitor-snapshot.schema.json.
+ * A UI só renderiza snapshots cuja major corresponde a esta constante.
+ */
+const MONITOR_SNAPSHOT_SCHEMA_VERSION = '1.0.0';
+
+/** Gates obrigatórios da entrega, na ordem em que o método os cobra. */
+const MONITOR_MANDATORY_GATES = ['validation', 'quality', 'runtime_evidence', 'technical_review', 'curation'];
+
+/** Estados terminais de uma feature na projeção do controlador. */
+const MONITOR_DONE_STATES = ['approved', 'released'];
+
+/**
+ * Subcomandos do controlador que apenas leem o ledger. Um processo destes
+ * nunca é runner: contá-lo mascara `process_missing` quando a execução morre.
+ */
+const MONITOR_READONLY_COMMANDS = [
+    'status', 'verify', 'provider-status', 'failover-plan',
+    'trace-report', 'observe', 'document-id', 'document-index',
+];
+
 /** @return array<string, string|bool> */
 function monitorArguments(array $argv): array
 {
@@ -39,6 +60,33 @@ function monitorArguments(array $argv): array
     }
 
     return $arguments;
+}
+
+/**
+ * Coleta um parâmetro repetível (`--project a --project b`), que o parser
+ * genérico sobrescreveria.
+ *
+ * @return list<string>
+ */
+function monitorRepeated(array $argv, string $name): array
+{
+    $values = [];
+    for ($index = 1; $index < count($argv); $index++) {
+        $argument = $argv[$index];
+        if ($argument === '--'.$name) {
+            $next = $argv[$index + 1] ?? null;
+            if (is_string($next) && ! str_starts_with($next, '--')) {
+                $values[] = $next;
+                $index++;
+            }
+            continue;
+        }
+        if (str_starts_with($argument, '--'.$name.'=')) {
+            $values[] = substr($argument, strlen($name) + 3);
+        }
+    }
+
+    return $values;
 }
 
 /** @return array{exit: int, stdout: string, stderr: string} */
@@ -175,6 +223,27 @@ function monitorWriteFeedback(string $path, array $snapshot): void
     }
 }
 
+/**
+ * Decide se a linha de comando pertence a um runner (executa trabalho) ou a um
+ * observador (apenas lê). Sem essa separação o próprio monitor, o `status` que
+ * ele dispara ou um `ralph-metrics` aberto em outro terminal contam como
+ * execução viva e escondem um runner morto atrás de `health: ok`.
+ */
+function monitorIsRunnerProcess(string $command): bool
+{
+    if (preg_match('/ralph-monitor|ralph-metrics|ralph-trace|ralph-doctor/', $command) === 1) {
+        return false;
+    }
+    if (preg_match('/ralph\.sh|ralph-block|ralph-bloco/', $command) === 1) {
+        return true;
+    }
+    if (preg_match('/ralph-control\S*\s+(\S+)/', $command, $matches) !== 1) {
+        return false;
+    }
+
+    return ! in_array($matches[1], MONITOR_READONLY_COMMANDS, true);
+}
+
 /** @return list<array{pid: int, age: int, command: string}> */
 function monitorProcesses(string $workflowId): array
 {
@@ -183,54 +252,221 @@ function monitorProcesses(string $workflowId): array
         return [];
     }
 
+    $self = getmypid();
     $processes = [];
     foreach (preg_split('/\R/', $result['stdout']) ?: [] as $line) {
-        if (! str_contains($line, $workflowId) || ! preg_match('/ralph-control|ralph\.sh|ralph-block|ralph-bloco/', $line)) {
+        if (! str_contains($line, $workflowId)) {
             continue;
         }
         if (preg_match('/^\s*(\d+)\s+(\d+)\s+(.+)$/', $line, $matches) !== 1) {
+            continue;
+        }
+        $command = trim($matches[3]);
+        if ((int) $matches[1] === $self || ! monitorIsRunnerProcess($command)) {
             continue;
         }
 
         $processes[] = [
             'pid' => (int) $matches[1],
             'age' => (int) $matches[2],
-            'command' => trim($matches[3]),
+            'command' => $command,
         ];
     }
 
     return $processes;
 }
 
-/** @return array<string, mixed>|null */
-function monitorLastEvent(string $root, string $workflowId, ?string $featureKey): ?array
+/**
+ * Descobre o workflow ativo do checkout sem exigir `--workflow`: o manifesto
+ * local do control plane já declara qual é. Sem isso a UI não consegue abrir
+ * um projeto que o operador não saiba nomear de cor.
+ */
+function monitorDiscoverWorkflowId(string $root): ?string
+{
+    $file = (monitorGitCommonDir($root) ?: $root).DIRECTORY_SEPARATOR.'ralph-control/workflow.json';
+    if (! is_file($file)) {
+        return null;
+    }
+
+    try {
+        $workflow = json_decode((string) file_get_contents($file), true, 512, JSON_THROW_ON_ERROR);
+    } catch (Throwable) {
+        return null;
+    }
+
+    $workflowId = is_array($workflow) && is_string($workflow['workflow_id'] ?? null) ? $workflow['workflow_id'] : null;
+
+    return $workflowId !== null && str_starts_with($workflowId, 'wf_') ? $workflowId : null;
+}
+
+/**
+ * Lê o ledger uma única vez por snapshot e devolve, em ordem, os eventos do
+ * workflow observado.
+ *
+ * @return list<array<string, mixed>>
+ */
+function monitorEvents(string $root, string $workflowId): array
 {
     $gitCommonDir = monitorGitCommonDir($root);
     if ($gitCommonDir === null) {
-        return null;
+        return [];
     }
 
     $eventsFile = $gitCommonDir.DIRECTORY_SEPARATOR.'ralph-control/events.jsonl';
     if (! is_file($eventsFile)) {
-        return null;
+        return [];
     }
 
-    $lines = file($eventsFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
-    for ($index = count($lines) - 1; $index >= 0; $index--) {
+    $events = [];
+    foreach (file($eventsFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $line) {
         try {
-            $event = json_decode($lines[$index], true, 512, JSON_THROW_ON_ERROR);
+            $event = json_decode($line, true, 512, JSON_THROW_ON_ERROR);
         } catch (Throwable) {
             continue;
         }
-        if (is_array($event)
-            && ($event['workflow_id'] ?? null) === $workflowId
-            && ($featureKey === null || ($event['feature_key'] ?? null) === $featureKey)
-        ) {
-            return $event;
+        if (is_array($event) && ($event['workflow_id'] ?? null) === $workflowId) {
+            $events[] = $event;
+        }
+    }
+
+    return $events;
+}
+
+/**
+ * @param  list<array<string, mixed>>  $events
+ * @return array<string, mixed>|null
+ */
+function monitorLastEvent(array $events, ?string $featureKey): ?array
+{
+    for ($index = count($events) - 1; $index >= 0; $index--) {
+        if ($featureKey === null || ($events[$index]['feature_key'] ?? null) === $featureKey) {
+            return $events[$index];
         }
     }
 
     return null;
+}
+
+/**
+ * Timeline enxuta para a UI: campos declarados, nunca `facts` inteiro — os
+ * fatos carregam caminhos, sessões e recortes de execução que não devem sair
+ * do checkout por uma porta HTTP.
+ *
+ * @param  list<array<string, mixed>>  $events
+ * @return list<array<string, mixed>>
+ */
+function monitorTimeline(array $events, int $limit): array
+{
+    $timeline = [];
+    for ($index = count($events) - 1; $index >= 0 && count($timeline) < $limit; $index--) {
+        $event = $events[$index];
+        $facts = is_array($event['facts'] ?? null) ? $event['facts'] : [];
+        $timeline[] = [
+            'event_id' => is_string($event['event_id'] ?? null) ? $event['event_id'] : null,
+            'type' => is_string($event['type'] ?? null) ? $event['type'] : null,
+            'summary' => is_string($event['summary'] ?? null) ? $event['summary'] : null,
+            'feature_key' => is_string($event['feature_key'] ?? null) ? $event['feature_key'] : null,
+            'attempt' => is_int($event['attempt'] ?? null) ? $event['attempt'] : null,
+            'timestamp' => is_string($event['timestamp'] ?? null) ? $event['timestamp'] : null,
+            'age_seconds' => monitorAge(is_string($event['timestamp'] ?? null) ? $event['timestamp'] : null),
+            'gate' => is_string($facts['gate'] ?? null) ? $facts['gate'] : null,
+            'runner' => is_string($facts['runner'] ?? null) ? $facts['runner'] : null,
+            'exit_code' => is_int($facts['exit_code'] ?? null) ? $facts['exit_code'] : null,
+        ];
+    }
+
+    return $timeline;
+}
+
+/**
+ * Runner corrente derivado do ledger. O snapshot antigo omitia isso, então a
+ * UI não tinha como dizer qual provider está gastando o tempo da tentativa.
+ *
+ * @param  list<array<string, mixed>>  $events
+ * @return array{name: ?string, provider: ?string, model: ?string, source: ?string}
+ */
+function monitorRunner(array $events, ?string $featureKey): array
+{
+    $empty = ['name' => null, 'provider' => null, 'model' => null, 'source' => null];
+    for ($index = count($events) - 1; $index >= 0; $index--) {
+        $event = $events[$index];
+        if ($featureKey !== null && ($event['feature_key'] ?? null) !== $featureKey) {
+            continue;
+        }
+        $type = is_string($event['type'] ?? null) ? $event['type'] : '';
+        $facts = is_array($event['facts'] ?? null) ? $event['facts'] : [];
+        if ($type === 'provider.failover_started' && is_string($facts['target_runner'] ?? null)) {
+            return [
+                'name' => $facts['target_runner'],
+                'provider' => null,
+                'model' => null,
+                'source' => $type,
+            ];
+        }
+        if (str_starts_with($type, 'delegation.') && is_string($facts['runner'] ?? null)) {
+            return [
+                'name' => $facts['runner'],
+                'provider' => is_string($facts['provider'] ?? null) ? $facts['provider'] : null,
+                'model' => is_string($facts['effective_model'] ?? null) ? $facts['effective_model'] : null,
+                'source' => $type,
+            ];
+        }
+    }
+
+    return $empty;
+}
+
+/**
+ * Achata a projeção em linhas de feature renderizáveis, sem vazar lease,
+ * correlation_id ou fatos de execução.
+ *
+ * @param  list<mixed>  $features
+ * @return list<array<string, mixed>>
+ */
+function monitorFeatureRows(array $features, ?string $cursor): array
+{
+    $rows = [];
+    foreach ($features as $feature) {
+        if (! is_array($feature)) {
+            continue;
+        }
+        $featureKey = is_string($feature['feature_key'] ?? null) ? $feature['feature_key'] : null;
+        $state = is_string($feature['state'] ?? null) ? $feature['state'] : 'pending';
+        $rows[] = [
+            'feature_key' => $featureKey,
+            'position' => $feature['position'] ?? null,
+            'title' => is_string($feature['title'] ?? null) ? $feature['title'] : null,
+            'state' => $state,
+            'knowledge_state' => is_string($feature['knowledge_state'] ?? null) ? $feature['knowledge_state'] : 'not_started',
+            'attempt' => is_int($feature['attempt'] ?? null) ? $feature['attempt'] : 0,
+            'done' => in_array($state, MONITOR_DONE_STATES, true),
+            'current' => $featureKey !== null && $featureKey === $cursor,
+            'gates' => monitorGateRows(is_array($feature['gates'] ?? null) ? $feature['gates'] : []),
+        ];
+    }
+
+    return $rows;
+}
+
+/**
+ * Gates obrigatórios nomeados, na ordem do método. O contador agregado não
+ * distingue `rejected` de `harness_error` nem diz qual gate falta.
+ *
+ * @param  array<string, mixed>  $gates
+ * @return list<array{gate: string, status: string}>
+ */
+function monitorGateRows(array $gates): array
+{
+    $rows = [];
+    foreach (MONITOR_MANDATORY_GATES as $gate) {
+        $status = $gates[$gate] ?? null;
+        $rows[] = [
+            'gate' => $gate,
+            'status' => is_string($status) ? $status : 'pending',
+        ];
+    }
+
+    return $rows;
 }
 
 /** @return array<string, mixed>|null */
@@ -256,31 +492,46 @@ function monitorLastLoopFeedback(string $root): ?array
     return null;
 }
 
+/**
+ * Envelope de erro com a mesma identidade dos snapshots saudáveis: a UI precisa
+ * saber de qual projeto o erro veio para não sumir com o cartão da lista.
+ *
+ * @return array<string, mixed>
+ */
+function monitorErrorSnapshot(string $root, string $workflowId, string $message): array
+{
+    return [
+        'schema_version' => MONITOR_SNAPSHOT_SCHEMA_VERSION,
+        'generated_at' => (new DateTimeImmutable)->format(DateTimeInterface::ATOM),
+        'project' => ['path' => $root, 'name' => basename($root)],
+        'health' => 'error',
+        'workflow_id' => $workflowId,
+        'message' => $message,
+    ];
+}
+
 /** @return array<string, mixed> */
-function monitorSnapshot(string $root, string $workflowId, int $staleAfter, int $activityStaleAfter, ?string $controllerPath = null): array
+function monitorSnapshot(string $root, string $workflowId, int $staleAfter, int $activityStaleAfter, ?string $controllerPath = null, int $timelineLimit = 20): array
 {
     $controller = realpath($controllerPath ?? $root.'/bin/ralph-control');
     if ($controller === false || ! is_executable($controller)) {
-        return ['health' => 'error', 'message' => 'bin/ralph-control não encontrado ou não executável'];
+        return monitorErrorSnapshot($root, $workflowId, 'bin/ralph-control não encontrado ou não executável');
     }
 
     $command = escapeshellarg(PHP_BINARY).' '.escapeshellarg($controller)
         .' status --workflow '.escapeshellarg($workflowId);
     $status = monitorCommand($command, $root);
     if ($status['exit'] !== 0) {
-        return [
-            'health' => 'error',
-            'message' => trim($status['stderr'] !== '' ? $status['stderr'] : $status['stdout']),
-        ];
+        return monitorErrorSnapshot($root, $workflowId, trim($status['stderr'] !== '' ? $status['stderr'] : $status['stdout']));
     }
 
     try {
         $payload = json_decode($status['stdout'], true, 512, JSON_THROW_ON_ERROR);
     } catch (Throwable $exception) {
-        return ['health' => 'error', 'message' => 'status inválido: '.$exception->getMessage()];
+        return monitorErrorSnapshot($root, $workflowId, 'status inválido: '.$exception->getMessage());
     }
     if (! is_array($payload)) {
-        return ['health' => 'error', 'message' => 'status não retornou objeto JSON'];
+        return monitorErrorSnapshot($root, $workflowId, 'status não retornou objeto JSON');
     }
 
     $projection = is_array($payload['projection'] ?? null) ? $payload['projection'] : [];
@@ -294,7 +545,8 @@ function monitorSnapshot(string $root, string $workflowId, int $staleAfter, int 
         }
     }
 
-    $lastEvent = monitorLastEvent($root, $workflowId, $cursor);
+    $events = monitorEvents($root, $workflowId);
+    $lastEvent = monitorLastEvent($events, $cursor);
     $lastLoopFeedback = monitorLastLoopFeedback($root);
     $lastEventTimestamp = is_string($lastEvent['timestamp'] ?? null) ? $lastEvent['timestamp'] : null;
     $lastEventAge = monitorAge($lastEventTimestamp);
@@ -304,10 +556,11 @@ function monitorSnapshot(string $root, string $workflowId, int $staleAfter, int 
     $idleSeconds = is_int($lastFacts['idle_seconds'] ?? null) ? $lastFacts['idle_seconds'] : null;
     $cpuMilli = is_int($lastProcessTree['cpu_milli'] ?? null) ? $lastProcessTree['cpu_milli'] : null;
     $state = is_array($current) && is_string($current['state'] ?? null) ? $current['state'] : 'complete';
-    $doneStates = ['approved', 'released', 'knowledge_pending', 'knowledge_curated', 'knowledge_skipped'];
-    $done = count(array_filter($features, static fn (mixed $feature): bool => is_array($feature) && in_array($feature['state'] ?? null, $doneStates, true)));
+    // `knowledge_*` vive em knowledge_state, nunca em state: mantê-los aqui
+    // criava um ramo morto que nunca contava feature concluída alguma.
+    $done = count(array_filter($features, static fn (mixed $feature): bool => is_array($feature) && in_array($feature['state'] ?? null, MONITOR_DONE_STATES, true)));
     $total = count($features);
-    $mandatoryGates = ['validation', 'quality', 'runtime_evidence', 'technical_review', 'curation'];
+    $mandatoryGates = MONITOR_MANDATORY_GATES;
     $passedGates = is_array($current) ? count(array_filter(
         $mandatoryGates,
         static fn (string $gate): bool => (($current['gates'][$gate] ?? null) === 'passed'),
@@ -318,18 +571,21 @@ function monitorSnapshot(string $root, string $workflowId, int $staleAfter, int 
         ? round((($done + ($current === null ? 0 : $passedGates / count($mandatoryGates))) / $total) * 100, 1)
         : 100.0;
 
-    $health = match (true) {
-        $state === 'running' && $processes === [] => 'process_missing',
-        $state === 'running' && $lastEventAge !== null && $lastEventAge > $staleAfter => 'heartbeat_stale',
-        $state === 'running' && ($lastEvent['type'] ?? null) === 'command.heartbeat' && $idleSeconds !== null && $idleSeconds > $activityStaleAfter && ($cpuMilli ?? 0) <= 1000 => 'activity_stale',
-        $state === 'awaiting_gates' && $lastEventAge !== null && $lastEventAge > $staleAfter => 'gates_stale',
-        in_array($state, ['debugging_required', 'debugging_running', 'debugging_verified'], true) => 'debugging',
-        in_array($state, ['blocked', 'recovery_required'], true) => 'blocked',
-        $state === 'complete' => 'complete',
-        default => 'ok',
-    };
+    $health = monitorHealth(
+        $state,
+        $processes,
+        $lastEventAge,
+        is_string($lastEvent['type'] ?? null) ? $lastEvent['type'] : null,
+        $idleSeconds,
+        $cpuMilli,
+        $staleAfter,
+        $activityStaleAfter,
+    );
 
     return [
+        'schema_version' => MONITOR_SNAPSHOT_SCHEMA_VERSION,
+        'generated_at' => (new DateTimeImmutable)->format(DateTimeInterface::ATOM),
+        'project' => ['path' => $root, 'name' => basename($root)],
         'health' => $health,
         'workflow_id' => $workflowId,
         'cursor' => $cursor,
@@ -364,37 +620,63 @@ function monitorSnapshot(string $root, string $workflowId, int $staleAfter, int 
         'processes' => $processes,
         'stale_after_seconds' => $staleAfter,
         'activity_stale_after_seconds' => $activityStaleAfter,
+        // Projeção completa para quem renderiza: contadores respondem "quanto",
+        // estas três respondem "o quê, onde e por quem".
+        'features' => monitorFeatureRows($features, $cursor),
+        'gates' => monitorGateRows(is_array($current['gates'] ?? null) ? $current['gates'] : []),
+        'timeline' => monitorTimeline($events, $timelineLimit),
+        'runner' => monitorRunner($events, $cursor),
         // FEATURE-094 (Phase 7): circuitos derivados do ledger, somente leitura.
-        'provider_circuits' => monitorProviderCircuits($root, $workflowId),
+        'provider_circuits' => (object) monitorProviderCircuits($events),
     ];
+}
+
+/**
+ * Classifica a saúde a partir do estado projetado. Função pura de propósito:
+ * a classificação é o que a UI e o supervisor consomem, e precisa ser
+ * verificável sem ledger, processo vivo ou relógio real.
+ *
+ * @param  list<array{pid: int, age: int, command: string}>  $processes
+ */
+function monitorHealth(
+    string $state,
+    array $processes,
+    ?int $lastEventAge,
+    ?string $lastEventType,
+    ?int $idleSeconds,
+    ?int $cpuMilli,
+    int $staleAfter,
+    int $activityStaleAfter,
+): string {
+    return match (true) {
+        $state === 'running' && $processes === [] => 'process_missing',
+        $state === 'running' && $lastEventAge !== null && $lastEventAge > $staleAfter => 'heartbeat_stale',
+        $state === 'running' && $lastEventType === 'command.heartbeat' && $idleSeconds !== null && $idleSeconds > $activityStaleAfter && ($cpuMilli ?? 0) <= 1000 => 'activity_stale',
+        $state === 'awaiting_gates' && $lastEventAge !== null && $lastEventAge > $staleAfter => 'gates_stale',
+        // Sem estes dois ramos um workflow parado esperando capacidade caía no
+        // `default` e era publicado como `ok`.
+        $state === 'capacity_wait' => 'capacity_wait',
+        $state === 'provider_failover_pending' => 'provider_failover',
+        in_array($state, ['debugging_required', 'debugging_running', 'debugging_verified'], true) => 'debugging',
+        in_array($state, ['blocked', 'recovery_required'], true) => 'blocked',
+        $state === 'complete' => 'complete',
+        default => 'ok',
+    };
 }
 
 /**
  * Deriva os circuitos `closed|open|half_open` por runner do ledger
  * (FEATURE-094). Apenas observação; não possui autoridade de transição.
  *
+ * @param  list<array<string, mixed>>  $events
  * @return array<string, array{state: string, retry_at: ?string, domain: ?string}>
  */
-function monitorProviderCircuits(string $root, string $workflowId): array
+function monitorProviderCircuits(array $events): array
 {
-    $runtime = (monitorGitCommonDir($root) ?: $root).DIRECTORY_SEPARATOR.'ralph-control';
-    $eventsFile = $runtime.'/events.jsonl';
-    if (! is_file($eventsFile)) {
-        return [];
-    }
     $circuits = [];
     $now = time();
-    foreach (file($eventsFile, FILE_IGNORE_NEW_LINES) ?: [] as $line) {
-        if (trim($line) === '') {
-            continue;
-        }
-        try {
-            $event = json_decode($line, true, 512, JSON_THROW_ON_ERROR);
-        } catch (Throwable) {
-            continue;
-        }
-        if (! is_array($event) || ($event['type'] ?? null) !== 'provider.capacity_limited'
-            || ($event['workflow_id'] ?? null) !== $workflowId) {
+    foreach ($events as $event) {
+        if (($event['type'] ?? null) !== 'provider.capacity_limited') {
             continue;
         }
         $facts = is_array($event['facts'] ?? null) ? $event['facts'] : [];
@@ -420,8 +702,8 @@ function monitorFeedback(array $snapshot): string
     $level = match ($health) {
         'ok' => 'INFO',
         'complete' => 'OK',
-        'blocked', 'process_missing', 'heartbeat_stale', 'activity_stale', 'gates_stale' => 'ALERTA',
-        'debugging' => 'INFO',
+        'blocked', 'process_missing', 'heartbeat_stale', 'activity_stale', 'gates_stale', 'capacity_wait' => 'ALERTA',
+        'debugging', 'provider_failover' => 'INFO',
         default => 'ERRO',
     };
     $feature = ($snapshot['cursor'] ?? null) ?: 'nenhuma';
@@ -445,6 +727,8 @@ function monitorFeedback(array $snapshot): string
             'debugging_verified' => 'causa raiz verificada; o controlador pode abrir nova tentativa',
             default => 'systematic debugging em andamento',
         },
+        'capacity_wait' => 'execução parada aguardando capacidade do provider; nenhum runner trabalha agora',
+        'provider_failover' => 'limite de uso confirmado; o controlador decide o próximo runner',
         'complete' => 'workflow concluído',
         'error' => (string) ($snapshot['message'] ?? 'falha ao consultar o workflow'),
         default => 'execução acompanhada normalmente',
@@ -480,9 +764,410 @@ function monitorSleep(int $seconds): void
     }
 }
 
+/**
+ * Resolve o workflow observado: o parâmetro explícito continua vencendo, mas a
+ * ausência dele deixa de ser erro quando o checkout já declara um.
+ */
+function monitorResolveWorkflowId(array $arguments, string $root): string
+{
+    $explicit = $arguments['workflow'] ?? null;
+    if (is_string($explicit) && trim($explicit) !== '') {
+        return trim($explicit);
+    }
+
+    $discovered = monitorDiscoverWorkflowId($root);
+    if ($discovered !== null) {
+        return $discovered;
+    }
+
+    fwrite(STDERR, "erro: --workflow ausente e nenhum workflow declarado em ralph-control/workflow.json\n");
+    exit(2);
+}
+
+/**
+ * Coleta um snapshot por projeto. Um projeto ilegível vira cartão de erro em
+ * vez de derrubar o painel inteiro.
+ *
+ * @param  list<string>  $projects
+ * @return list<array<string, mixed>>
+ */
+function monitorProjectSnapshots(array $projects, int $staleAfter, int $activityStaleAfter, ?string $controllerPath): array
+{
+    $snapshots = [];
+    foreach ($projects as $project) {
+        $root = realpath($project);
+        if ($root === false || ! is_dir($root)) {
+            $snapshots[] = monitorErrorSnapshot($project, 'desconhecido', 'checkout não encontrado');
+            continue;
+        }
+        $workflowId = monitorDiscoverWorkflowId($root);
+        if ($workflowId === null) {
+            $snapshots[] = monitorErrorSnapshot($root, 'desconhecido', 'nenhum workflow instalado neste checkout');
+            continue;
+        }
+        $snapshots[] = monitorSnapshot($root, $workflowId, $staleAfter, $activityStaleAfter, $controllerPath);
+    }
+
+    return $snapshots;
+}
+
+/** @param array<string, mixed>|list<mixed> $payload */
+function monitorHttpJson($socket, int $status, array|string $payload): void
+{
+    $body = is_string($payload)
+        ? $payload
+        : json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+    monitorHttpWrite($socket, $status, 'application/json; charset=utf-8', $body);
+}
+
+function monitorHttpWrite($socket, int $status, string $contentType, string $body): void
+{
+    $reason = match ($status) {
+        200 => 'OK',
+        404 => 'Not Found',
+        405 => 'Method Not Allowed',
+        default => 'Internal Server Error',
+    };
+    $headers = "HTTP/1.1 {$status} {$reason}\r\n"
+        ."Content-Type: {$contentType}\r\n"
+        .'Content-Length: '.strlen($body)."\r\n"
+        ."Cache-Control: no-store\r\n"
+        ."Connection: close\r\n\r\n";
+    fwrite($socket, $headers.$body);
+}
+
+/**
+ * Servidor local somente leitura do painel. Ele não expõe nenhuma rota de
+ * escrita: aprovar gate, liberar lease e iniciar feature continuam sendo
+ * autoridade exclusiva do `ralph-control` na linha de comando.
+ *
+ * @param  list<string>  $projects
+ */
+function monitorServe(string $host, int $port, array $projects, int $staleAfter, int $activityStaleAfter, ?string $controllerPath): int
+{
+    $server = @stream_socket_server("tcp://{$host}:{$port}", $errorCode, $errorMessage);
+    if ($server === false) {
+        fwrite(STDERR, "erro: não foi possível abrir {$host}:{$port} ({$errorMessage})\n");
+
+        return 2;
+    }
+
+    fwrite(STDOUT, sprintf(
+        "painel somente leitura em http://%s:%d (%d projeto(s)); Ctrl+C encerra\n",
+        $host,
+        $port,
+        count($projects),
+    ));
+    fflush(STDOUT);
+
+    while (true) {
+        $socket = @stream_socket_accept($server, -1);
+        if ($socket === false) {
+            continue;
+        }
+        stream_set_timeout($socket, 5);
+        $request = (string) fgets($socket, 8192);
+        while (($line = fgets($socket, 8192)) !== false && trim($line) !== '') {
+            // Descarta cabeçalhos: nenhuma rota depende deles.
+        }
+        if (preg_match('#^(GET|HEAD) (\S+) HTTP/1\.[01]#', $request, $matches) !== 1) {
+            monitorHttpJson($socket, 405, ['error' => 'apenas GET']);
+            fclose($socket);
+            continue;
+        }
+
+        $path = parse_url($matches[2], PHP_URL_PATH) ?: '/';
+        if ($path === '/' || $path === '/index.html') {
+            monitorHttpWrite($socket, 200, 'text/html; charset=utf-8', monitorUiDocument());
+        } elseif ($path === '/api/projects') {
+            monitorHttpJson($socket, 200, [
+                'schema_version' => MONITOR_SNAPSHOT_SCHEMA_VERSION,
+                'generated_at' => (new DateTimeImmutable)->format(DateTimeInterface::ATOM),
+                'projects' => monitorProjectSnapshots($projects, $staleAfter, $activityStaleAfter, $controllerPath),
+            ]);
+        } else {
+            monitorHttpJson($socket, 404, ['error' => 'rota inexistente']);
+        }
+        fclose($socket);
+    }
+}
+
+/**
+ * Documento do painel. Ele vai embutido no binário de propósito: o monitor é
+ * instalado por projeto como arquivo único, e um diretório de assets separado
+ * quebraria a instalação atômica sem dar nada em troca.
+ */
+function monitorUiDocument(): string
+{
+    return <<<'HTML'
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RALPH-METHOD · acompanhamento</title>
+<style>
+:root {
+  --bg: #071014; --line: rgba(173,219,213,.12); --text: #effaf7; --muted: #87a39f;
+  --lime: #b9f55b; --cyan: #68e5db; --amber: #ffc76b; --red: #ff7f91; --violet: #a98bff;
+}
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; color: var(--text); background: radial-gradient(circle at 80% -10%, rgba(104,229,219,.15), transparent 34rem), var(--bg); font: 14px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+.shell { width: min(1480px, calc(100% - 48px)); margin: 0 auto; padding: 24px 0 56px; }
+.topbar { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 24px; }
+.brand { font-size: 15px; font-weight: 850; letter-spacing: .2em; }
+.brand span { color: var(--cyan); }
+.eyebrow { margin: 0 0 2px; color: var(--muted); font-size: 10px; font-weight: 750; letter-spacing: .16em; text-transform: uppercase; }
+.readonly { border: 1px solid rgba(169,139,255,.35); border-radius: 99px; padding: 6px 12px; color: var(--violet); font-size: 11px; font-weight: 750; }
+.meta { color: var(--muted); font-size: 11px; text-align: right; }
+.layout { display: grid; grid-template-columns: 300px 1fr; gap: 18px; align-items: start; }
+.card { border: 1px solid var(--line); border-radius: 18px; padding: 20px; background: linear-gradient(145deg, rgba(20,42,48,.84), rgba(10,22,27,.9)); }
+h2 { margin: 0 0 14px; font-size: 14px; letter-spacing: -.02em; }
+.projects { display: grid; gap: 8px; }
+.project { width: 100%; display: grid; gap: 4px; text-align: left; border: 1px solid var(--line); border-radius: 12px; padding: 12px; color: inherit; background: rgba(255,255,255,.025); cursor: pointer; font: inherit; }
+.project:hover { border-color: rgba(104,229,219,.45); }
+.project[aria-current="true"] { border-color: rgba(185,245,91,.5); background: rgba(185,245,91,.07); }
+.project-name { font-weight: 750; }
+.project-path { color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
+.chip { display: inline-flex; align-items: center; gap: 6px; border-radius: 99px; padding: 3px 9px; font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.chip::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.ok { color: var(--lime); background: rgba(185,245,91,.1); }
+.warn { color: var(--amber); background: rgba(255,199,107,.12); }
+.bad { color: var(--red); background: rgba(255,127,145,.12); }
+.info { color: var(--cyan); background: rgba(104,229,219,.1); }
+.idle { color: var(--muted); background: rgba(255,255,255,.05); }
+.detail { display: grid; gap: 18px; }
+.banner { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.banner p { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
+.metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.metric-label { color: var(--muted); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+.metric-value { margin: 6px 0 2px; font-size: 24px; font-weight: 800; letter-spacing: -.05em; }
+.track { height: 7px; overflow: hidden; border-radius: 99px; background: rgba(255,255,255,.08); }
+.bar { height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--cyan), var(--lime)); }
+.columns { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.rows { display: grid; gap: 8px; }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid var(--line); border-radius: 11px; padding: 10px 12px; background: rgba(255,255,255,.025); }
+.row.current { border-color: rgba(104,229,219,.4); background: rgba(104,229,219,.06); }
+.row-key { font-size: 11px; font-weight: 800; letter-spacing: .08em; color: var(--cyan); }
+.row-title { color: var(--muted); font-size: 11px; }
+.event { display: grid; gap: 2px; border-left: 1px solid var(--line); padding: 8px 0 8px 14px; position: relative; }
+.event::before { content: ""; position: absolute; left: -4px; top: 14px; width: 7px; height: 7px; border-radius: 50%; background: var(--cyan); }
+.event-type { font-size: 12px; font-weight: 750; }
+.event-meta { color: var(--muted); font-size: 10px; }
+.empty { color: var(--muted); font-size: 12px; }
+kbd { border: 1px solid var(--line); border-radius: 6px; padding: 1px 5px; font-size: 10px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="shell">
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">acompanhamento por projeto</p>
+      <div class="brand">RALPH<span>·</span>METHOD</div>
+    </div>
+    <div class="readonly">somente leitura · gates e leases só pelo ralph-control</div>
+    <div class="meta" id="meta">carregando…</div>
+  </header>
+  <div class="layout">
+    <aside class="card">
+      <h2>Projetos</h2>
+      <div class="projects" id="projects"></div>
+    </aside>
+    <main class="detail" id="detail"></main>
+  </div>
+</div>
+<script>
+const HEALTH = {
+  ok: ['ok', 'info', 'execução acompanhada normalmente'],
+  complete: ['concluído', 'ok', 'workflow concluído'],
+  process_missing: ['sem processo', 'bad', 'feature em execução, mas nenhum runner vivo foi encontrado'],
+  heartbeat_stale: ['heartbeat parado', 'bad', 'o processo existe, mas o ledger não recebe eventos'],
+  activity_stale: ['sem atividade', 'warn', 'há heartbeat, mas não há saída nem CPU observável'],
+  gates_stale: ['gates parados', 'warn', 'aguardando gates além do limite'],
+  capacity_wait: ['espera de capacidade', 'warn', 'execução parada aguardando capacidade do provider'],
+  provider_failover: ['failover', 'info', 'limite de uso confirmado; o controlador decide o próximo runner'],
+  debugging: ['debugging', 'info', 'systematic debugging em andamento'],
+  blocked: ['bloqueado', 'bad', 'recovery explícito necessário'],
+  error: ['erro', 'bad', 'não foi possível ler este projeto'],
+};
+const GATE_TONE = { passed: 'ok', rejected: 'bad', harness_error: 'warn', pending: 'idle' };
+let projects = [];
+let selected = 0;
+
+const el = (tag, className, text) => {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+};
+const chip = (health) => {
+  const [label, tone] = HEALTH[health] || [health || 'desconhecido', 'idle'];
+  return el('span', 'chip ' + tone, label);
+};
+const age = (seconds) => {
+  if (seconds === null || seconds === undefined) return 'indisponível';
+  if (seconds < 60) return seconds + 's';
+  if (seconds < 3600) return Math.floor(seconds / 60) + 'min';
+  return Math.floor(seconds / 3600) + 'h ' + Math.floor((seconds % 3600) / 60) + 'min';
+};
+
+function renderProjects() {
+  const list = document.getElementById('projects');
+  list.replaceChildren();
+  projects.forEach((snapshot, index) => {
+    const button = el('button', 'project');
+    button.type = 'button';
+    button.setAttribute('aria-current', String(index === selected));
+    const head = el('div', 'project-name', (snapshot.project && snapshot.project.name) || 'projeto');
+    button.append(head, chip(snapshot.health), el('div', 'project-path', (snapshot.project && snapshot.project.path) || ''));
+    button.addEventListener('click', () => { selected = index; render(); });
+    list.append(button);
+  });
+  if (!projects.length) list.append(el('p', 'empty', 'nenhum projeto informado em --project'));
+}
+
+function metric(label, value, note) {
+  const card = el('div', 'card');
+  card.append(el('div', 'metric-label', label), el('div', 'metric-value', value));
+  if (note) card.append(el('div', 'row-title', note));
+  return card;
+}
+
+function progress(label, percent) {
+  const card = el('div', 'card');
+  const track = el('div', 'track');
+  const bar = el('div', 'bar');
+  bar.style.width = Math.max(0, Math.min(100, percent || 0)) + '%';
+  track.append(bar);
+  card.append(el('div', 'metric-label', label), el('div', 'metric-value', (percent || 0) + '%'), track);
+  return card;
+}
+
+function renderDetail() {
+  const detail = document.getElementById('detail');
+  detail.replaceChildren();
+  const snapshot = projects[selected];
+  if (!snapshot) {
+    detail.append(el('p', 'empty', 'selecione um projeto'));
+    return;
+  }
+
+  const [, , description] = HEALTH[snapshot.health] || ['', '', ''];
+  const banner = el('div', 'card banner');
+  const left = el('div');
+  left.append(el('div', 'row-key', snapshot.workflow_id || 'sem workflow'));
+  left.append(el('div', 'metric-value', snapshot.cursor || 'nenhuma feature em curso'));
+  left.append(el('p', null, snapshot.message || description));
+  banner.append(left, chip(snapshot.health));
+  detail.append(banner);
+
+  if (snapshot.health === 'error') return;
+
+  const p = snapshot.progress || {};
+  const metrics = el('div', 'metrics');
+  metrics.append(
+    progress('estimativa', p.estimated_percent),
+    metric('features', (p.completed_features || 0) + '/' + (p.total_features || 0), 'estado atual: ' + (snapshot.state || '—')),
+    metric('gates', (p.passed_gates || 0) + '/' + (p.total_gates || 5), 'tentativa ' + (snapshot.attempt ?? 0)),
+    metric('runners vivos', String((snapshot.processes || []).length), (snapshot.runner && snapshot.runner.name) || 'runner não declarado'),
+  );
+  detail.append(metrics);
+
+  const columns = el('div', 'columns');
+
+  const gates = el('div', 'card');
+  gates.append(el('h2', null, 'Gates da feature atual'));
+  const gateRows = el('div', 'rows');
+  (snapshot.gates || []).forEach((gate) => {
+    const row = el('div', 'row');
+    row.append(el('span', 'row-key', gate.gate), el('span', 'chip ' + (GATE_TONE[gate.status] || 'idle'), gate.status));
+    gateRows.append(row);
+  });
+  gates.append(gateRows);
+
+  const timeline = el('div', 'card');
+  timeline.append(el('h2', null, 'Últimos eventos do ledger'));
+  const events = el('div');
+  (snapshot.timeline || []).forEach((event) => {
+    const item = el('div', 'event');
+    item.append(el('div', 'event-type', event.type || '—'));
+    if (event.summary) item.append(el('div', 'row-title', event.summary));
+    item.append(el('div', 'event-meta', [event.feature_key, 'tentativa ' + (event.attempt ?? 0), 'há ' + age(event.age_seconds)].filter(Boolean).join(' · ')));
+    events.append(item);
+  });
+  if (!(snapshot.timeline || []).length) events.append(el('p', 'empty', 'ledger sem eventos para este workflow'));
+  timeline.append(events);
+  columns.append(gates, timeline);
+  detail.append(columns);
+
+  const features = el('div', 'card');
+  features.append(el('h2', null, 'Features do workflow'));
+  const rows = el('div', 'rows');
+  (snapshot.features || []).forEach((feature) => {
+    const row = el('div', 'row' + (feature.current ? ' current' : ''));
+    const left = el('div');
+    left.append(el('div', 'row-key', feature.feature_key || '—'));
+    if (feature.title) left.append(el('div', 'row-title', feature.title));
+    const right = el('div', 'banner');
+    right.append(el('span', 'chip ' + (feature.done ? 'ok' : feature.current ? 'info' : 'idle'), feature.state));
+    row.append(left, right);
+    rows.append(row);
+  });
+  if (!(snapshot.features || []).length) rows.append(el('p', 'empty', 'workflow sem features'));
+  features.append(rows);
+  detail.append(features);
+
+  const circuits = Object.entries(snapshot.provider_circuits || {});
+  if (circuits.length) {
+    const card = el('div', 'card');
+    card.append(el('h2', null, 'Circuitos de provider'));
+    const rows = el('div', 'rows');
+    circuits.forEach(([runner, circuit]) => {
+      const row = el('div', 'row');
+      row.append(el('span', 'row-key', runner), el('span', 'chip ' + (circuit.state === 'open' ? 'bad' : 'warn'), circuit.state + (circuit.retry_at ? ' · retry ' + circuit.retry_at : '')));
+      rows.append(row);
+    });
+    card.append(rows);
+    detail.append(card);
+  }
+}
+
+function render() {
+  renderProjects();
+  renderDetail();
+}
+
+async function refresh() {
+  const meta = document.getElementById('meta');
+  try {
+    const response = await fetch('/api/projects', { cache: 'no-store' });
+    const payload = await response.json();
+    projects = payload.projects || [];
+    if (selected >= projects.length) selected = 0;
+    meta.textContent = 'contrato ' + payload.schema_version + ' · atualizado ' + new Date().toLocaleTimeString('pt-BR');
+    render();
+  } catch (error) {
+    meta.textContent = 'falha ao consultar o monitor: ' + error.message;
+  }
+}
+
+refresh();
+window.setInterval(refresh, 10000);
+</script>
+</body>
+</html>
+HTML;
+}
+
+// A regressão carrega este arquivo como biblioteca para exercitar as funções
+// puras (saúde, gates, classificação de processo) sem subir um workflow.
+if (defined('RALPH_MONITOR_LIBRARY')) {
+    return;
+}
+
 $arguments = monitorArguments($argv);
+$subcommand = ($argv[1] ?? '');
 $root = realpath((string) ($arguments['root'] ?? getcwd()));
-$workflowId = monitorRequired($arguments, 'workflow');
 $interval = monitorInt($arguments, 'interval', 30, 1);
 $staleAfter = monitorInt($arguments, 'stale-after', max(180, $interval * 3), $interval);
 $activityStaleAfter = monitorInt($arguments, 'activity-stale-after', max(900, $staleAfter * 5), $interval);
@@ -491,14 +1176,35 @@ $asJson = monitorBool($arguments, 'json');
 $controllerPath = is_string($arguments['controller'] ?? null) && trim((string) $arguments['controller']) !== ''
     ? trim((string) $arguments['controller'])
     : null;
-$feedbackFile = is_string($arguments['feedback-file'] ?? null) && trim((string) $arguments['feedback-file']) !== ''
-    ? trim((string) $arguments['feedback-file'])
-    : monitorDefaultFeedbackFile($root);
 
 if ($root === false || ! is_dir($root)) {
     fwrite(STDERR, "erro: raiz do checkout não encontrada\n");
     exit(2);
 }
+
+if ($subcommand === 'serve') {
+    $projects = monitorRepeated($argv, 'project');
+    if ($projects === []) {
+        $projects = [$root];
+    }
+    $host = is_string($arguments['host'] ?? null) && trim((string) $arguments['host']) !== ''
+        ? trim((string) $arguments['host'])
+        : '127.0.0.1';
+
+    exit(monitorServe(
+        $host,
+        monitorInt($arguments, 'port', 7777, 1),
+        $projects,
+        $staleAfter,
+        $activityStaleAfter,
+        $controllerPath,
+    ));
+}
+
+$workflowId = monitorResolveWorkflowId($arguments, $root);
+$feedbackFile = is_string($arguments['feedback-file'] ?? null) && trim((string) $arguments['feedback-file']) !== ''
+    ? trim((string) $arguments['feedback-file'])
+    : monitorDefaultFeedbackFile($root);
 
 do {
     $snapshot = monitorSnapshot($root, $workflowId, $staleAfter, $activityStaleAfter, $controllerPath);
