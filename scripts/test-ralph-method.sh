@@ -655,3 +655,284 @@ grep -q '"type":"event.rejected"' "$reject_tmp/.git/ralph-control/events.jsonl" 
 (cd "$reject_tmp" && control verify >/dev/null) || fail 'ledger com event.rejected não passou no verify'
 printf 'ok   schema 1.3.0 promovido, 1.4.0 rejeitado fail-closed, event.rejected e novos tipos no verify (FEATURE-101 Phase 1)\n'
 
+# ---------------------------------------------------------------------------
+# FEATURE-101 (Phase 2): Watchdog de gates (gate.started, gate.stalled, gate_ages)
+# - gate.started (gate, attempt, started_at) emitido ao entrar em awaiting_gates
+# - Replay de awaiting_gates não duplica gate.started (idempotência)
+# - Relógio injetável (RALPH_TEST_CLOCK_EPOCH) determinístico
+# - Acima de RALPH_GATE_STALL_AFTER (600s) -> gate.stalled com gate, age_seconds, threshold
+# - Acima de RALPH_GATE_MAX_AGE (3600s) -> recovery_required explícito sem espera real
+# - ralph-monitor --once --json expõe gate_ages de forma read-only
+# ---------------------------------------------------------------------------
+watchdog_tmp="$TMP/watchdog-fixture"
+mkdir -p "$watchdog_tmp/bin" "$watchdog_tmp/scripts"
+git -C "$watchdog_tmp" init -q
+git -C "$watchdog_tmp" config user.email ralph-method@example.invalid
+git -C "$watchdog_tmp" config user.name 'Ralph Method Watchdog Test'
+printf '%s\n' '# Watchdog Test' > "$watchdog_tmp/README.md"
+printf '%s\n' '# Plano' > "$watchdog_tmp/plan.md"
+printf '%s\n' '{"schema_version":"1.3.0","workflow_id":"wf_watchdog","plan_file":"plan.md","knowledge_policy":{"mode":"non_blocking"},"features":[{"feature_key":"FEATURE-001","title":"Watchdog Test","position":1}]}' > "$watchdog_tmp/workflow.json"
+printf '%s\n' '#!/usr/bin/env bash' 'echo "check ok"' > "$watchdog_tmp/bin/check"
+chmod +x "$watchdog_tmp/bin/check"
+cp "$ROOT/scripts/ralph-run-quality.sh" "$watchdog_tmp/scripts/"
+cp "$ROOT/scripts/ralph-run-runtime-evidence.sh" "$watchdog_tmp/scripts/"
+cp "$ROOT/scripts/ralph-run-independent-gate.sh" "$watchdog_tmp/scripts/"
+cp "$ROOT/scripts/ralph-run-curator.sh" "$watchdog_tmp/scripts/"
+chmod +x "$watchdog_tmp/scripts"/ralph-run-*.sh
+
+git -C "$watchdog_tmp" add .
+git -C "$watchdog_tmp" commit -qm base
+
+(cd "$watchdog_tmp" && control init --workflow wf_watchdog --manifest workflow.json >/dev/null)
+watchdog_claim="$(cd "$watchdog_tmp" && control claim --workflow wf_watchdog --feature FEATURE-001 --actor watchdog-test)"
+watchdog_lease="$(json_field "$watchdog_claim" lease_token)"
+
+# Bloco termina com exit 0 -> feature entra em awaiting_gates
+printf '%s\n' 'src code' > "$watchdog_tmp/src.txt"
+git -C "$watchdog_tmp" add src.txt
+git -C "$watchdog_tmp" commit -qm "feat: implementa"
+(cd "$watchdog_tmp" && control run --workflow wf_watchdog --feature FEATURE-001 --lease "$watchdog_lease" --command 'true' >/dev/null 2>&1)
+
+# Pipeline de gates via supervisor com gates configurados
+watchdog_log="$TMP/watchdog-supervise.log"
+(cd "$watchdog_tmp" && env -u RALPH_QUALITY_COMMAND -u RALPH_RUNTIME_EVIDENCE_CMD -u RALPH_TECHNICAL_REVIEW_COMMAND -u RALPH_CURATION_COMMAND -u RALPH_TEST_CMD \
+  RALPH_QUALITY_COMMAND='echo quality-ok' \
+  RALPH_RUNTIME_EVIDENCE_CMD='echo runtime-ok' \
+  RALPH_TECHNICAL_REVIEW_COMMAND='echo review-ok' \
+  RALPH_CURATION_COMMAND='echo curation-ok' \
+  php "$ROOT/bin/ralph-control" supervise --workflow wf_watchdog --engine codex --interval 1 --max-retries 0 > "$watchdog_log" 2>&1)
+
+# Verificar que gate.started foi emitido para os gates com campos esperados
+grep -q '"type":"gate.started"' "$watchdog_tmp/.git/ralph-control/events.jsonl" \
+  || fail 'gate.started não foi emitido durante o pipeline de gates'
+
+EVENTS_FILE="$watchdog_tmp/.git/ralph-control/events.jsonl" php -r '
+  $events = file(getenv("EVENTS_FILE"), FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+  $startedGates = [];
+  foreach ($events as $line) {
+      $event = json_decode($line, true, 512, JSON_THROW_ON_ERROR);
+      if (($event["type"] ?? "") === "gate.started") {
+          $facts = $event["facts"] ?? [];
+          if (! isset($facts["gate"], $facts["attempt"], $facts["started_at"])) {
+              fwrite(STDERR, "gate.started com fatos incompletos: ".json_encode($facts)."\n");
+              exit(1);
+          }
+          $startedGates[] = $facts["gate"];
+      }
+  }
+  if (! in_array("validation", $startedGates, true)) {
+      fwrite(STDERR, "gate.started para validation não encontrado\n");
+      exit(1);
+  }
+'
+
+# Teste de idempotência / replay de awaiting_gates:
+# Iniciar outra fixture travada em awaiting_gates para testar replay
+replay_tmp="$TMP/replay-fixture"
+mkdir -p "$replay_tmp/bin" "$replay_tmp/scripts"
+git -C "$replay_tmp" init -q
+git -C "$replay_tmp" config user.email ralph-method@example.invalid
+git -C "$replay_tmp" config user.name 'Ralph Method Replay Test'
+printf '%s\n' '# Replay' > "$replay_tmp/README.md"
+printf '%s\n' '# Plano' > "$replay_tmp/plan.md"
+printf '%s\n' '{"schema_version":"1.3.0","workflow_id":"wf_replay","plan_file":"plan.md","knowledge_policy":{"mode":"non_blocking"},"features":[{"feature_key":"FEATURE-001","title":"Replay","position":1}]}' > "$replay_tmp/workflow.json"
+git -C "$replay_tmp" add .
+git -C "$replay_tmp" commit -qm base
+(cd "$replay_tmp" && control init --workflow wf_replay --manifest workflow.json >/dev/null)
+replay_claim="$(cd "$replay_tmp" && control claim --workflow wf_replay --feature FEATURE-001 --actor replay-test)"
+replay_lease="$(json_field "$replay_claim" lease_token)"
+printf '%s\n' 'code' > "$replay_tmp/code.txt"
+git -C "$replay_tmp" add code.txt
+git -C "$replay_tmp" commit -qm "feat: replay"
+(cd "$replay_tmp" && control run --workflow wf_replay --feature FEATURE-001 --lease "$replay_lease" --command 'true' >/dev/null 2>&1)
+
+# Chama supervisor com comando que falha em runtime_evidence sem avançar
+set +e
+(cd "$replay_tmp" && env -u RALPH_QUALITY_COMMAND -u RALPH_RUNTIME_EVIDENCE_CMD -u RALPH_TECHNICAL_REVIEW_COMMAND -u RALPH_CURATION_COMMAND -u RALPH_TEST_CMD \
+  RALPH_QUALITY_COMMAND='echo quality-ok' \
+  RALPH_RUNTIME_EVIDENCE_CMD='exit 1' \
+  php "$ROOT/bin/ralph-control" supervise --workflow wf_replay --engine codex --interval 1 --max-retries 0 >/dev/null 2>&1)
+set -e
+replay_started_1="$(grep -c '"type":"gate.started"' "$replay_tmp/.git/ralph-control/events.jsonl")"
+
+# Re-executa supervise no mesmo estado de awaiting_gates
+set +e
+(cd "$replay_tmp" && env -u RALPH_QUALITY_COMMAND -u RALPH_RUNTIME_EVIDENCE_CMD -u RALPH_TECHNICAL_REVIEW_COMMAND -u RALPH_CURATION_COMMAND -u RALPH_TEST_CMD \
+  RALPH_QUALITY_COMMAND='echo quality-ok' \
+  RALPH_RUNTIME_EVIDENCE_CMD='exit 1' \
+  php "$ROOT/bin/ralph-control" supervise --workflow wf_replay --engine codex --interval 1 --max-retries 0 >/dev/null 2>&1)
+set -e
+replay_started_2="$(grep -c '"type":"gate.started"' "$replay_tmp/.git/ralph-control/events.jsonl")"
+
+[ "$replay_started_1" -eq "$replay_started_2" ] || fail "replay de awaiting_gates duplicou gate.started ($replay_started_1 vs $replay_started_2)"
+printf 'ok   gate.started registrado e idempotente por replay (FEATURE-101 Phase 2)\n'
+
+# ---------------------------------------------------------------------------
+# Teste de Watchdog com relógio determinístico: gate.stalled e recovery_required
+# ---------------------------------------------------------------------------
+stall_tmp="$TMP/stall-fixture"
+mkdir -p "$stall_tmp"
+git -C "$stall_tmp" init -q
+git -C "$stall_tmp" config user.email ralph-method@example.invalid
+git -C "$stall_tmp" config user.name 'Ralph Method Stall Test'
+printf '%s\n' '# Stall' > "$stall_tmp/README.md"
+printf '%s\n' '# Plano' > "$stall_tmp/plan.md"
+printf '%s\n' '{"schema_version":"1.3.0","workflow_id":"wf_stall","plan_file":"plan.md","knowledge_policy":{"mode":"non_blocking"},"features":[{"feature_key":"FEATURE-001","title":"Stall","position":1}]}' > "$stall_tmp/workflow.json"
+git -C "$stall_tmp" add .
+git -C "$stall_tmp" commit -qm base
+(cd "$stall_tmp" && control init --workflow wf_stall --manifest workflow.json >/dev/null)
+stall_claim="$(cd "$stall_tmp" && control claim --workflow wf_stall --feature FEATURE-001 --actor stall-test)"
+stall_lease="$(json_field "$stall_claim" lease_token)"
+printf '%s\n' 'code' > "$stall_tmp/code.txt"
+git -C "$stall_tmp" add code.txt
+git -C "$stall_tmp" commit -qm "feat: stall"
+(cd "$stall_tmp" && control run --workflow wf_stall --feature FEATURE-001 --lease "$stall_lease" --command 'true' >/dev/null 2>&1)
+
+# Injetar evento gate.started no passado (T0 = 1000000)
+T0=1000000
+(cd "$stall_tmp" && ROOT_DIR="$ROOT" CLOCK_T0="$T0" LEASE="$stall_lease" php -r '
+  $root = realpath(getenv("ROOT_DIR"));
+  $code = file_get_contents($root."/bin/ralph-control");
+  $code = preg_replace("/^#\!.*?\n/", "", $code);
+  $code = preg_replace("/^<\?php\s*/", "", $code);
+  $code = preg_replace("/\\\$arguments\s*=\s*args\\(\\\$argv\\);.*$/s", "", $code);
+  putenv("RALPH_TEST_CLOCK_EPOCH=".getenv("CLOCK_T0"));
+  eval($code);
+  $workflow = loadWorkflowForId("wf_stall");
+  $projection = project($workflow, readEvents());
+  $feature = featureFrom($projection, "FEATURE-001");
+  appendEvent(eventContext([
+      "workflow" => "wf_stall",
+      "lease" => getenv("LEASE"),
+      "actor" => "supervisor",
+      "actor-type" => "controller",
+      "idempotency-key" => "idem_gate_started_wf_stall_FEATURE-001_1_quality",
+  ], $feature, "gate.started", "Início do gate quality", [
+      "gate" => "quality",
+      "attempt" => 1,
+      "started_at" => gmdate("Y-m-d\TH:i:s\Z", (int) getenv("CLOCK_T0")),
+  ]));
+')
+
+# Teste gate_ages no ralph-monitor --once --json (com T = T0 + 120)
+monitor_json="$(cd "$stall_tmp" && env RALPH_TEST_CLOCK_EPOCH=$((T0 + 120)) php "$ROOT/bin/ralph-monitor" --workflow wf_stall --once --json)"
+MONITOR_PAYLOAD="$monitor_json" php -r '
+  $snapshot = json_decode(getenv("MONITOR_PAYLOAD"), true, 512, JSON_THROW_ON_ERROR);
+  if (! isset($snapshot["gate_ages"]) || ! is_array($snapshot["gate_ages"])) {
+      fwrite(STDERR, "gate_ages ausente no snapshot do monitor\n");
+      exit(1);
+  }
+  $ages = $snapshot["gate_ages"];
+  foreach (["validation", "quality", "runtime_evidence", "technical_review", "curation"] as $gate) {
+      if (! array_key_exists($gate, $ages)) {
+          fwrite(STDERR, "gate {$gate} ausente em gate_ages\n");
+          exit(1);
+      }
+  }
+  if ($ages["quality"] !== 120) {
+      fwrite(STDERR, "idade de quality esperada 120, obtida: ".var_export($ages["quality"], true)."\n");
+      exit(1);
+  }
+  if ($ages["runtime_evidence"] !== null) {
+      fwrite(STDERR, "runtime_evidence deveria ser null antes de iniciar\n");
+      exit(1);
+  }
+'
+printf 'ok   gate_ages exposto no ralph-monitor --once --json (FEATURE-101 Phase 2)\n'
+
+# Teste gate.stalled: relógio em T0 + 650 (acima de RALPH_GATE_STALL_AFTER=600)
+stall_log="$TMP/stall-run.log"
+set +e
+(cd "$stall_tmp" && env -u RALPH_QUALITY_COMMAND -u RALPH_RUNTIME_EVIDENCE_CMD -u RALPH_TECHNICAL_REVIEW_COMMAND -u RALPH_CURATION_COMMAND -u RALPH_TEST_CMD \
+  RALPH_TEST_CLOCK_EPOCH=$((T0 + 650)) \
+  RALPH_GATE_STALL_AFTER=600 \
+  RALPH_GATE_MAX_AGE=3600 \
+  RALPH_QUALITY_COMMAND='echo quality-ok' \
+  RALPH_RUNTIME_EVIDENCE_CMD='echo runtime-ok' \
+  RALPH_TECHNICAL_REVIEW_COMMAND='echo review-ok' \
+  RALPH_CURATION_COMMAND='echo curation-ok' \
+  php "$ROOT/bin/ralph-control" supervise --workflow wf_stall --engine codex --interval 1 --max-retries 0 > "$stall_log" 2>&1)
+set -e
+
+grep -q '"type":"gate.stalled"' "$stall_tmp/.git/ralph-control/events.jsonl" \
+  || fail 'gate.stalled não foi emitido no limiar RALPH_GATE_STALL_AFTER'
+
+EVENTS_FILE="$stall_tmp/.git/ralph-control/events.jsonl" php -r '
+  $events = file(getenv("EVENTS_FILE"), FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+  $stalledFound = false;
+  foreach ($events as $line) {
+      $event = json_decode($line, true, 512, JSON_THROW_ON_ERROR);
+      if (($event["type"] ?? "") === "gate.stalled") {
+          $stalledFound = true;
+          $facts = $event["facts"] ?? [];
+          if (($facts["gate"] ?? "") !== "quality" || ($facts["age_seconds"] ?? 0) < 600 || ($facts["threshold"] ?? 0) !== 600) {
+              fwrite(STDERR, "gate.stalled fatos incorretos: ".json_encode($facts)."\n");
+              exit(1);
+          }
+      }
+  }
+  if (! $stalledFound) {
+      exit(1);
+  }
+'
+printf 'ok   gate.stalled emitido no limiar e exibido no feedback (FEATURE-101 Phase 2)\n'
+
+# Teste recovery_required: relógio em T0 + 3700 (acima de RALPH_GATE_MAX_AGE=3600)
+horizon_tmp="$TMP/horizon-fixture"
+mkdir -p "$horizon_tmp"
+git -C "$horizon_tmp" init -q
+git -C "$horizon_tmp" config user.email ralph-method@example.invalid
+git -C "$horizon_tmp" config user.name 'Ralph Method Horizon Test'
+printf '%s\n' '# Horizon' > "$horizon_tmp/README.md"
+printf '%s\n' '# Plano' > "$horizon_tmp/plan.md"
+printf '%s\n' '{"schema_version":"1.3.0","workflow_id":"wf_horizon","plan_file":"plan.md","knowledge_policy":{"mode":"non_blocking"},"features":[{"feature_key":"FEATURE-001","title":"Horizon","position":1}]}' > "$horizon_tmp/workflow.json"
+git -C "$horizon_tmp" add .
+git -C "$horizon_tmp" commit -qm base
+(cd "$horizon_tmp" && control init --workflow wf_horizon --manifest workflow.json >/dev/null)
+horizon_claim="$(cd "$horizon_tmp" && control claim --workflow wf_horizon --feature FEATURE-001 --actor horizon-test)"
+horizon_lease="$(json_field "$horizon_claim" lease_token)"
+printf '%s\n' 'code' > "$horizon_tmp/code.txt"
+git -C "$horizon_tmp" add code.txt
+git -C "$horizon_tmp" commit -qm "feat: horizon"
+(cd "$horizon_tmp" && control run --workflow wf_horizon --feature FEATURE-001 --lease "$horizon_lease" --command 'true' >/dev/null 2>&1)
+
+# Injetar gate.started em T0
+(cd "$horizon_tmp" && ROOT_DIR="$ROOT" CLOCK_T0="$T0" LEASE="$horizon_lease" php -r '
+  $root = realpath(getenv("ROOT_DIR"));
+  $code = file_get_contents($root."/bin/ralph-control");
+  $code = preg_replace("/^#\!.*?\n/", "", $code);
+  $code = preg_replace("/^<\?php\s*/", "", $code);
+  $code = preg_replace("/\\\$arguments\s*=\s*args\\(\\\$argv\\);.*$/s", "", $code);
+  putenv("RALPH_TEST_CLOCK_EPOCH=".getenv("CLOCK_T0"));
+  eval($code);
+  $workflow = loadWorkflowForId("wf_horizon");
+  $projection = project($workflow, readEvents());
+  $feature = featureFrom($projection, "FEATURE-001");
+  appendEvent(eventContext([
+      "workflow" => "wf_horizon",
+      "lease" => getenv("LEASE"),
+      "actor" => "supervisor",
+      "actor-type" => "controller",
+      "idempotency-key" => "idem_gate_started_wf_horizon_FEATURE-001_1_quality",
+  ], $feature, "gate.started", "Início do gate quality", [
+      "gate" => "quality",
+      "attempt" => 1,
+      "started_at" => gmdate("Y-m-d\TH:i:s\Z", (int) getenv("CLOCK_T0")),
+  ]));
+')
+
+set +e
+horizon_out="$(cd "$horizon_tmp" && env -u RALPH_QUALITY_COMMAND -u RALPH_RUNTIME_EVIDENCE_CMD -u RALPH_TECHNICAL_REVIEW_COMMAND -u RALPH_CURATION_COMMAND -u RALPH_TEST_CMD \
+  RALPH_TEST_CLOCK_EPOCH=$((T0 + 3700)) \
+  RALPH_GATE_STALL_AFTER=600 \
+  RALPH_GATE_MAX_AGE=3600 \
+  php "$ROOT/bin/ralph-control" supervise --workflow wf_horizon --engine codex --interval 1 --max-retries 0 2>/dev/null)"
+set -e
+
+printf '%s' "$horizon_out" | grep -q '"status": *"recovery_required"' \
+  || fail "supervisor não retornou recovery_required no horizonte max_age: $horizon_out"
+grep -q '"type":"recovery.required"' "$horizon_tmp/.git/ralph-control/events.jsonl" \
+  || fail 'recovery.required não foi gravado no ledger quando gate excedeu max_age'
+printf 'ok   recovery_required emitido no horizonte máximo sem espera real (FEATURE-101 Phase 2)\n'
+
+

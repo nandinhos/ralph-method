@@ -93,7 +93,7 @@ setup_repo "$repo_a" "$counter_a" 1
 
 supervise_a="$TMP/supervise-a.log"
 set +e
-timeout 90 env \
+timeout 90 env -u RALPH_QUALITY_COMMAND -u RALPH_RUNTIME_EVIDENCE_CMD -u RALPH_TEST_CMD \
   RALPH_TECHNICAL_REVIEW_COMMAND='bash bin/faulty-gate.sh' \
   RALPH_CURATION_COMMAND='echo curation-ok' \
   bash -c 'cd "$1" && "$2" supervise --workflow wf_gate_recovery --engine codex --interval 1 --max-retries 0 --gate-harness-retries 1' _ "$repo_a" "$ROOT/bin/ralph-control" > "$supervise_a" 2>&1
@@ -123,7 +123,7 @@ setup_repo "$repo_b" "$counter_b" 0
 
 supervise_b="$TMP/supervise-b.log"
 set +e
-timeout 90 env \
+timeout 90 env -u RALPH_QUALITY_COMMAND -u RALPH_RUNTIME_EVIDENCE_CMD -u RALPH_TEST_CMD \
   RALPH_TECHNICAL_REVIEW_COMMAND='bash bin/faulty-gate.sh' \
   RALPH_CURATION_COMMAND='echo curation-ok' \
   bash -c 'cd "$1" && "$2" supervise --workflow wf_gate_recovery --engine codex --interval 1 --max-retries 0 --gate-harness-retries 3' _ "$repo_b" "$ROOT/bin/ralph-control" > "$supervise_b" 2>&1
@@ -148,11 +148,11 @@ grep -q "gate_harness_error_limit\|falhou sem evidência após limite" "$repo_b/
   && fail 'B: retry automático esgotou o limite (não deveria)'
 
 # ── Cenário C: gate-test valida o comando sem tocar no workflow. ─────────────
-selftest_ok="$(RALPH_TECHNICAL_REVIEW_COMMAND='echo review-ok' "$ROOT/bin/ralph-control" gate-test --gate technical_review 2>&1)"
+selftest_ok="$(env -u RALPH_QUALITY_COMMAND -u RALPH_RUNTIME_EVIDENCE_CMD -u RALPH_TEST_CMD RALPH_TECHNICAL_REVIEW_COMMAND='echo review-ok' "$ROOT/bin/ralph-control" gate-test --gate technical_review 2>&1)"
 printf '%s' "$selftest_ok" | grep -q '"classification": "passed"' \
   || fail 'C: gate-test não classificou comando saudável como passed'
 
-selftest_bad="$(RALPH_TECHNICAL_REVIEW_COMMAND="bash -c 'exit 1'" "$ROOT/bin/ralph-control" gate-test --gate technical_review 2>&1)"
+selftest_bad="$(env -u RALPH_QUALITY_COMMAND -u RALPH_RUNTIME_EVIDENCE_CMD -u RALPH_TEST_CMD RALPH_TECHNICAL_REVIEW_COMMAND="bash -c 'exit 1'" "$ROOT/bin/ralph-control" gate-test --gate technical_review 2>&1)"
 printf '%s' "$selftest_bad" | grep -q '"classification": "gate_harness_error"' \
   || fail 'C: gate-test não classificou comando sem evidência como gate_harness_error'
 
@@ -166,7 +166,7 @@ setup_repo "$repo_d" "$counter_d" 2
 # Esgota o limite de harness error do technical_review -> recovery_required.
 supervise_d="$TMP/supervise-d.log"
 set +e
-timeout 90 env \
+timeout 90 env -u RALPH_QUALITY_COMMAND -u RALPH_RUNTIME_EVIDENCE_CMD -u RALPH_TEST_CMD \
   RALPH_TECHNICAL_REVIEW_COMMAND='bash bin/faulty-gate.sh' \
   RALPH_CURATION_COMMAND='echo curation-ok' \
   bash -c 'cd "$1" && "$2" supervise --workflow wf_gate_recovery --engine codex --interval 1 --max-retries 0 --gate-harness-retries 1' _ "$repo_d" "$ROOT/bin/ralph-control" > "$supervise_d" 2>&1
@@ -192,7 +192,7 @@ chmod +x "$TMP/debug-report.sh"
 # re-roda SÓ o gate, sem novo attempt.started.
 supervise_d2="$TMP/supervise-d2.log"
 set +e
-timeout 35 env \
+timeout 35 env -u RALPH_QUALITY_COMMAND -u RALPH_RUNTIME_EVIDENCE_CMD -u RALPH_TEST_CMD \
   RALPH_TECHNICAL_REVIEW_COMMAND='bash bin/faulty-gate.sh' \
   RALPH_CURATION_COMMAND='echo curation-ok' \
   bash -c 'cd "$1" && "$2" supervise --workflow wf_gate_recovery --engine codex --interval 1 --max-retries 0 --gate-harness-retries 3' _ "$repo_d" "$ROOT/bin/ralph-control" > "$supervise_d2" 2>&1

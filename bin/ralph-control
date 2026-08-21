@@ -1005,10 +1005,10 @@ function executionPolicyHash(?array $policy): ?string
 }
 
 /**
- * Relógio injetável da FEATURE-094. Em produção usa o tempo real; as fixtures
- * usam RALPH_TEST_CLOCK_EPOCH para testar cooldown sem dormir.
+ * Relógio injetável (FEATURE-094 / FEATURE-101). Em produção usa o tempo real; as fixtures
+ * usam RALPH_TEST_CLOCK_EPOCH para testar cooldown, stalls e timeouts sem dormir.
  */
-function failoverNow(): int
+function ralphNow(): int
 {
     $injected = getenv('RALPH_TEST_CLOCK_EPOCH');
     if (is_string($injected) && preg_match('/^\d+$/', $injected) === 1) {
@@ -1016,6 +1016,80 @@ function failoverNow(): int
     }
 
     return time();
+}
+
+function ralphIsoTimestamp(?int $epoch = null): string
+{
+    return gmdate('Y-m-d\TH:i:s\Z', $epoch ?? ralphNow());
+}
+
+function failoverNow(): int
+{
+    return ralphNow();
+}
+
+/**
+ * Deriva as idades de cada gate (em segundos) a partir do ledger.
+ * Para gates passados: tempo entre gate.started e gate.passed.
+ * Para gates ativos/pendentes com gate.started: tempo desde gate.started até now.
+ * Para gates não iniciados: null.
+ *
+ * @param list<array<string, mixed>> $events
+ * @return array<string, int|null>
+ */
+function deriveGateAges(array $events, string $workflowId, string $featureKey, ?int $attempt = null, ?int $now = null): array
+{
+    $mandatoryGates = ['validation', 'quality', 'runtime_evidence', 'technical_review', 'curation'];
+    $result = array_fill_keys($mandatoryGates, null);
+    $nowEpoch = $now ?? ralphNow();
+    $startedMap = [];
+    $finishedMap = [];
+
+    foreach ($events as $event) {
+        if (! is_array($event)
+            || ($event['workflow_id'] ?? null) !== $workflowId
+            || ($event['feature_key'] ?? null) !== $featureKey
+        ) {
+            continue;
+        }
+        $eventAttempt = (int) ($event['attempt'] ?? 0);
+        if ($attempt !== null && $eventAttempt !== $attempt) {
+            continue;
+        }
+
+        $type = (string) ($event['type'] ?? '');
+        $facts = is_array($event['facts'] ?? null) ? $event['facts'] : [];
+        $gate = (string) ($facts['gate'] ?? '');
+        if (! in_array($gate, $mandatoryGates, true)) {
+            continue;
+        }
+
+        $ts = is_string($event['timestamp'] ?? null) ? strtotime($event['timestamp']) : null;
+        if ($ts === null || $ts === false) {
+            continue;
+        }
+
+        if ($type === 'gate.started') {
+            $startedMap[$gate] = (int) $ts;
+        } elseif (in_array($type, ['gate.passed', 'gate.rejected', 'gate.harness_error'], true)) {
+            $finishedMap[$gate] = (int) $ts;
+        }
+    }
+
+    foreach ($mandatoryGates as $gate) {
+        if (! isset($startedMap[$gate])) {
+            $result[$gate] = null;
+            continue;
+        }
+        $started = $startedMap[$gate];
+        if (isset($finishedMap[$gate]) && $finishedMap[$gate] >= $started) {
+            $result[$gate] = max(0, $finishedMap[$gate] - $started);
+        } else {
+            $result[$gate] = max(0, $nowEpoch - $started);
+        }
+    }
+
+    return $result;
 }
 
 /**
@@ -2119,7 +2193,7 @@ function appendEventUnlocked(array $payload): array
         'attempt' => (int) ($payload['attempt'] ?? 0),
         'lease_token_hash' => $payload['lease_token_hash'] ?? null,
         'type' => $type,
-        'timestamp' => gmdate('Y-m-d\TH:i:s\Z'),
+        'timestamp' => (string) ($payload['timestamp'] ?? ralphIsoTimestamp()),
         'actor' => $actor,
         'correlation_id' => (string) ($payload['correlation_id'] ?? 'corr_'.bin2hex(random_bytes(8))),
         'causation_id' => $payload['causation_id'] ?? null,
@@ -2168,6 +2242,8 @@ function project(array $workflow, array $events): array
         $feature['state'] = 'pending';
         $feature['attempt'] = 0;
         $feature['gates'] = [];
+        $feature['gate_started'] = [];
+        $feature['gate_stalled'] = [];
         $feature['knowledge_state'] = 'not_started';
         $feature['delegations'] = [];
         $features[$feature['feature_key']] = $feature;
@@ -2201,6 +2277,14 @@ function project(array $workflow, array $events): array
                         && ! isset($feature['gate_entered_at'])) {
                         $feature['gate_entered_at'] = (int) strtotime((string) ($event['timestamp'] ?? 'now'));
                     }
+                    break;
+                case 'gate.started':
+                    $gateName = $event['facts']['gate'] ?? 'unknown';
+                    $feature['gate_started'][$gateName] = $event['timestamp'];
+                    break;
+                case 'gate.stalled':
+                    $gateName = $event['facts']['gate'] ?? 'unknown';
+                    $feature['gate_stalled'][$gateName] = $event['facts'] ?? [];
                     break;
                 case 'gate.passed': $feature['gates'][$event['facts']['gate'] ?? 'unknown'] = 'passed';
                     break;
@@ -2252,6 +2336,8 @@ function project(array $workflow, array $events): array
                     $feature['state'] = 'running';
                     if (($event['attempt'] ?? 0) > ($feature['attempt'] ?? 0)) {
                         $feature['gates'] = [];
+                        $feature['gate_started'] = [];
+                        $feature['gate_stalled'] = [];
                         $feature['knowledge_state'] = 'not_started';
                         unset($feature['result']);
                     }
@@ -2263,6 +2349,8 @@ function project(array $workflow, array $events): array
                 case 'recovery.resolved':
                     $feature['state'] = 'pending';
                     $feature['gates'] = [];
+                    $feature['gate_started'] = [];
+                    $feature['gate_stalled'] = [];
                     $feature['knowledge_state'] = 'not_started';
                     $feature['lease_token_hash'] = null;
                     unset($feature['result']);
@@ -2304,6 +2392,8 @@ function project(array $workflow, array $events): array
                     }
                     $feature['provider_failover'] = $event['facts'] ?? [];
                     $feature['gates'] = [];
+                    $feature['gate_started'] = [];
+                    $feature['gate_stalled'] = [];
                     unset($feature['result']);
                     break;
                 case 'provider.capacity_wait_started':
@@ -2864,6 +2954,129 @@ function supervisorGateCommand(array $arguments, string $gate): ?string
     return trim($command);
 }
 
+/**
+ * Registra o início do processamento de um gate no ledger de forma idempotente.
+ */
+function supervisorRecordGateStarted(string $workflowId, string $featureKey, int $attempt, string $gate, string $lease): void
+{
+    withLock(function () use ($workflowId, $featureKey, $attempt, $gate, $lease): void {
+        $events = readEvents();
+        foreach (array_reverse($events) as $event) {
+            if (($event['feature_key'] ?? null) === $featureKey
+                && (int) ($event['attempt'] ?? -1) === $attempt
+            ) {
+                if (($event['type'] ?? null) === 'gate.started' && (($event['facts']['gate'] ?? null) === $gate)) {
+                    return;
+                }
+                if (in_array($event['type'] ?? null, ['attempt.started', 'block.finished'], true)) {
+                    break;
+                }
+            }
+        }
+
+        $now = ralphNow();
+        $startedAt = ralphIsoTimestamp($now);
+        $idempotencyKey = 'idem_gate_started_'.$workflowId.'_'.$featureKey.'_'.$attempt.'_'.$gate;
+        appendEvent(eventContext([
+            'workflow' => $workflowId,
+            'actor' => 'supervisor',
+            'actor-type' => 'controller',
+            'lease' => $lease,
+            'idempotency-key' => $idempotencyKey,
+        ], [
+            'feature_key' => $featureKey,
+            'attempt' => $attempt,
+        ], 'gate.started', 'Início do processamento do gate '.$gate, [
+            'gate' => $gate,
+            'attempt' => $attempt,
+            'started_at' => $startedAt,
+        ]));
+    });
+}
+
+/**
+ * Verifica o watchdog de gates a partir do ledger.
+ * Se algum gate ativo exceder RALPH_GATE_MAX_AGE -> registra recovery.required e retorna status recovery_required.
+ * Se algum gate ativo exceder RALPH_GATE_STALL_AFTER -> emite gate.stalled e retorna status gate_stalled.
+ *
+ * @param array<string, mixed> $arguments
+ * @param array<string, mixed> $feature
+ * @return array<string, mixed>
+ */
+function supervisorCheckGateWatchdog(array $arguments, string $workflowId, string $featureKey, array $feature, int $gateStallAfter, int $gateMaxAge): array
+{
+    $events = readEvents();
+    $attempt = (int) ($feature['attempt'] ?? 0);
+    $gateAges = deriveGateAges($events, $workflowId, $featureKey, $attempt);
+    $mandatoryGates = ['validation', 'quality', 'runtime_evidence', 'technical_review', 'curation'];
+
+    foreach ($mandatoryGates as $gate) {
+        $age = $gateAges[$gate] ?? null;
+        if ($age === null) {
+            continue;
+        }
+
+        // Verifica se o gate ainda está em andamento (não possui gate.passed)
+        $gateState = $feature['gates'][$gate] ?? null;
+        if ($gateState === 'passed') {
+            continue;
+        }
+
+        // Checagem de horizonte máximo: RALPH_GATE_MAX_AGE
+        if ($age >= $gateMaxAge) {
+            withLock(function () use ($arguments, $workflowId, $featureKey, $feature, $gate, $age, $gateMaxAge): void {
+                $idempotencyKey = 'idem_recovery_gate_max_age_'.$workflowId.'_'.$featureKey.'_'.($feature['attempt'] ?? 0).'_'.$gate;
+                appendEvent(eventContext(array_merge($arguments, [
+                    'workflow' => $workflowId,
+                    'actor' => 'supervisor',
+                    'actor-type' => 'controller',
+                    'idempotency-key' => $idempotencyKey,
+                ]), $feature, 'recovery.required', 'Gate '.$gate.' excedeu o tempo máximo permitido ('.$age.'s >= '.$gateMaxAge.'s); recovery explícito exigido', [
+                    'reason' => 'gate_max_age_exceeded',
+                    'gate' => $gate,
+                    'attempt' => $feature['attempt'] ?? 0,
+                    'age_seconds' => $age,
+                    'max_age' => $gateMaxAge,
+                ]));
+            });
+
+            return [
+                'status' => 'recovery_required',
+                'gate' => $gate,
+                'age_seconds' => $age,
+                'threshold' => $gateMaxAge,
+            ];
+        }
+
+        // Checagem de stall: RALPH_GATE_STALL_AFTER
+        if ($age >= $gateStallAfter) {
+            withLock(function () use ($workflowId, $featureKey, $feature, $gate, $age, $gateStallAfter): void {
+                $idempotencyKey = 'idem_gate_stalled_'.$workflowId.'_'.$featureKey.'_'.($feature['attempt'] ?? 0).'_'.$gate;
+                appendEvent(eventContext([
+                    'workflow' => $workflowId,
+                    'actor' => 'supervisor',
+                    'actor-type' => 'controller',
+                    'idempotency-key' => $idempotencyKey,
+                ], $feature, 'gate.stalled', 'Gate '.$gate.' demorando além do esperado ('.$age.'s >= '.$gateStallAfter.'s)', [
+                    'gate' => $gate,
+                    'attempt' => $feature['attempt'] ?? 0,
+                    'age_seconds' => $age,
+                    'threshold' => $gateStallAfter,
+                ]));
+            });
+
+            return [
+                'status' => 'gate_stalled',
+                'gate' => $gate,
+                'age_seconds' => $age,
+                'threshold' => $gateStallAfter,
+            ];
+        }
+    }
+
+    return ['status' => 'ok', 'gate_ages' => $gateAges];
+}
+
 /** @return array<string, mixed> */
 function supervisorRunGatePipeline(array $arguments, string $workflowId, string $featureKey): array
 {
@@ -2885,6 +3098,7 @@ function supervisorRunGatePipeline(array $arguments, string $workflowId, string 
             if (($feature['state'] ?? null) !== 'awaiting_gates') {
                 return ['status' => $feature['state'] ?? 'unknown', 'workflow_id' => $workflowId, 'feature_key' => $featureKey];
             }
+            supervisorRecordGateStarted($workflowId, $featureKey, (int) $feature['attempt'], $gate, $lease);
             // FEATURE-097: gate marcado como harness_error (defeito do comando)
             // é re-rodado; não há debugging da feature nem re-execução do bloco.
             if (($feature['gates'][$gate] ?? null) === 'harness_error') {
@@ -2957,6 +3171,8 @@ function superviseWorkflow(array $arguments): void
     $interval = max(1, (int) ($arguments['interval'] ?? 30));
     $staleAfter = max($interval, (int) ($arguments['stale-after'] ?? max(180, $interval * 3)));
     $activityStaleAfter = max($interval, (int) ($arguments['activity-stale-after'] ?? max(900, $staleAfter * 5)));
+    $gateStallAfter = max(1, (int) ($arguments['gate-stall-after'] ?? (getenv('RALPH_GATE_STALL_AFTER') ?: 600)));
+    $gateMaxAge = max($gateStallAfter, (int) ($arguments['gate-max-age'] ?? (getenv('RALPH_GATE_MAX_AGE') ?: 3600)));
     $maxRetries = max(0, (int) ($arguments['max-retries'] ?? 3));
     $heartbeatInterval = max(1, (int) ($arguments['heartbeat-interval'] ?? 15));
     $lock = fopen($supervisorLockFile, 'c+');
@@ -3018,6 +3234,22 @@ function superviseWorkflow(array $arguments): void
             }
 
             if (in_array($feature['state'] ?? null, ['awaiting_gates', 'approved'], true)) {
+                $watchdog = supervisorCheckGateWatchdog($arguments, $workflowId, $cursor, $feature, $gateStallAfter, $gateMaxAge);
+                if (($watchdog['status'] ?? null) === 'recovery_required') {
+                    fwrite(STDERR, supervisorFeedback(supervisorSnapshot($arguments, $workflowId, $staleAfter, $activityStaleAfter))."\n");
+                    printJson([
+                        'status' => 'recovery_required',
+                        'workflow_id' => $workflowId,
+                        'feature_key' => $cursor,
+                        'reason' => 'gate_max_age_exceeded',
+                        'gate' => $watchdog['gate'] ?? null,
+                        'age_seconds' => $watchdog['age_seconds'] ?? null,
+                        'threshold' => $watchdog['threshold'] ?? $gateMaxAge,
+                    ]);
+
+                    return;
+                }
+
                 $gateResult = supervisorRunGatePipeline($arguments, $workflowId, $cursor);
                 fwrite(STDERR, supervisorFeedback(supervisorSnapshot($arguments, $workflowId, $staleAfter, $activityStaleAfter))."\n");
                 if (($gateResult['status'] ?? null) === 'next_feature') {
@@ -3272,6 +3504,21 @@ function superviseWorkflow(array $arguments): void
                             $run = supervisorStartRun($arguments, $workflowId, $cursor, $lease, $heartbeatInterval, $retry);
 
                             continue;
+                        }
+                        $watchdog = supervisorCheckGateWatchdog($arguments, $workflowId, $cursor, $feature, $gateStallAfter, $gateMaxAge);
+                        if (($watchdog['status'] ?? null) === 'recovery_required') {
+                            fwrite(STDERR, supervisorFeedback($snapshot)."\n");
+                            printJson([
+                                'status' => 'recovery_required',
+                                'workflow_id' => $workflowId,
+                                'feature_key' => $cursor,
+                                'reason' => 'gate_max_age_exceeded',
+                                'gate' => $watchdog['gate'] ?? null,
+                                'age_seconds' => $watchdog['age_seconds'] ?? null,
+                                'threshold' => $watchdog['threshold'] ?? $gateMaxAge,
+                            ]);
+
+                            return;
                         }
                         $gateResult = supervisorRunGatePipeline($arguments, $workflowId, $cursor);
                         fwrite(STDERR, supervisorFeedback($snapshot)."\n");
