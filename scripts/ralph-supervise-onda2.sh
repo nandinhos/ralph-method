@@ -51,6 +51,11 @@ export CODEX_HOME
 export RALPH_QUALITY_COMMAND="${RALPH_QUALITY_COMMAND:-bash scripts/check-shell.sh && bash scripts/test-ralph-method.sh}"
 export RALPH_RUNTIME_EVIDENCE_CMD="${RALPH_RUNTIME_EVIDENCE_CMD:-bash scripts/ralph-selfhost-runtime-evidence.sh}"
 export RALPH_TECHNICAL_REVIEW_COMMAND="${RALPH_TECHNICAL_REVIEW_COMMAND:-bash scripts/ralph-selfhost-technical-review.sh}"
+# O --verify-only do ralph.sh exige engine com adapter (opencode/agy/cursor);
+# o agy verify roda via bwrap com mounts controlados e funciona no sandbox
+# (comprovado), enquanto o impl agy não opera (ANOM-2026-002). O impl da
+# feature continua codex via --engine explícito no supervise.
+export RALPH_ENGINE="${RALPH_ENGINE:-agy}"
 
 # O ralph-control supervise retorna em estados de espera (debugging_running,
 # capacity_wait, recovery_required etc.) — o wrapper relança até o workflow
