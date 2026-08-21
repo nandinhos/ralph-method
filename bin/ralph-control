@@ -2181,7 +2181,7 @@ function project(array $workflow, array $events): array
                     $feature['result'] = $event['facts'];
                     if (($feature['state'] ?? null) === 'awaiting_gates'
                         && ! isset($feature['gate_entered_at'])) {
-                        $feature['gate_entered_at'] = $now;
+                        $feature['gate_entered_at'] = (int) strtotime((string) ($event['timestamp'] ?? 'now'));
                     }
                     break;
                 case 'gate.passed': $feature['gates'][$event['facts']['gate'] ?? 'unknown'] = 'passed';
@@ -2202,7 +2202,7 @@ function project(array $workflow, array $events): array
                     $feature['state'] = 'awaiting_gates';
                     $feature['gate_retry'] = $event['facts'] ?? [];
                     if (! isset($feature['gate_entered_at'])) {
-                        $feature['gate_entered_at'] = $now;
+                        $feature['gate_entered_at'] = (int) strtotime((string) ($event['timestamp'] ?? 'now'));
                     }
                     break;
                 case 'gate.session.reclaimed':
@@ -2210,7 +2210,7 @@ function project(array $workflow, array $events): array
                     $feature['lease_token_hash'] = $event['lease_token_hash'] ?? null;
                     $feature['gate_session'] = $event['facts'] ?? [];
                     if (! isset($feature['gate_entered_at'])) {
-                        $feature['gate_entered_at'] = $now;
+                        $feature['gate_entered_at'] = (int) strtotime((string) ($event['timestamp'] ?? 'now'));
                     }
                     break;
                 case 'debugging.required': $feature['state'] = 'debugging_required';
@@ -5448,7 +5448,7 @@ function runControlled(array $arguments): void
             $gateAge = null;
             if (($feature['state'] ?? null) === 'awaiting_gates'
                 && isset($feature['gate_entered_at'])) {
-                $gateAge = (int) floor($now - $feature['gate_entered_at']);
+                $gateAge = max(0, (int) floor(time() - (int) $feature['gate_entered_at']));
             }
             $heartbeatFacts = [
                 'pid' => $pid,
