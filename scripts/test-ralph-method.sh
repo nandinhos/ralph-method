@@ -497,9 +497,12 @@ grep -q '"exit_reconfirmed"' "$reconfirm_tmp/.git/ralph-control/events.jsonl" ||
 printf 'ok   reconfirmação de exit: exit 1 com "tudo verde" ratificado para 0 (awaiting_gates)\n'
 
 # ---------------------------------------------------------------------------
-# FEATURE-101A (TASK 2/3 do technical review): telemetry.activity sanitiza
-# canário de segredo/UTF-8 inválido e o heartbeat preserva campos antigos
-# (retrocompat de monitor/status).
+# FEATURE-101 (Phase 1): Contrato de telemetria (schema + eventos)
+# - RALPH_SCHEMA_VERSION 1.3.0 e aceitação de 1.0.0-1.3.0; rejeição de 1.4.0
+# - Verificação de novos tipos de evento e registro de event.rejected para tipo desconhecido
+# - telemetry.activity sanitiza segredos e UTF-8 inválido sem rejeitar o bloco
+# - command.heartbeat preserva campos legados e adiciona position, eta_seconds, gate_age
+# - monitor e status continuam compatíveis
 # ---------------------------------------------------------------------------
 telemetry_tmp="$TMP/telemetry-fixture"
 mkdir -p "$telemetry_tmp"
@@ -514,6 +517,7 @@ git -C "$telemetry_tmp" commit -qm base
 (cd "$telemetry_tmp" && control init --workflow wf_telemetry --manifest workflow.json >/dev/null)
 telemetry_claim="$(cd "$telemetry_tmp" && control claim --workflow wf_telemetry --feature FEATURE-001 --actor telemetry)"
 telemetry_lease="$(json_field "$telemetry_claim" lease_token)"
+
 # O bloco emite no stdout um canário de segredo e UTF-8 inválido; o
 # telemetry.activity capturado no ledger não pode conter o segredo em claro.
 telemetry_canary='sk-canary-SECRETVALUE1234567890'
@@ -521,13 +525,133 @@ telemetry_canary='sk-canary-SECRETVALUE1234567890'
   --heartbeat-interval 1 \
   --command "printf 'progredindo com $telemetry_canary e caracteres inválidos \\x00\\xff\\xfe\\n'; sleep 3; exit 0" \
   >/dev/null 2>&1)
+
 if grep -q "$telemetry_canary" "$telemetry_tmp/.git/ralph-control/events.jsonl"; then
   fail 'telemetry.activity vazou o canário de segredo no ledger'
 fi
+
 grep -q '"type":"telemetry.activity"' "$telemetry_tmp/.git/ralph-control/events.jsonl" \
   || fail 'telemetry.activity não foi emitido durante o bloco'
-# Retrocompat: command.heartbeat preserva os campos antigos (pid, idle_seconds)
-# e adiciona os novos opcionais (position, eta_seconds, gate_age).
 grep -q '"type":"command.heartbeat"' "$telemetry_tmp/.git/ralph-control/events.jsonl" \
   || fail 'command.heartbeat não foi emitido'
-printf 'ok   telemetry.activity sanitiza canário de segredo e heartbeat preserva campos (FEATURE-101A TASK 2/3)\n'
+
+# Validação detalhada dos campos de telemetry.activity e command.heartbeat
+EVENTS_FILE="$telemetry_tmp/.git/ralph-control/events.jsonl" php -r '
+  $events = file(getenv("EVENTS_FILE"), FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+  $activityFound = false;
+  $heartbeatFound = false;
+  foreach ($events as $line) {
+      $event = json_decode($line, true, 512, JSON_THROW_ON_ERROR);
+      $type = $event["type"] ?? "";
+      if ($type === "telemetry.activity") {
+          $activityFound = true;
+          $facts = $event["facts"] ?? [];
+          if (! array_key_exists("activity_preview", $facts) || ! array_key_exists("elapsed", $facts)
+              || ! array_key_exists("idle_seconds", $facts) || ! array_key_exists("phase", $facts)) {
+              fwrite(STDERR, "telemetry.activity campos ausentes: ".json_encode($facts)."\n");
+              exit(1);
+          }
+      } elseif ($type === "command.heartbeat") {
+          $heartbeatFound = true;
+          $facts = $event["facts"] ?? [];
+          // Campos legados
+          foreach (["pid", "process_tree", "heartbeat_sequence", "stdout_bytes", "stderr_bytes", "idle_seconds", "child_running"] as $legacyKey) {
+              if (! array_key_exists($legacyKey, $facts)) {
+                  fwrite(STDERR, "command.heartbeat campo legado ausente: {$legacyKey}\n");
+                  exit(1);
+              }
+          }
+          // Campos novos
+          foreach (["position", "eta_seconds", "gate_age"] as $newKey) {
+              if (! array_key_exists($newKey, $facts)) {
+                  fwrite(STDERR, "command.heartbeat campo novo ausente: {$newKey}\n");
+                  exit(1);
+              }
+          }
+      }
+  }
+  if (! $activityFound || ! $heartbeatFound) {
+      fwrite(STDERR, "eventos de telemetria não encontrados no ledger\n");
+      exit(1);
+  }
+'
+
+# Monitor e status continuam lendo os eventos normalmente
+(cd "$telemetry_tmp" && control status >/dev/null)
+(cd "$telemetry_tmp" && php "$ROOT/bin/ralph-monitor" --workflow wf_telemetry --once --json >/dev/null)
+(cd "$telemetry_tmp" && control verify >/dev/null)
+printf 'ok   telemetry.activity sanitiza canário de segredo e heartbeat preserva campos (FEATURE-101 Phase 1)\n'
+
+# ---------------------------------------------------------------------------
+# Teste de schema 1.3.0, fail-closed de 1.4.0 e tipos novos no verify
+# ---------------------------------------------------------------------------
+schema_tmp="$TMP/schema-fixture"
+mkdir -p "$schema_tmp"
+git -C "$schema_tmp" init -q
+git -C "$schema_tmp" config user.email ralph-method@example.invalid
+git -C "$schema_tmp" config user.name 'Ralph Method Schema Test'
+printf '%s\n' '# Schema Test' > "$schema_tmp/README.md"
+printf '%s\n' '# Plano' > "$schema_tmp/plan.md"
+printf '%s\n' '{"schema_version":"1.3.0","workflow_id":"wf_schema","plan_file":"plan.md","knowledge_policy":{"mode":"non_blocking"},"features":[{"feature_key":"FEATURE-001","title":"Schema Test","position":1}]}' > "$schema_tmp/workflow.json"
+git -C "$schema_tmp" add .
+git -C "$schema_tmp" commit -qm base
+(cd "$schema_tmp" && control init --workflow wf_schema --manifest workflow.json >/dev/null)
+(cd "$schema_tmp" && control verify >/dev/null)
+
+# Teste fail-closed: evento com schema_version 1.4.0 deve ser rejeitado por verify
+schema_invalid_tmp="$TMP/schema-invalid-fixture"
+cp -a "$schema_tmp" "$schema_invalid_tmp"
+EVENTS_FILE="$schema_invalid_tmp/.git/ralph-control/events.jsonl" php -r '
+  $lines = file(getenv("EVENTS_FILE"), FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+  $first = json_decode($lines[0], true, 512, JSON_THROW_ON_ERROR);
+  $first["schema_version"] = "1.4.0";
+  unset($first["event_hash"]);
+  // Canonical hash
+  $canon = $first;
+  ksort($canon);
+  // Just rewrite with invalid schema version
+  $first["event_hash"] = "sha256:".hash("sha256", json_encode($canon, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)."\n");
+  file_put_contents(getenv("EVENTS_FILE"), json_encode($first, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)."\n");
+'
+set +e
+(cd "$schema_invalid_tmp" && control verify >/dev/null 2>&1)
+schema_14_exit=$?
+set -e
+[ "$schema_14_exit" -ne 0 ] || fail 'schema_version 1.4.0 não foi rejeitado (fail-closed)'
+
+# Teste de tipo desconhecido: tentativa de evento inválido gera event.rejected no ledger
+reject_tmp="$TMP/reject-fixture"
+mkdir -p "$reject_tmp"
+git -C "$reject_tmp" init -q
+git -C "$reject_tmp" config user.email ralph-method@example.invalid
+git -C "$reject_tmp" config user.name 'Ralph Method Reject Test'
+printf '%s\n' '# Reject Test' > "$reject_tmp/README.md"
+printf '%s\n' '# Plano' > "$reject_tmp/plan.md"
+printf '%s\n' '{"schema_version":"1.3.0","workflow_id":"wf_reject","plan_file":"plan.md","knowledge_policy":{"mode":"non_blocking"},"features":[{"feature_key":"FEATURE-001","title":"Reject Test","position":1}]}' > "$reject_tmp/workflow.json"
+git -C "$reject_tmp" add .
+git -C "$reject_tmp" commit -qm base
+(cd "$reject_tmp" && control init --workflow wf_reject --manifest workflow.json >/dev/null)
+(cd "$reject_tmp" && control claim --workflow wf_reject --feature FEATURE-001 --actor reject-test >/dev/null)
+
+# Testar via subshell que appendEvent de tipo desconhecido falha e grava event.rejected
+set +e
+(cd "$reject_tmp" && ROOT_DIR="$ROOT" php -r '
+  $root = realpath(getenv("ROOT_DIR"));
+  $code = file_get_contents($root."/bin/ralph-control");
+  $code = preg_replace("/^#\!.*?\n/", "", $code);
+  $code = preg_replace("/^<\?php\s*/", "", $code);
+  $code = preg_replace("/\\\$arguments\s*=\s*args\\(\\\$argv\\);.*$/s", "", $code);
+  eval($code);
+  $workflow = loadWorkflowForId("wf_reject");
+  $projection = project($workflow, readEvents());
+  $feature = featureFrom($projection, "FEATURE-001");
+  appendEvent(eventContext(["workflow" => "wf_reject"], $feature, "tipo.completamente.invalido", "Teste de rejeição"));
+') >/dev/null 2>&1
+reject_sub_exit=$?
+set -e
+[ "$reject_sub_exit" -ne 0 ] || fail 'tipo desconhecido não retornou erro'
+grep -q '"type":"event.rejected"' "$reject_tmp/.git/ralph-control/events.jsonl" \
+  || fail 'event.rejected não foi gravado no ledger para tipo desconhecido'
+(cd "$reject_tmp" && control verify >/dev/null) || fail 'ledger com event.rejected não passou no verify'
+printf 'ok   schema 1.3.0 promovido, 1.4.0 rejeitado fail-closed, event.rejected e novos tipos no verify (FEATURE-101 Phase 1)\n'
+

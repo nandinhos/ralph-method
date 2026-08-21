@@ -5295,6 +5295,41 @@ function configuredRalph(array $arguments): string
     return $ralph;
 }
 
+function estimateFeatureRemainingSeconds(array $events, string $workflowId, float $currentElapsed): ?int
+{
+    $durations = [];
+    $attemptStarts = [];
+    foreach ($events as $event) {
+        if (($event['workflow_id'] ?? null) !== $workflowId) {
+            continue;
+        }
+        $type = $event['type'] ?? null;
+        $featureKey = $event['feature_key'] ?? '';
+        $attempt = (int) ($event['attempt'] ?? 0);
+        $key = $featureKey.'#'.$attempt;
+        if ($type === 'attempt.started') {
+            $ts = strtotime($event['timestamp'] ?? '');
+            if ($ts !== false) {
+                $attemptStarts[$key] = $ts;
+            }
+        } elseif ($type === 'block.finished') {
+            $ts = strtotime($event['timestamp'] ?? '');
+            if ($ts !== false && isset($attemptStarts[$key])) {
+                $dur = $ts - $attemptStarts[$key];
+                if ($dur > 0) {
+                    $durations[] = $dur;
+                }
+            }
+        }
+    }
+    if ($durations === []) {
+        return null;
+    }
+    $avgDuration = (float) array_sum($durations) / count($durations);
+
+    return max(0, (int) round($avgDuration - $currentElapsed));
+}
+
 function runControlled(array $arguments): void
 {
     global $root, $runtime;
@@ -5512,6 +5547,9 @@ function runControlled(array $arguments): void
                 && isset($feature['gate_entered_at'])) {
                 $gateAge = max(0, (int) floor($now - (int) $feature['gate_entered_at']));
             }
+            $etaSeconds = $gateAge !== null
+                ? max(0, (int) ($feature['gate_stall_after'] ?? 60) - $gateAge)
+                : estimateFeatureRemainingSeconds(readEvents(), $workflowId, $now - $startedAt);
             $heartbeatFacts = [
                 'pid' => $pid,
                 'process_tree' => $processSnapshot,
@@ -5521,9 +5559,7 @@ function runControlled(array $arguments): void
                 'idle_seconds' => (int) floor($now - $lastActivityAt),
                 'child_running' => (bool) ($status['running'] ?? false),
                 'position' => (int) ($feature['position'] ?? 0),
-                'eta_seconds' => $gateAge !== null
-                    ? max(0, (int) ($feature['gate_stall_after'] ?? 60) - $gateAge)
-                    : null,
+                'eta_seconds' => $etaSeconds,
                 'gate_age' => $gateAge,
             ];
             withLock(function () use ($arguments, $feature, $heartbeatFacts): void {
