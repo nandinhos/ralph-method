@@ -190,4 +190,36 @@ php "$READER_TEST_SCRIPT" "$ROOT/bin/ralph-watch" "$TMP" "wf_watch_demo" "$event
 snapshot_text_after="$(RALPH_TEST_CLOCK_EPOCH="$TEST_EPOCH" php "$ROOT/bin/ralph-watch" --workflow wf_watch_demo --events-file "$events_file" --once)"
 printf '%s\n' "$snapshot_text_after" | grep -q "PASSED" || fail 'dashboard não exibiu badge PASSED após atualização'
 
-printf 'OK: todos os testes de bin/ralph-watch (TUI, delta mtime, JSON, ledger ausente e gates) passaram.\n'
+# 9. Systematic debugging ao vivo no ralph-watch (FEATURE-101 Phase 4)
+debug_event=$(cat <<'JSON'
+{"schema_version":"1.3.0","event_id":"evt-012","workflow_id":"wf_watch_demo","feature_key":"FEATURE-102","attempt":1,"type":"debug.progress","timestamp":"2026-08-21T12:02:25Z","facts":{"phase":"hypotheses_evaluated","status":"investigating","document_id":"DBG-2026-0042","attempt":1,"cause_kind":"feature_bug","confirmed_hypotheses":1,"rejected_hypotheses":1,"hypotheses":[{"id":"H1","status":"confirmed","statement":"Incompatibilidade no tipo retornado"},{"id":"H2","status":"rejected","statement":"Timeout de rede"}],"official_references":[{"provider":"Context7","source":"https://docs.example.invalid/guide","section":"Types"}]}}
+JSON
+)
+printf '%s\n' "$debug_event" >> "$events_file"
+touch "$events_file"
+
+debug_snapshot_json="$(RALPH_TEST_CLOCK_EPOCH="$TEST_EPOCH" php "$ROOT/bin/ralph-watch" --workflow wf_watch_demo --events-file "$events_file" --once --json)"
+DEBUG_SNAPSHOT="$debug_snapshot_json" php -r '
+    $snap = json_decode(getenv("DEBUG_SNAPSHOT"), true, 512, JSON_THROW_ON_ERROR);
+    $dbg = $snap["debug"] ?? null;
+    if (! is_array($dbg)) {
+        fwrite(STDERR, "debug ausente no snapshot do ralph-watch\n");
+        exit(1);
+    }
+    if (($dbg["document_id"] ?? "") !== "DBG-2026-0042"
+        || ($dbg["cause_kind"] ?? "") !== "feature_bug"
+        || ($dbg["confirmed_hypotheses"] ?? 0) !== 1
+        || ($dbg["rejected_hypotheses"] ?? 0) !== 1) {
+        fwrite(STDERR, "campos de debug no snapshot inválidos: ".json_encode($dbg)."\n");
+        exit(2);
+    }
+' || fail 'debug no snapshot JSON do ralph-watch inválido'
+
+debug_snapshot_text="$(RALPH_TEST_CLOCK_EPOCH="$TEST_EPOCH" php "$ROOT/bin/ralph-watch" --workflow wf_watch_demo --events-file "$events_file" --once)"
+printf '%s\n' "$debug_snapshot_text" | grep -q "SYSTEMATIC DEBUGGING AO VIVO" || fail 'dashboard não exibiu seção SYSTEMATIC DEBUGGING AO VIVO'
+printf '%s\n' "$debug_snapshot_text" | grep -q "DBG-2026-0042" || fail 'dashboard não exibiu document_id do debug'
+printf '%s\n' "$debug_snapshot_text" | grep -q "feature_bug" || fail 'dashboard não exibiu cause_kind do debug'
+printf '%s\n' "$debug_snapshot_text" | grep -q "Context7" || fail 'dashboard não exibiu referência Context7 do debug'
+
+printf 'OK: todos os testes de bin/ralph-watch (TUI, delta mtime, JSON, ledger ausente, gates e debug ao vivo) passaram.\n'
+

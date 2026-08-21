@@ -373,6 +373,7 @@ function monitorSnapshot(string $root, string $workflowId, int $staleAfter, int 
             'cpu_milli' => $cpuMilli,
         ],
         'gate_ages' => monitorGateAges($root, $workflowId, $cursor, is_array($current) ? ($current['attempt'] ?? null) : null),
+        'debug' => monitorDebug($root, $workflowId, $cursor, is_array($current) ? ($current['attempt'] ?? null) : null),
         'loop_feedback' => $lastLoopFeedback,
         'processes' => $processes,
         'stale_after_seconds' => $staleAfter,
@@ -380,6 +381,71 @@ function monitorSnapshot(string $root, string $workflowId, int $staleAfter, int 
         // FEATURE-094 (Phase 7): circuitos derivados do ledger, somente leitura.
         'provider_circuits' => monitorProviderCircuits($root, $workflowId),
     ];
+}
+
+/**
+ * Deriva informações do último debug.progress do ledger (read-only).
+ *
+ * @return array<string, mixed>|null
+ */
+function monitorDebug(string $root, string $workflowId, ?string $featureKey, ?int $attempt): ?array
+{
+    if ($featureKey === null) {
+        return null;
+    }
+
+    $gitCommonDir = monitorGitCommonDir($root);
+    if ($gitCommonDir === null) {
+        return null;
+    }
+
+    $eventsFile = $gitCommonDir.DIRECTORY_SEPARATOR.'ralph-control/events.jsonl';
+    if (! is_file($eventsFile)) {
+        return null;
+    }
+
+    $lines = file($eventsFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+    for ($index = count($lines) - 1; $index >= 0; $index--) {
+        try {
+            $event = json_decode($lines[$index], true, 512, JSON_THROW_ON_ERROR);
+        } catch (Throwable) {
+            continue;
+        }
+        if (! is_array($event)
+            || ($event['workflow_id'] ?? null) !== $workflowId
+            || ($event['feature_key'] ?? null) !== $featureKey
+        ) {
+            continue;
+        }
+        $eventAttempt = (int) ($event['attempt'] ?? 0);
+        if ($attempt !== null && $eventAttempt !== $attempt) {
+            continue;
+        }
+
+        $type = (string) ($event['type'] ?? '');
+        if ($type === 'debug.progress') {
+            $facts = is_array($event['facts'] ?? null) ? $event['facts'] : [];
+            $ts = is_string($event['timestamp'] ?? null) ? $event['timestamp'] : null;
+
+            return [
+                'type' => 'debug.progress',
+                'timestamp' => $ts,
+                'age_seconds' => monitorAge($ts),
+                'phase' => is_string($facts['phase'] ?? null) ? $facts['phase'] : 'unknown',
+                'status' => is_string($facts['status'] ?? null) ? $facts['status'] : null,
+                'cause_kind' => is_string($facts['cause_kind'] ?? null) ? $facts['cause_kind'] : null,
+                'document_id' => is_string($facts['document_id'] ?? null) ? $facts['document_id'] : null,
+                'attempt' => (int) ($event['attempt'] ?? $attempt ?? 1),
+                'confirmed_hypotheses' => $facts['confirmed_hypotheses'] ?? (isset($facts['hypotheses']) && is_array($facts['hypotheses']) ? count(array_filter($facts['hypotheses'], static fn ($h): bool => is_array($h) && ($h['status'] ?? '') === 'confirmed')) : 0),
+                'rejected_hypotheses' => $facts['rejected_hypotheses'] ?? (isset($facts['hypotheses']) && is_array($facts['hypotheses']) ? count(array_filter($facts['hypotheses'], static fn ($h): bool => is_array($h) && ($h['status'] ?? '') === 'rejected')) : 0),
+                'hypotheses' => is_array($facts['hypotheses'] ?? null) ? $facts['hypotheses'] : [],
+                'official_references' => is_array($facts['official_references'] ?? null) ? $facts['official_references'] : [],
+                'facts' => $facts,
+            ];
+        }
+    }
+
+    return null;
 }
 
 /**

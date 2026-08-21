@@ -2319,6 +2319,10 @@ function project(array $workflow, array $events): array
                     break;
                 case 'debugging.started': $feature['state'] = 'debugging_running';
                     break;
+                case 'debug.progress':
+                    $feature['state'] = 'debugging_running';
+                    $feature['debug_progress'] = $event['facts'] ?? [];
+                    break;
                 case 'debugging.verified':
                     $feature['state'] = 'debugging_verified';
                     $feature['debugging'] = $event['facts'] ?? [];
@@ -5231,6 +5235,21 @@ function runSystematicDebug(array $arguments): array
             'document_id' => $documentId,
         ]));
 
+        $debugStartedFacts = [
+            'phase' => 'started',
+            'status' => 'investigating',
+            'document_id' => $documentId,
+            'attempt' => (int) $feature['attempt'],
+            'cause_kind' => null,
+            'hypotheses' => [],
+            'confirmed_hypotheses' => 0,
+            'rejected_hypotheses' => 0,
+            'official_references' => [],
+        ];
+        appendEvent(eventContext(array_merge($arguments, [
+            'idempotency-key' => 'idem_debug_started_'.bin2hex(random_bytes(12)),
+        ]), $feature, 'debug.progress', 'Início do systematic debugging: investigando causa raiz e hipóteses', sanitize($debugStartedFacts)));
+
         return [
             'workflow' => $workflow,
             'feature' => $feature,
@@ -5248,12 +5267,32 @@ function runSystematicDebug(array $arguments): array
     $feature = $context['feature'];
     $attempt = (int) $feature['attempt'];
     $artifactRef = (string) $context['artifact_ref'];
+    $documentId = (string) $context['document_id'];
+
+    $heartbeatCallback = function (array $hb) use ($arguments, $workflowId, $featureKey, $documentId, $attempt): void {
+        withLock(function () use ($arguments, $workflowId, $featureKey, $documentId, $attempt, $hb): void {
+            $projection = project(loadWorkflowForId($workflowId), readEvents());
+            $feature = featureFrom($projection, $featureKey);
+            $facts = [
+                'phase' => 'running',
+                'status' => 'investigating',
+                'document_id' => $documentId,
+                'attempt' => $attempt,
+                'pid' => $hb['pid'] ?? null,
+                'idle_seconds' => $hb['idle_seconds'] ?? 0,
+            ];
+            appendEvent(eventContext(array_merge($arguments, [
+                'idempotency-key' => 'idem_debug_hb_'.bin2hex(random_bytes(12)),
+            ]), $feature, 'debug.progress', 'Systematic debugging em andamento', sanitize($facts)));
+        });
+    };
+
     $commandResult = runReadOnlyCommand((string) $context['command'], max(5, (int) ($arguments['debug-timeout'] ?? 300)), [
         'RALPH_DEBUG_WORKFLOW_ID' => $workflowId,
         'RALPH_DEBUG_FEATURE_KEY' => $featureKey,
         'RALPH_DEBUG_ATTEMPT' => (string) $attempt,
         'RALPH_DEBUG_REPORT_REF' => $artifactRef,
-    ]);
+    ], $heartbeatCallback, 15);
     $treeChanged = workingTreeFingerprint() !== $context['tree_fingerprint'];
     $report = null;
     $errors = [];
@@ -5278,11 +5317,84 @@ function runSystematicDebug(array $arguments): array
         $errors = array_merge($errors, debugReportErrors($report, $workflowId, $featureKey, $attempt));
     }
 
+    if (is_array($report)) {
+        $hypotheses = is_array($report['hypotheses'] ?? null) ? $report['hypotheses'] : [];
+        $confirmedCount = 0;
+        $rejectedCount = 0;
+        $sanitizedHypotheses = [];
+        foreach ($hypotheses as $h) {
+            if (is_array($h)) {
+                $hStatus = (string) ($h['status'] ?? 'unverified');
+                if ($hStatus === 'confirmed') {
+                    $confirmedCount++;
+                } elseif ($hStatus === 'rejected') {
+                    $rejectedCount++;
+                }
+                $sanitizedHypotheses[] = [
+                    'id' => is_string($h['id'] ?? null) ? sanitize($h['id']) : 'unknown',
+                    'status' => $hStatus,
+                    'statement' => is_string($h['statement'] ?? null) ? sanitize($h['statement']) : '',
+                ];
+            }
+        }
+
+        $officialRefs = is_array($report['official_references'] ?? null) ? $report['official_references'] : [];
+        $sanitizedRefs = [];
+        foreach ($officialRefs as $ref) {
+            if (is_array($ref)) {
+                $sanitizedRefs[] = [
+                    'provider' => is_string($ref['provider'] ?? null) ? sanitize($ref['provider']) : 'official',
+                    'source' => is_string($ref['source'] ?? null) ? sanitize($ref['source']) : '',
+                    'section' => is_string($ref['section'] ?? null) ? sanitize($ref['section']) : '',
+                ];
+            }
+        }
+
+        $causeKind = is_string($report['cause_kind'] ?? null) ? sanitize($report['cause_kind']) : 'unknown';
+
+        $progressFacts = [
+            'phase' => 'hypotheses_evaluated',
+            'status' => ($errors === [] ? 'verified' : 'evaluating'),
+            'document_id' => $documentId,
+            'attempt' => $attempt,
+            'cause_kind' => $causeKind,
+            'confirmed_hypotheses' => $confirmedCount,
+            'rejected_hypotheses' => $rejectedCount,
+            'hypotheses' => $sanitizedHypotheses,
+            'official_references' => $sanitizedRefs,
+            'symptom' => is_string($report['symptom'] ?? null) ? sanitize($report['symptom']) : null,
+            'root_cause' => is_string($report['root_cause'] ?? null) ? sanitize($report['root_cause']) : null,
+        ];
+
+        withLock(function () use ($arguments, $workflowId, $featureKey, $progressFacts): void {
+            $projection = project(loadWorkflowForId($workflowId), readEvents());
+            $feature = featureFrom($projection, $featureKey);
+            appendEvent(eventContext(array_merge($arguments, [
+                'idempotency-key' => 'idem_debug_prog_'.bin2hex(random_bytes(12)),
+            ]), $feature, 'debug.progress', 'Hipóteses e referências oficiais do systematic debugging avaliadas', sanitize($progressFacts)));
+        });
+    } else {
+        $failedFacts = [
+            'phase' => 'failed',
+            'status' => 'rejected',
+            'document_id' => $documentId,
+            'attempt' => $attempt,
+            'cause_kind' => 'unknown',
+            'errors' => array_slice(sanitize($errors), 0, 8),
+        ];
+        withLock(function () use ($arguments, $workflowId, $featureKey, $failedFacts): void {
+            $projection = project(loadWorkflowForId($workflowId), readEvents());
+            $feature = featureFrom($projection, $featureKey);
+            appendEvent(eventContext(array_merge($arguments, [
+                'idempotency-key' => 'idem_debug_fail_'.bin2hex(random_bytes(12)),
+            ]), $feature, 'debug.progress', 'Falha na execução do comando de systematic debugging', sanitize($failedFacts)));
+        });
+    }
+
     $reportDirectory = $runtime.'/reports';
     if (! is_dir($reportDirectory) && ! mkdir($reportDirectory, 0700, true) && ! is_dir($reportDirectory)) {
         fail('não foi possível criar reports do systematic debugging');
     }
-    $documentId = (string) $context['document_id'];
     $reportPath = $reportDirectory.'/'.$documentId.'.json';
     if (is_array($report) && $errors === []) {
         $report['document_id'] = $documentId;

@@ -935,4 +935,244 @@ grep -q '"type":"recovery.required"' "$horizon_tmp/.git/ralph-control/events.jso
   || fail 'recovery.required não foi gravado no ledger quando gate excedeu max_age'
 printf 'ok   recovery_required emitido no horizonte máximo sem espera real (FEATURE-101 Phase 2)\n'
 
+# ---------------------------------------------------------------------------
+# FEATURE-101 (Phase 4): Systematic debugging ao vivo
+# - Emissão de debug.progress durante runSystematicDebug (início e hipóteses avaliadas)
+# - Conteúdo 100% sanitizado (canários de segredo redigidos, sem vazamento de trecho sensível)
+# - cause_kind do contrato atual (feature_bug / harness_defect)
+# - Hipóteses confirmadas/rejeitadas e referências Context7/official no stream
+# - Relatório final DBG-* segue o contrato oficial
+# - ralph-monitor --once --json expõe debug com debug.progress mais recente (read-only)
+# - ralph-watch exibe o debug ao vivo na TUI e no snapshot JSON
+# ---------------------------------------------------------------------------
+live_dbg_tmp="$TMP/live-debug-fixture"
+mkdir -p "$live_dbg_tmp"
+git -C "$live_dbg_tmp" init -q
+git -C "$live_dbg_tmp" config user.email ralph-method@example.invalid
+git -C "$live_dbg_tmp" config user.name 'Ralph Method Live Debug Test'
+printf '%s\n' '# Live Debug' > "$live_dbg_tmp/README.md"
+printf '%s\n' '# Plano' > "$live_dbg_tmp/plan.md"
+printf '%s\n' '{"schema_version":"1.3.0","workflow_id":"wf_live_debug","plan_file":"plan.md","knowledge_policy":{"mode":"non_blocking"},"features":[{"feature_key":"FEATURE-DBG","title":"Live Debug Test","position":1}]}' > "$live_dbg_tmp/workflow.json"
+git -C "$live_dbg_tmp" add .
+git -C "$live_dbg_tmp" commit -qm base
+
+(cd "$live_dbg_tmp" && control init --workflow wf_live_debug --manifest workflow.json >/dev/null)
+dbg_claim="$(cd "$live_dbg_tmp" && control claim --workflow wf_live_debug --feature FEATURE-DBG --actor live-dbg-test)"
+dbg_lease="$(json_field "$dbg_claim" lease_token)"
+
+# Faz o bloco falhar para transicionar a feature para debugging_required
+set +e
+(cd "$live_dbg_tmp" && control run --workflow wf_live_debug --feature FEATURE-DBG --lease "$dbg_lease" --command 'exit 1' >/dev/null 2>&1)
+set -e
+
+# Cria comando fake de systematic debug válido com referências Context7/official
+fake_debug_script="$TMP/fake-debug-command.sh"
+cat > "$fake_debug_script" <<'SH'
+#!/usr/bin/env bash
+cat <<JSON
+{
+  "schema_version": "1.3.0",
+  "workflow_id": "$RALPH_DEBUG_WORKFLOW_ID",
+  "feature_key": "$RALPH_DEBUG_FEATURE_KEY",
+  "attempt": $RALPH_DEBUG_ATTEMPT,
+  "incident_id": "INC-2026-0088",
+  "severity": "medium",
+  "cause_kind": "feature_bug",
+  "symptom": "Incompatibilidade no tipo de retorno do handler",
+  "root_cause": "Erro de conversao de tipos estritos no processamento",
+  "correction_plan": "Ajustar tipagem do handler",
+  "hypotheses": [
+    {
+      "id": "H1",
+      "statement": "Incompatibilidade de tipos no schema",
+      "status": "confirmed"
+    },
+    {
+      "id": "H2",
+      "statement": "Falha de rede externa",
+      "status": "rejected"
+    }
+  ],
+  "official_references": [
+    {
+      "provider": "Context7",
+      "source": "https://docs.context7.invalid/types",
+      "section": "Type Safety"
+    },
+    {
+      "provider": "official",
+      "source": "https://official.example.invalid/specs",
+      "section": "Overview"
+    }
+  ],
+  "validation": {
+    "status": "passed",
+    "exit_code": 0,
+    "evidence_refs": ["README.md"]
+  },
+  "knowledge_candidate": {
+    "title": "Validação de tipos em handlers",
+    "summary": "Sempre tipar explicitamente para evitar coerção implícita",
+    "applicability": ["core", "handlers"],
+    "limitations": ["apenas PHP 8.2+"]
+  },
+  "status": "verified"
+}
+JSON
+SH
+chmod +x "$fake_debug_script"
+
+# Executa o systematic debug via controlador
+debug_run_output="$(cd "$live_dbg_tmp" && control debug --workflow wf_live_debug --feature FEATURE-DBG --command "bash $fake_debug_script")"
+
+printf '%s\n' "$debug_run_output" | grep -q '"status": *"debugging_verified"' \
+  || fail "systematic debug não retornou debugging_verified: $debug_run_output"
+
+# 1. Verifica emissão de debug.progress no ledger
+events_content="$(cat "$live_dbg_tmp/.git/ralph-control/events.jsonl")"
+
+printf '%s\n' "$events_content" | grep -q '"type":"debug.progress"' \
+  || fail 'evento debug.progress não foi emitido no ledger durante runSystematicDebug'
+
+# Teste de sanitização estrita: em fixture separada, comando que tenta vazar segredos é rejeitado e redigido
+leak_dbg_tmp="$TMP/leak-debug-fixture"
+mkdir -p "$leak_dbg_tmp"
+git -C "$leak_dbg_tmp" init -q
+git -C "$leak_dbg_tmp" config user.email ralph-method@example.invalid
+git -C "$leak_dbg_tmp" config user.name 'Ralph Method Leak Test'
+printf '%s\n' '# Leak Test' > "$leak_dbg_tmp/README.md"
+printf '%s\n' '# Plano' > "$leak_dbg_tmp/plan.md"
+printf '%s\n' '{"schema_version":"1.3.0","workflow_id":"wf_leak","plan_file":"plan.md","knowledge_policy":{"mode":"non_blocking"},"features":[{"feature_key":"FEATURE-LEAK","title":"Leak Test","position":1}]}' > "$leak_dbg_tmp/workflow.json"
+git -C "$leak_dbg_tmp" add .
+git -C "$leak_dbg_tmp" commit -qm base
+(cd "$leak_dbg_tmp" && control init --workflow wf_leak --manifest workflow.json >/dev/null)
+leak_claim="$(cd "$leak_dbg_tmp" && control claim --workflow wf_leak --feature FEATURE-LEAK --actor leak-test)"
+leak_lease="$(json_field "$leak_claim" lease_token)"
+set +e
+(cd "$leak_dbg_tmp" && control run --workflow wf_leak --feature FEATURE-LEAK --lease "$leak_lease" --command 'exit 1' >/dev/null 2>&1)
+set -e
+
+leak_debug_script="$TMP/leak-debug-command.sh"
+cat > "$leak_debug_script" <<'SH'
+#!/usr/bin/env bash
+cat <<JSON
+{
+  "schema_version": "1.3.0",
+  "workflow_id": "$RALPH_DEBUG_WORKFLOW_ID",
+  "feature_key": "$RALPH_DEBUG_FEATURE_KEY",
+  "attempt": $RALPH_DEBUG_ATTEMPT,
+  "incident_id": "INC-2026-0089",
+  "severity": "high",
+  "cause_kind": "feature_bug",
+  "symptom": "Vazamento com api_key=secret-canary-live-debug-12345",
+  "root_cause": "sk-proj-1234567890123456 e user@secretdomain.invalid",
+  "correction_plan": "Redigir segredo",
+  "hypotheses": [{"id": "H1", "statement": "Segredo vazado", "status": "confirmed"}],
+  "official_references": [{"provider": "official", "source": "https://official.example.invalid", "section": "Sec"}],
+  "validation": {"status": "passed", "exit_code": 0, "evidence_refs": ["README.md"]},
+  "knowledge_candidate": {"title": "T", "summary": "S", "applicability": [], "limitations": []},
+  "status": "verified"
+}
+JSON
+SH
+chmod +x "$leak_debug_script"
+
+set +e
+(cd "$leak_dbg_tmp" && control debug --workflow wf_leak --feature FEATURE-LEAK --command "bash $leak_debug_script" >/dev/null 2>&1)
+set -e
+events_after_leak="$(cat "$leak_dbg_tmp/.git/ralph-control/events.jsonl")"
+if printf '%s\n' "$events_after_leak" | grep -q 'secret-canary-live-debug-12345\|sk-proj-1234567890123456'; then
+    fail 'segredo canário vazou no ledger durante systematic debugging'
+fi
+
+EVENTS_FILE="$live_dbg_tmp/.git/ralph-control/events.jsonl" php -r '
+    $lines = file(getenv("EVENTS_FILE"), FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+    $debugEvents = [];
+    foreach ($lines as $line) {
+        $event = json_decode($line, true, 512, JSON_THROW_ON_ERROR);
+        if (($event["type"] ?? "") === "debug.progress") {
+            $debugEvents[] = $event;
+        }
+    }
+    if (count($debugEvents) < 2) {
+        fwrite(STDERR, "esperava ao menos 2 eventos debug.progress (início e hipóteses), obtido: ".count($debugEvents)."\n");
+        exit(1);
+    }
+    $first = $debugEvents[0]["facts"] ?? [];
+    if (($first["phase"] ?? "") !== "started" || ($first["status"] ?? "") !== "investigating") {
+        fwrite(STDERR, "primeiro debug.progress deve ser phase=started e status=investigating: ".json_encode($first)."\n");
+        exit(2);
+    }
+    $second = $debugEvents[1]["facts"] ?? [];
+    if (($second["phase"] ?? "") !== "hypotheses_evaluated"
+        || ($second["cause_kind"] ?? "") !== "feature_bug"
+        || ($second["confirmed_hypotheses"] ?? 0) !== 1
+        || ($second["rejected_hypotheses"] ?? 0) !== 1) {
+        fwrite(STDERR, "segundo debug.progress deve conter hipóteses e cause_kind=feature_bug: ".json_encode($second)."\n");
+        exit(3);
+    }
+    $refs = $second["official_references"] ?? [];
+    if (count($refs) !== 2 || ($refs[0]["provider"] ?? "") !== "Context7") {
+        fwrite(STDERR, "referências oficiais devem conter Context7: ".json_encode($refs)."\n");
+        exit(4);
+    }
+' || fail 'estrutura e fatos dos eventos debug.progress inválidos'
+
+# 2. Relatório DBG-* segue o contrato oficial
+report_files=( "$live_dbg_tmp/.git/ralph-control/reports"/DBG-*.json )
+[ -f "${report_files[0]}" ] || fail 'relatório DBG-*.json não foi criado em reports/'
+grep -q '"status": *"verified"' "${report_files[0]}" || fail 'relatório DBG-* com status diferente de verified'
+grep -q 'Context7' "${report_files[0]}" || fail 'relatório DBG-* não contém Context7'
+
+# 3. ralph-monitor --once --json expõe debug.progress mais recente (read-only)
+events_hash_before="$(sha256sum "$live_dbg_tmp/.git/ralph-control/events.jsonl")"
+monitor_dbg_json="$(cd "$live_dbg_tmp" && php "$ROOT/bin/ralph-monitor" --workflow wf_live_debug --once --json)"
+events_hash_after="$(sha256sum "$live_dbg_tmp/.git/ralph-control/events.jsonl")"
+[ "$events_hash_before" = "$events_hash_after" ] || fail 'ralph-monitor mutou o ledger'
+
+MONITOR_DBG_PAYLOAD="$monitor_dbg_json" php -r '
+    $snap = json_decode(getenv("MONITOR_DBG_PAYLOAD"), true, 512, JSON_THROW_ON_ERROR);
+    $dbg = $snap["debug"] ?? null;
+    if (! is_array($dbg)) {
+        fwrite(STDERR, "debug ausente no snapshot do monitor\n");
+        exit(1);
+    }
+    if (($dbg["type"] ?? "") !== "debug.progress"
+        || ($dbg["cause_kind"] ?? "") !== "feature_bug"
+        || ($dbg["confirmed_hypotheses"] ?? 0) !== 1
+        || ($dbg["rejected_hypotheses"] ?? 0) !== 1) {
+        fwrite(STDERR, "campos do debug no snapshot do monitor inválidos: ".json_encode($dbg)."\n");
+        exit(2);
+    }
+' || fail 'debug no snapshot do monitor inválido'
+
+# 4. ralph-watch expõe debug no snapshot e exibe na TUI
+watch_dbg_json="$(cd "$live_dbg_tmp" && php "$ROOT/bin/ralph-watch" --workflow wf_live_debug --once --json)"
+WATCH_DBG_PAYLOAD="$watch_dbg_json" php -r '
+    $snap = json_decode(getenv("WATCH_DBG_PAYLOAD"), true, 512, JSON_THROW_ON_ERROR);
+    $dbg = $snap["debug"] ?? null;
+    if (! is_array($dbg)) {
+        fwrite(STDERR, "debug ausente no snapshot do ralph-watch\n");
+        exit(1);
+    }
+    if (($dbg["cause_kind"] ?? "") !== "feature_bug"
+        || ($dbg["confirmed_hypotheses"] ?? 0) !== 1) {
+        fwrite(STDERR, "campos do debug no snapshot do ralph-watch inválidos: ".json_encode($dbg)."\n");
+        exit(2);
+    }
+' || fail 'debug no snapshot do ralph-watch inválido'
+
+watch_dbg_text="$(cd "$live_dbg_tmp" && php "$ROOT/bin/ralph-watch" --workflow wf_live_debug --once)"
+printf '%s\n' "$watch_dbg_text" | grep -q "SYSTEMATIC DEBUGGING AO VIVO" || fail 'ralph-watch não renderizou seção SYSTEMATIC DEBUGGING AO VIVO'
+printf '%s\n' "$watch_dbg_text" | grep -q "feature_bug" || fail 'ralph-watch não exibiu cause_kind feature_bug'
+printf '%s\n' "$watch_dbg_text" | grep -q "Context7" || fail 'ralph-watch não exibiu Context7'
+printf '%s\n' "$watch_dbg_text" | grep -q "1 confirmada(s)" || fail 'ralph-watch não exibiu contagem de hipóteses confirmadas'
+
+# 5. Ledger íntegro com hash-chain válida
+(cd "$live_dbg_tmp" && control verify >/dev/null) || fail 'verify falhou no ledger com eventos de systematic debug'
+
+printf 'ok   systematic debugging ao vivo emite debug.progress sanitizado, DBG-* oficial, monitor e watch exibem progresso (FEATURE-101 Phase 4)\n'
+
+
+
 

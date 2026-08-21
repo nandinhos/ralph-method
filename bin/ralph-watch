@@ -326,6 +326,7 @@ final class RalphWatchReader
                 'event_count' => 0,
                 'last_event' => null,
                 'last_telemetry' => null,
+                'debug' => null,
                 'gates' => array_fill_keys($mandatoryGates, 'pending'),
                 'gate_ages' => array_fill_keys($mandatoryGates, null),
                 'queue' => [],
@@ -393,6 +394,7 @@ final class RalphWatchReader
         $cursor = null;
         $lastEvent = null;
         $lastTelemetry = null;
+        $lastDebug = null;
         $circuits = [];
 
         // Tenta carregar workflow.json se disponível para enriquecer títulos e fila inicial
@@ -555,6 +557,57 @@ final class RalphWatchReader
                 ];
             }
 
+            // Systematic debugging
+            if ($type === 'debug.progress') {
+                $lastDebug = [
+                    'type' => 'debug.progress',
+                    'timestamp' => is_string($event['timestamp'] ?? null) ? $event['timestamp'] : null,
+                    'age_seconds' => watchAge(is_string($event['timestamp'] ?? null) ? $event['timestamp'] : null),
+                    'phase' => is_string($facts['phase'] ?? null) ? $facts['phase'] : 'unknown',
+                    'status' => is_string($facts['status'] ?? null) ? $facts['status'] : null,
+                    'cause_kind' => is_string($facts['cause_kind'] ?? null) ? $facts['cause_kind'] : null,
+                    'document_id' => is_string($facts['document_id'] ?? null) ? $facts['document_id'] : null,
+                    'attempt' => (int) ($event['attempt'] ?? 1),
+                    'confirmed_hypotheses' => $facts['confirmed_hypotheses'] ?? (isset($facts['hypotheses']) && is_array($facts['hypotheses']) ? count(array_filter($facts['hypotheses'], static fn ($h): bool => is_array($h) && ($h['status'] ?? '') === 'confirmed')) : 0),
+                    'rejected_hypotheses' => $facts['rejected_hypotheses'] ?? (isset($facts['hypotheses']) && is_array($facts['hypotheses']) ? count(array_filter($facts['hypotheses'], static fn ($h): bool => is_array($h) && ($h['status'] ?? '') === 'rejected')) : 0),
+                    'hypotheses' => is_array($facts['hypotheses'] ?? null) ? $facts['hypotheses'] : [],
+                    'official_references' => is_array($facts['official_references'] ?? null) ? $facts['official_references'] : [],
+                    'facts' => $facts,
+                ];
+            } elseif ($type === 'debugging.started') {
+                $lastDebug = [
+                    'type' => 'debugging.started',
+                    'timestamp' => is_string($event['timestamp'] ?? null) ? $event['timestamp'] : null,
+                    'age_seconds' => watchAge(is_string($event['timestamp'] ?? null) ? $event['timestamp'] : null),
+                    'phase' => 'started',
+                    'status' => 'investigating',
+                    'cause_kind' => null,
+                    'document_id' => is_string($facts['document_id'] ?? null) ? $facts['document_id'] : null,
+                    'attempt' => (int) ($event['attempt'] ?? 1),
+                    'confirmed_hypotheses' => 0,
+                    'rejected_hypotheses' => 0,
+                    'hypotheses' => [],
+                    'official_references' => [],
+                    'facts' => $facts,
+                ];
+            } elseif ($type === 'debugging.verified') {
+                $lastDebug = [
+                    'type' => 'debugging.verified',
+                    'timestamp' => is_string($event['timestamp'] ?? null) ? $event['timestamp'] : null,
+                    'age_seconds' => watchAge(is_string($event['timestamp'] ?? null) ? $event['timestamp'] : null),
+                    'phase' => 'verified',
+                    'status' => 'verified',
+                    'cause_kind' => is_string($facts['cause_kind'] ?? null) ? $facts['cause_kind'] : ($lastDebug['cause_kind'] ?? null),
+                    'document_id' => is_string($facts['document_id'] ?? null) ? $facts['document_id'] : ($lastDebug['document_id'] ?? null),
+                    'attempt' => (int) ($event['attempt'] ?? 1),
+                    'confirmed_hypotheses' => (int) ($facts['confirmed_hypotheses'] ?? ($lastDebug['confirmed_hypotheses'] ?? 0)),
+                    'rejected_hypotheses' => (int) ($lastDebug['rejected_hypotheses'] ?? 0),
+                    'hypotheses' => $lastDebug['hypotheses'] ?? [],
+                    'official_references' => $lastDebug['official_references'] ?? [],
+                    'facts' => $facts,
+                ];
+            }
+
             // Circuitos
             if ($type === 'provider.capacity_limited') {
                 $runner = is_string($facts['runner'] ?? null) ? $facts['runner'] : 'unknown';
@@ -688,6 +741,7 @@ final class RalphWatchReader
                 'cpu_milli' => $cpuMilli,
             ] : null,
             'last_telemetry' => $lastTelemetry,
+            'debug' => $lastDebug,
             'gates' => $gatesStatus,
             'gate_ages' => $gateAges,
             'queue' => $queue,
@@ -869,6 +923,44 @@ function watchRenderTui(array $snapshot, bool $useAnsi = true, int $refreshInter
         $out[] = sprintf('│   %-18s %-25s  idade: %-26s │', $gateName, $badge, $ageStr);
     }
     $out[] = watchColor('├'.$border.'┤', 'dim', $useAnsi);
+
+    // Systematic Debugging ao Vivo (se ativo ou com progresso)
+    $debug = is_array($snapshot['debug'] ?? null) ? $snapshot['debug'] : null;
+    if ($debug !== null || in_array($state, ['debugging_required', 'debugging_running', 'debugging_verified'], true)) {
+        $out[] = watchColor('│ SYSTEMATIC DEBUGGING AO VIVO                                               │', 'bold', $useAnsi);
+        $docId = (string) ($debug['document_id'] ?? 'DBG-em-aberto');
+        $dbgPhase = (string) ($debug['phase'] ?? ($state === 'debugging_required' ? 'aguardando comando' : 'investigando'));
+        $dbgCause = (string) ($debug['cause_kind'] ?? 'não identificada');
+        $dbgStatus = (string) ($debug['status'] ?? $state);
+        $dbgAge = watchFormatAge($debug['age_seconds'] ?? null);
+
+        $dbgStatusBadge = match ($dbgStatus) {
+            'verified' => watchColor('[ ✔ VERIFIED  ]', 'bold_green', $useAnsi),
+            'investigating', 'running', 'evaluating' => watchColor('[ ⟳ INVESTIGATING ]', 'bold_cyan', $useAnsi),
+            'rejected', 'failed' => watchColor('[ ✖ REJECTED  ]', 'bold_red', $useAnsi),
+            default => watchColor('[ · '.strtoupper($dbgStatus).' ]', 'bold_yellow', $useAnsi),
+        };
+
+        $out[] = sprintf('│   %-12s %-30s  status: %-26s │', 'Documento:', watchColor($docId, 'bold_cyan', $useAnsi), $dbgStatusBadge);
+        $out[] = sprintf('│   %-12s %-30s  causa:  %-26s │', 'Fase/Idade:', $dbgPhase.' (há '.$dbgAge.')', watchColor($dbgCause, 'bold', $useAnsi));
+
+        $conf = $debug['confirmed_hypotheses'] ?? 0;
+        $rej = $debug['rejected_hypotheses'] ?? 0;
+        $hypCountStr = sprintf('%d confirmada(s), %d rejeitada(s)', (int) $conf, (int) $rej);
+        $out[] = sprintf('│   %-12s %-61s │', 'Hipóteses:', watchColor($hypCountStr, 'bold', $useAnsi));
+
+        $refs = is_array($debug['official_references'] ?? null) ? $debug['official_references'] : [];
+        if ($refs !== []) {
+            $refStr = '';
+            foreach (array_slice($refs, 0, 2) as $r) {
+                $prov = $r['provider'] ?? 'official';
+                $src = $r['source'] ?? '';
+                $refStr .= ($refStr !== '' ? ' | ' : '').$prov.': '.$src;
+            }
+            $out[] = sprintf('│   %-12s %-61s │', 'Ref. Oficiais:', watchColor(mb_strimwidth($refStr, 0, 58, '...'), 'dim', $useAnsi));
+        }
+        $out[] = watchColor('├'.$border.'┤', 'dim', $useAnsi);
+    }
 
     // Fila de Execução (até 5 itens ao redor do cursor)
     $out[] = watchColor('│ FILA DE EXECUÇÃO                                                           │', 'bold', $useAnsi);
