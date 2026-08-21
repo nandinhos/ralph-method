@@ -473,3 +473,25 @@ utf_lease="$(json_field "$utf_claim" lease_token)"
 (cd "$utf_tmp" && control verify) >/dev/null
 
 printf 'OK: Ralph Method smoke passou.\n'
+
+# ---------------------------------------------------------------------------
+# Reconfirmação de exit code: exit 1 capturado + stdout "tudo verde" ->
+# exit ratificado para 0 (camada de robustez contra delay do wrapper).
+# ---------------------------------------------------------------------------
+reconfirm_tmp="$TMP/reconfirm-fixture"
+mkdir -p "$reconfirm_tmp"
+git -C "$reconfirm_tmp" init -q
+git -C "$reconfirm_tmp" config user.email ralph-method@example.invalid
+git -C "$reconfirm_tmp" config user.name 'Ralph Method Reconfirm Test'
+printf '%s\n' '# Reconfirm' > "$reconfirm_tmp/README.md"
+printf '%s\n' '# Plano' > "$reconfirm_tmp/plan.md"
+printf '%s\n' '{"schema_version":"1.0.0","workflow_id":"wf_reconfirm","plan_file":"plan.md","knowledge_policy":{"mode":"non_blocking"},"features":[{"feature_key":"FEATURE-001","title":"Reconfirm","position":1}]}' > "$reconfirm_tmp/workflow.json"
+git -C "$reconfirm_tmp" add .
+git -C "$reconfirm_tmp" commit -qm base
+(cd "$reconfirm_tmp" && control init --workflow wf_reconfirm --manifest workflow.json >/dev/null)
+reconfirm_claim="$(cd "$reconfirm_tmp" && control claim --workflow wf_reconfirm --feature FEATURE-001 --actor reconfirm)"
+reconfirm_lease="$(json_field "$reconfirm_claim" lease_token)"
+reconfirm_output="$(cd "$reconfirm_tmp" && control run --workflow wf_reconfirm --feature FEATURE-001 --lease "$reconfirm_lease" --command 'printf "tudo verde · completadas 1 · falharam 0 · duracao 1m\n"; exit 1')"
+printf '%s' "$reconfirm_output" | grep -q '"status": "awaiting_gates"' || fail 'reconfirmação não ratificou exit 1 com stdout de sucesso'
+grep -q '"exit_reconfirmed"' "$reconfirm_tmp/.git/ralph-control/events.jsonl" || fail 'block.finished sem fato exit_reconfirmed'
+printf 'ok   reconfirmação de exit: exit 1 com "tudo verde" ratificado para 0 (awaiting_gates)\n'

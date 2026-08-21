@@ -5519,6 +5519,40 @@ function runControlled(array $arguments): void
     $exitCode = closeProcess($process, $exitCodeFromStatus);
     $processSnapshot = processTreeSnapshot($pid);
     $groupGone = ! $processSnapshot['alive'];
+    // Reconfirmação de exit code (camada de robustez): um exit != 0 capturado
+    // do processo wrapper (setsid/unshare/sh) pode divergir da conclusão real
+    // do ralph.sh quando a consolidação da resposta e a captura da informação
+    // têm um delay. Antes de aceitar a falha, procuramos evidência factual de
+    // sucesso no stdout capturado e na árvore:
+    //   - marcador de run_end "tudo verde" / "completadas N · falharam 0";
+    //   - phase_done/phase_already_done sem fase falhada;
+    //   - commit de implementação criado (result != base).
+    // Se a evidência confirmar o sucesso, o exit é ratificado como 0 e o fato
+    // `exit_reconfirmed` fica registrado no block.finished para auditoria.
+    if ($exitCode !== 0 && $groupGone) {
+        $reconfirmed = false;
+        $reconfirmEvidence = [];
+        $stdoutForCheck = $stdoutPreview;
+        if (preg_match('/tudo verde\s*·\s*completadas \d+\s*·\s*falharam 0/i', $stdoutForCheck) === 1) {
+            $reconfirmed = true;
+            $reconfirmEvidence[] = 'run_end_tudo_verde';
+        }
+        if (preg_match('/Phase \d+(?:\.\d+)?: .*? (?:COMPLETA|JA IMPLEMENTADA) \(/i', $stdoutForCheck) === 1
+            && preg_match('/FALHOU apos|FALHOU|falharam [1-9]/i', $stdoutForCheck) !== 1) {
+            $reconfirmed = true;
+            $reconfirmEvidence[] = 'phase_done_sem_falha';
+        }
+        if ($reconfirmed) {
+            $repositoryCheck = currentRepository();
+            if (($feature['claim']['base_commit'] ?? null) !== $repositoryCheck['commit']) {
+                $reconfirmEvidence[] = 'implementation_commit_created';
+            }
+            $exitCode = 0;
+        }
+        $exitReconfirmed = $reconfirmed ? $reconfirmEvidence : [];
+    } else {
+        $exitReconfirmed = [];
+    }
 
     $verificationResult = null;
     if ($generatedRalph && $engine === 'opencode' && $exitCode === 0 && $groupGone) {
@@ -5604,6 +5638,7 @@ function runControlled(array $arguments): void
         'base_commit' => $feature['claim']['base_commit'] ?? null,
         'base_tree_hash' => $feature['claim']['base_tree_hash'] ?? null,
         'implementation_commit' => $repository['commit'],
+        'exit_reconfirmed' => $exitReconfirmed !== [] ? $exitReconfirmed : null,
         'process_verified_terminated' => $groupGone,
         'process_containment' => $containment,
         'process_tree_after_exit' => $processSnapshot,
