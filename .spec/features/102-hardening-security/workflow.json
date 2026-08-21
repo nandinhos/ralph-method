@@ -1,0 +1,72 @@
+{
+  "schema_version": "1.0.0",
+  "workflow_id": "wf_ralph_method_2_0_onda2_hardening",
+  "plan_file": ".spec/features/102-hardening-security/PHASES.md",
+  "test_command": "bash scripts/check-shell.sh && bash scripts/test-ralph-method.sh",
+  "knowledge_policy": {
+    "mode": "non_blocking"
+  },
+  "execution_policy": {
+    "schema_version": "1.0.0",
+    "provider_strategy": "explicit_failover",
+    "provider_chain": [
+      {
+        "runner": "agy",
+        "profile": "agy",
+        "required_failure_domain_status": "observed"
+      },
+      {
+        "runner": "codex",
+        "profile": "codex",
+        "required_failure_domain_status": "observed"
+      },
+      {
+        "runner": "claude",
+        "profile": "claude",
+        "required_failure_domain_status": "observed"
+      }
+    ],
+    "failover": {
+      "eligible_reasons": ["provider_usage_limited"],
+      "short_wait_threshold_seconds": 120,
+      "unknown_reset_cooldown_seconds": 1800,
+      "max_switches_per_feature": 2,
+      "max_no_progress_seconds": 21600,
+      "when_chain_exhausted": "capacity_wait_then_recovery"
+    }
+  },
+  "features": [
+    {
+      "feature_key": "FEATURE-102A-SANITIZE-REDACT",
+      "title": "sanitize() redacta segredos em vez de rejeitar",
+      "position": 1,
+      "input_file": ".spec/features/102-hardening-security/PHASES.md",
+      "source_phase": "1",
+      "status": "pending"
+    },
+    {
+      "feature_key": "FEATURE-102B-CURSOR-REBAIXADO",
+      "title": "Cursor só promover com adversarial+hero completos",
+      "position": 2,
+      "input_file": ".spec/features/102-hardening-security/PHASES.md",
+      "source_phase": "2",
+      "status": "pending"
+    },
+    {
+      "feature_key": "FEATURE-102C-POLICY-FAILED",
+      "title": "policy_violation → status: failed (não interrupted/feature_bug)",
+      "position": 3,
+      "input_file": ".spec/features/102-hardening-security/PHASES.md",
+      "source_phase": "3",
+      "status": "pending"
+    },
+    {
+      "feature_key": "FEATURE-102D-EVENT-VALIDATION",
+      "title": "appendEvent valida tipo via enum canônica (event.rejected)",
+      "position": 4,
+      "input_file": ".spec/features/102-hardening-security/PHASES.md",
+      "source_phase": "4",
+      "status": "pending"
+    }
+  ]
+}
