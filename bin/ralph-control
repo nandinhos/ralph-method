@@ -27,6 +27,7 @@ $gitCommonDir = realpath($gitCommonDir) ?: $gitCommonDir;
 $runtime = $gitCommonDir.DIRECTORY_SEPARATOR.'ralph-control';
 $eventsFile = $runtime.DIRECTORY_SEPARATOR.'events.jsonl';
 $workflowFile = $runtime.DIRECTORY_SEPARATOR.'workflow.json';
+$policyLockFile = $runtime.DIRECTORY_SEPARATOR.'policy.lock';
 $lockFile = $runtime.DIRECTORY_SEPARATOR.'workflow.lock';
 $supervisorLockFile = $runtime.DIRECTORY_SEPARATOR.'supervisor.lock';
 $documentIndexFile = $runtime.DIRECTORY_SEPARATOR.'document-index.json';
@@ -55,6 +56,7 @@ $documentKinds = [
 
 $eventTypes = [
     'workflow.initialized', 'feature.claimed', 'attempt.started', 'block.finished',
+    'workflow.policy.frozen',
     'command.started', 'command.heartbeat', 'command.passed', 'command.failed', 'failure.detected',
     'fix.applied', 'fix.reverted', 'verification.passed', 'evidence.generated',
     'gate.passed', 'gate.rejected', 'gate.harness_error', 'gate.retry_started', 'handoff.generated', 'handoff.committed', 'feature.approved',
@@ -1121,6 +1123,199 @@ function executionPolicyHash(?array $policy): ?string
     }
 
     return hashValue(json_encode(canonical($policy), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR));
+}
+
+/**
+ * Compara a policy materializada com o hash congelado no init.
+ *
+ * O workflow é mantido no runtime do Git e pode ser alterado fora do
+ * controlador. A comparação precisa acontecer antes de qualquer nova
+ * tentativa, pois uma policy alterada não é uma falha do código da feature.
+ *
+ * @return array{frozen_hash: string, current_hash: ?string}|null
+ */
+function executionPolicyDivergence(array $workflow): ?array
+{
+    $frozenHash = $workflow['execution_policy_hash'] ?? null;
+    if (! is_string($frozenHash) || $frozenHash === '') {
+        return null;
+    }
+
+    $currentPolicy = is_array($workflow['execution_policy'] ?? null)
+        ? $workflow['execution_policy']
+        : null;
+    $currentHash = executionPolicyHash($currentPolicy);
+    if ($currentHash === $frozenHash) {
+        return null;
+    }
+
+    return ['frozen_hash' => $frozenHash, 'current_hash' => $currentHash];
+}
+
+function policyLockActive(): bool
+{
+    global $policyLockFile;
+
+    return is_file($policyLockFile);
+}
+
+/** @param array{frozen_hash: string, current_hash: ?string} $divergence */
+function writePolicyLock(string $workflowId, array $divergence, string $reason = 'policy_violation'): void
+{
+    global $policyLockFile;
+
+    writeJson($policyLockFile, [
+        'schema_version' => RALPH_SCHEMA_VERSION,
+        'workflow_id' => $workflowId,
+        'kind' => 'policy.lock',
+        'reason' => $reason,
+        'frozen_hash' => $divergence['frozen_hash'],
+        'current_hash' => $divergence['current_hash'],
+        'created_at' => ralphIsoTimestamp(),
+    ]);
+    @chmod($policyLockFile, 0600);
+}
+
+function clearPolicyLock(): void
+{
+    global $policyLockFile;
+
+    if (is_file($policyLockFile) && ! unlink($policyLockFile)) {
+        fail('não foi possível remover policy.lock');
+    }
+}
+
+/** @param array<string, mixed> $feature */
+function featureHasPolicyFailure(array $feature): bool
+{
+    $result = is_array($feature['result'] ?? null) ? $feature['result'] : [];
+    $failure = is_array($feature['failure'] ?? null) ? $feature['failure'] : [];
+
+    return (($result['status'] ?? null) === 'failed' && ($result['reason'] ?? null) === 'policy_violation')
+        || (($failure['reason'] ?? null) === 'policy_violation')
+        || (($feature['state'] ?? null) === 'failed' && ($failure['cause_kind'] ?? null) === 'harness_defect');
+}
+
+/**
+ * Evidência de código para feature_bug deve apontar para arquivos presentes no
+ * checkout. Uma lista vazia, ou referências que não existem, nunca autoriza a
+ * classificação como bug da feature.
+ *
+ * @param array<string, mixed> $report
+ */
+function debugHasCodeEvidence(array $report): bool
+{
+    $refs = $report['validation']['evidence_refs'] ?? null;
+    if (! is_array($refs) || $refs === []) {
+        return false;
+    }
+
+    foreach ($refs as $reference) {
+        if (! is_string($reference) || ! is_file($GLOBALS['root'].'/'.ltrim($reference, '/'))) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/**
+ * Registra a transição canônica de uma policy violada. Deve ser chamado sob
+ * workflow.lock; a checagem por evento torna a operação segura para retries do
+ * supervisor e para chamadas repetidas de approve.
+ *
+ * @param array<string, mixed> $arguments
+ * @param array<string, mixed> $feature
+ * @param array{frozen_hash: string, current_hash: ?string} $divergence
+ * @param array<string, mixed> $extraFacts
+ */
+function recordPolicyViolationUnlocked(array $arguments, array $feature, array $divergence, string $reason = 'policy_violation', array $extraFacts = []): void
+{
+    $workflowId = (string) ($arguments['workflow'] ?? '');
+    $featureKey = (string) ($feature['feature_key'] ?? '');
+    writePolicyLock($workflowId, $divergence, $reason);
+    $facts = array_merge([
+        'gate' => 'policy',
+        'status' => 'rejected',
+        'reason' => $reason,
+        'cause_kind' => 'harness_defect',
+        'execution_policy_hash' => $divergence['frozen_hash'],
+        'current_execution_policy_hash' => $divergence['current_hash'],
+        'policy_lock' => 'policy.lock',
+        'artifact_refs' => [],
+    ], $extraFacts);
+    $events = readEvents();
+    $attempt = (int) ($feature['attempt'] ?? 0);
+    $hasGateRejection = false;
+    $hasRecovery = false;
+    foreach ($events as $event) {
+        if (($event['feature_key'] ?? null) !== $featureKey || (int) ($event['attempt'] ?? -1) !== $attempt) {
+            continue;
+        }
+        if (($event['type'] ?? null) === 'gate.rejected'
+            && ($event['facts']['reason'] ?? null) === $reason) {
+            $hasGateRejection = true;
+        }
+        if (($event['type'] ?? null) === 'recovery.required'
+            && ($event['facts']['reason'] ?? null) === $reason) {
+            $hasRecovery = true;
+        }
+    }
+    if (! $hasGateRejection) {
+        appendEvent(eventContext(array_merge($arguments, [
+            'idempotency-key' => 'idem_policy_gate_rejected_'.$workflowId.'_'.$featureKey.'_'.$attempt,
+        ]), $feature, 'gate.rejected', 'Policy de execução divergente; gate rejeitado', $facts));
+    }
+    if (! $hasRecovery) {
+        appendEvent(eventContext(array_merge($arguments, [
+            'idempotency-key' => 'idem_policy_recovery_required_'.$workflowId.'_'.$featureKey.'_'.$attempt,
+        ]), $feature, 'recovery.required', 'Policy de execução violada; recovery explícito exigido', $facts));
+    }
+}
+
+/** @param array<string, mixed> $arguments */
+function reconcileExecutionPolicy(array $arguments): void
+{
+    $workflowId = required($arguments, 'workflow');
+    $featureKey = is_string($arguments['feature'] ?? null) && trim((string) $arguments['feature']) !== ''
+        ? trim((string) $arguments['feature'])
+        : null;
+    withLock(function () use ($arguments, $workflowId, $featureKey): void {
+        $workflow = loadWorkflowForId($workflowId);
+        $currentPolicy = is_array($workflow['execution_policy'] ?? null) ? $workflow['execution_policy'] : null;
+        if ($currentPolicy !== null) {
+            validateExecutionPolicy($currentPolicy);
+            $workflow['execution_policy_hash'] = executionPolicyHash($currentPolicy);
+            $workflow['execution_policy_validated_at'] = gmdate('Y-m-d\TH:i:s\Z');
+        } else {
+            unset($workflow['execution_policy'], $workflow['execution_policy_hash'], $workflow['execution_policy_validated_at']);
+        }
+        saveWorkflow($workflow);
+        clearPolicyLock();
+        appendEvent([
+            'workflow_id' => $workflowId,
+            'feature_key' => 'workflow',
+            'type' => 'workflow.policy.frozen',
+            'summary' => 'Execution policy reconciliada e congelada novamente',
+            'facts' => [
+                'execution_policy_hash' => $workflow['execution_policy_hash'] ?? null,
+                'reason' => $arguments['reason'] ?? 'reconcile explícito da policy',
+            ],
+        ]);
+        if ($featureKey !== null) {
+            $projection = project($workflow, readEvents());
+            $feature = featureFrom($projection, $featureKey);
+            if (featureHasPolicyFailure($feature)) {
+                appendEvent(eventContext(array_merge($arguments, [
+                    'idempotency-key' => 'idem_policy_reconciled_'.$workflowId.'_'.$featureKey.'_'.$feature['attempt'],
+                ]), $feature, 'recovery.resolved', 'Policy reconciliada; nova claim depende de recovery explícito concluído', [
+                    'reason' => 'policy_reconciled',
+                    'execution_policy_hash' => $workflow['execution_policy_hash'] ?? null,
+                ]));
+            }
+        }
+    });
+    printJson(['status' => 'policy_reconciled', 'workflow_id' => $workflowId, 'feature_key' => $featureKey]);
 }
 
 /**
@@ -2579,7 +2774,15 @@ function project(array $workflow, array $events): array
                     break;
                 case 'gate.rejected':
                     $feature['gates'][$event['facts']['gate'] ?? 'unknown'] = 'rejected';
-                    $feature['state'] = 'debugging_required';
+                    if (($event['facts']['reason'] ?? null) === 'policy_violation'
+                        || ($event['facts']['reason'] ?? null) === 'policy_not_reconciled') {
+                        $feature['state'] = 'failed';
+                        $feature['failure'] = $event['facts'] ?? [];
+                        $feature['result']['status'] = 'failed';
+                        $feature['result']['reason'] = $event['facts']['reason'];
+                    } else {
+                        $feature['state'] = 'debugging_required';
+                    }
                     break;
                 case 'gate.harness_error':
                     // FEATURE-097: defeito do comando de gate, não da feature.
@@ -2616,14 +2819,28 @@ function project(array $workflow, array $events): array
                     $feature['state'] = 'debugging_verified';
                     $feature['debugging'] = $event['facts'] ?? [];
                     break;
-                case 'debugging.rejected': $feature['state'] = 'recovery_required';
+                case 'debugging.rejected':
+                    $feature['state'] = (($event['facts']['reason'] ?? null) === 'policy_violation') ? 'failed' : 'recovery_required';
                     $feature['debugging'] = $event['facts'] ?? [];
+                    if (($event['facts']['reason'] ?? null) === 'policy_violation') {
+                        $feature['failure'] = $event['facts'] ?? [];
+                        $feature['result']['status'] = 'failed';
+                        $feature['result']['reason'] = 'policy_violation';
+                    }
                     break;
                 case 'feature.approved': $feature['state'] = 'approved';
                     break;
                 case 'feature.released': $feature['state'] = 'released';
                     break;
-                case 'recovery.required': $feature['state'] = 'recovery_required';
+                case 'recovery.required':
+                    if (in_array($event['facts']['reason'] ?? null, ['policy_violation', 'policy_not_reconciled'], true)) {
+                        $feature['state'] = 'failed';
+                        $feature['failure'] = $event['facts'] ?? [];
+                        $feature['result']['status'] = 'failed';
+                        $feature['result']['reason'] = $event['facts']['reason'];
+                    } else {
+                        $feature['state'] = 'recovery_required';
+                    }
                     break;
                 case 'recovery.retry_started':
                     $feature['state'] = 'running';
@@ -2967,14 +3184,23 @@ function supervisorFeedback(array $snapshot): string
     );
 }
 
-/** @param array<string, mixed> $feature @param array<string, mixed> $snapshot */
-function supervisorRecordRequiredRecovery(array $arguments, array $feature, array $snapshot, string $reason): void
+/** @param array<string, mixed> $feature @param array<string, mixed> $snapshot @param array{frozen_hash: string, current_hash: ?string}|null $policyDivergence */
+function supervisorRecordRequiredRecovery(array $arguments, array $feature, array $snapshot, string $reason, string $causeKind = 'unknown', ?array $policyDivergence = null): void
 {
-    withLock(function () use ($arguments, $feature, $snapshot, $reason): void {
+    withLock(function () use ($arguments, $feature, $snapshot, $reason, $causeKind, $policyDivergence): void {
         $workflowId = (string) ($arguments['workflow'] ?? '');
         $featureKey = (string) ($feature['feature_key'] ?? '');
         $workflow = loadWorkflowForId($workflowId);
         $currentFeature = featureFrom(project($workflow, readEvents()), $featureKey);
+        if ($policyDivergence !== null && $reason === 'policy_violation') {
+            recordPolicyViolationUnlocked($arguments, $currentFeature, $policyDivergence, $reason, [
+                'health' => $snapshot['health'] ?? 'unknown',
+                'last_event' => $snapshot['last_event'] ?? [],
+                'processes' => $snapshot['processes'] ?? [],
+            ]);
+
+            return;
+        }
         // A key inclui o timestamp: o payload do recovery.required carrega o
         // snapshot (health/last_event/processes), que muda entre ocorrências.
         // Com key só por workflow|feature|attempt|reason, um recovery repetido
@@ -2985,6 +3211,7 @@ function supervisorRecordRequiredRecovery(array $arguments, array $feature, arra
             'idempotency-key' => 'idem_supervisor_recovery_'.substr(hash('sha256', $workflowId.'|'.$featureKey.'|'.($currentFeature['attempt'] ?? 0).'|'.$reason.'|'.gmdate('Y-m-d\TH:i:s\Z')), 0, 32),
         ]), $currentFeature, 'recovery.required', 'Supervisão não pôde continuar a tentativa', [
             'reason' => $reason,
+            'cause_kind' => $causeKind,
             'health' => $snapshot['health'] ?? 'unknown',
             'last_event' => $snapshot['last_event'] ?? [],
             'processes' => $snapshot['processes'] ?? [],
@@ -3508,6 +3735,34 @@ function superviseWorkflow(array $arguments): void
             }
             $feature = featureFrom($projection, $cursor);
 
+            // Policy divergente é uma falha do harness, nunca um motivo para
+            // abrir outra tentativa. A decisão acontece antes de qualquer
+            // beginFailedRetry/claim; o lock permanece até reconcile ou re-init.
+            $policyDivergence = executionPolicyDivergence($workflow);
+            if ($policyDivergence !== null && ($feature['state'] ?? null) !== 'released') {
+                $snapshot = supervisorSnapshot($arguments, $workflowId, $staleAfter, $activityStaleAfter);
+                supervisorRecordRequiredRecovery(
+                    $arguments,
+                    $feature,
+                    $snapshot,
+                    'policy_violation',
+                    'harness_defect',
+                    $policyDivergence,
+                );
+                printJson([
+                    'status' => 'recovery_required',
+                    'workflow_id' => $workflowId,
+                    'feature_key' => $cursor,
+                    'reason' => 'policy_violation',
+                    'cause_kind' => 'harness_defect',
+                    'policy_lock' => 'policy.lock',
+                    'execution_policy_hash' => $policyDivergence['frozen_hash'],
+                    'current_execution_policy_hash' => $policyDivergence['current_hash'],
+                ]);
+
+                return;
+            }
+
             if (($feature['state'] ?? null) === 'debugging_running') {
                 $stale = markStaleDebuggingFeature($workflowId, $cursor, $staleAfter);
                 fwrite(STDERR, supervisorFeedback(supervisorSnapshot($arguments, $workflowId, $staleAfter, $activityStaleAfter))."\n");
@@ -4005,6 +4260,7 @@ function initWorkflow(array $arguments): void
 
     withLock(function () use ($workflow): void {
         global $workflowFile;
+        $hadPolicyLock = policyLockActive();
         runtimeInit();
         if (is_file($workflowFile)) {
             $existing = readJson($workflowFile);
@@ -4013,6 +4269,27 @@ function initWorkflow(array $arguments): void
             }
         }
         saveWorkflow($workflow);
+        // Re-init é uma reconciliação explícita da policy congelada. O lock
+        // não pode sobreviver a um novo init do mesmo workflow.
+        clearPolicyLock();
+        if ($hadPolicyLock) {
+            $projection = project($workflow, readEvents());
+            $cursor = $projection['cursor'] ?? null;
+            if (is_string($cursor) && $cursor !== '') {
+                $feature = featureFrom($projection, $cursor);
+                if (featureHasPolicyFailure($feature)) {
+                    appendEvent(eventContext([
+                        'workflow' => $workflow['workflow_id'],
+                        'actor' => 'ralph-control',
+                        'actor-type' => 'controller',
+                        'idempotency-key' => 'idem_policy_reinitialized_'.$workflow['workflow_id'].'_'.$cursor.'_'.$feature['attempt'],
+                    ], $feature, 'recovery.resolved', 'Re-init reconciliou a execution policy divergente', [
+                        'reason' => 'policy_reinitialized',
+                        'execution_policy_hash' => $workflow['execution_policy_hash'] ?? null,
+                    ]));
+                }
+            }
+        }
         foreach (RALPH_ADAPTER_ENGINES as $engine) {
             if (! is_file(adapterPromotionPath($engine))) {
                 adapterPromotionWrite($engine, defaultAdapterPromotion($engine));
@@ -4041,6 +4318,14 @@ function claimFeature(array $arguments): void
         }
         $projection = project($workflow, readEvents());
         $feature = featureFrom($projection, $featureKey);
+        $divergence = executionPolicyDivergence($workflow);
+        if ($divergence !== null) {
+            recordPolicyViolationUnlocked($arguments, $feature, $divergence);
+            fail('execution_policy divergiu do hash congelado; policy.lock ativo; execute reconcile --policy ou re-init', 11);
+        }
+        if (policyLockActive()) {
+            fail('policy.lock ativo; execute reconcile --policy ou re-init antes de nova claim', 11);
+        }
         if ($projection['cursor'] !== $featureKey) {
             fail('feature não é a próxima posição autorizada');
         }
@@ -4171,6 +4456,15 @@ function finishBlock(array $arguments): void
  */
 function reconcileExternalBlock(array $arguments): void
 {
+    // `reconcile` mantém o fluxo legado de execução externa. Quando há um
+    // policy.lock, ou quando o operador pede explicitamente --policy, a
+    // operação é a reconciliação do hash congelado e não uma reconciliação de
+    // commit da feature.
+    if (in_array($arguments['policy'] ?? false, [true, 'true'], true) || policyLockActive()) {
+        reconcileExecutionPolicy($arguments);
+
+        return;
+    }
     $workflowId = required($arguments, 'workflow');
     $featureKey = required($arguments, 'feature');
 
@@ -4475,6 +4769,14 @@ function approveFeature(array $arguments): void
         $projection = project($workflow, $events);
         $feature = featureFrom($projection, $featureKey);
         checkLease($feature, $lease);
+        $divergence = executionPolicyDivergence($workflow);
+        if ($divergence !== null) {
+            recordPolicyViolationUnlocked($arguments, $feature, $divergence);
+            fail('approve rejeitado: execution_policy divergiu; policy_violation exige recovery explícito', 11);
+        }
+        if (featureHasPolicyFailure($feature)) {
+            fail('approve rejeitado: resultado failed por policy_violation; execute reconcile --policy/recovery explícito antes de aprovar', 11);
+        }
         if (($feature['state'] ?? null) !== 'awaiting_gates') {
             fail('feature não está aguardando gates');
         }
@@ -4993,6 +5295,9 @@ function recoverFeature(array $arguments): void
         $workflow = loadWorkflowForId($workflowId);
         $projection = project($workflow, readEvents());
         $feature = featureFrom($projection, $featureKey);
+        if (policyLockActive() || executionPolicyDivergence($workflow) !== null) {
+            fail('policy.lock ativo: recovery não libera nova tentativa antes de reconcile --policy ou re-init', 11);
+        }
         if (! in_array($feature['state'] ?? null, ['recovery_required', 'blocked'], true)) {
             fail('recover exige estado recovery_required ou blocked');
         }
@@ -5015,6 +5320,13 @@ function beginFailedRetry(array $arguments): array
         $events = readEvents();
         $projection = project($workflow, $events);
         $feature = featureFrom($projection, $featureKey);
+        $divergence = executionPolicyDivergence($workflow);
+        if ($divergence !== null || policyLockActive()) {
+            if ($divergence !== null) {
+                recordPolicyViolationUnlocked($arguments, $feature, $divergence, 'policy_not_reconciled');
+            }
+            fail('policy.lock ativo: retry bloqueado até reconcile --policy ou re-init', 11);
+        }
         $result = $feature['result'] ?? [];
         $gateFailure = in_array('rejected', array_values($feature['gates'] ?? []), true);
         $verifiedDebugging = ($feature['state'] ?? null) === 'debugging_verified'
@@ -5763,6 +6075,10 @@ function runSystematicDebug(array $arguments): array
         }
 
         $causeKind = is_string($report['cause_kind'] ?? null) ? sanitize($report['cause_kind']) : 'unknown';
+        $debugPolicyDivergence = executionPolicyDivergence($context['workflow']);
+        if ($causeKind === 'feature_bug' && (! debugHasCodeEvidence($report) || $debugPolicyDivergence !== null)) {
+            $causeKind = 'harness_defect';
+        }
 
         $progressFacts = [
             'phase' => 'hypotheses_evaluated',
@@ -5777,6 +6093,11 @@ function runSystematicDebug(array $arguments): array
             'symptom' => is_string($report['symptom'] ?? null) ? sanitize($report['symptom']) : null,
             'root_cause' => is_string($report['root_cause'] ?? null) ? sanitize($report['root_cause']) : null,
         ];
+        if ($causeKind === 'harness_defect'
+            && (($report['cause_kind'] ?? null) === 'feature_bug')
+            && (! debugHasCodeEvidence($report) || $debugPolicyDivergence !== null)) {
+            $progressFacts['reason'] = 'policy_violation';
+        }
 
         withLock(function () use ($arguments, $workflowId, $featureKey, $progressFacts): void {
             $projection = project(loadWorkflowForId($workflowId), readEvents());
@@ -5818,16 +6139,45 @@ function runSystematicDebug(array $arguments): array
     }
 
     withLock(function () use ($arguments, $workflowId, $featureKey, $artifactRef, $report, $errors, $reportPath, $commandResult, $documentId): void {
-        $projection = project(loadWorkflowForId($workflowId), readEvents());
+        $workflow = loadWorkflowForId($workflowId);
+        $projection = project($workflow, readEvents());
         $feature = featureFrom($projection, $featureKey);
+        $policyDivergence = executionPolicyDivergence($workflow);
+        if ($policyDivergence !== null && $errors === [] && is_array($report)) {
+            $errors[] = 'execution_policy divergiu do hash congelado';
+        }
         if ($errors !== [] || ! is_array($report)) {
-            appendEvent(eventContext($arguments, $feature, 'debugging.rejected', 'Systematic debugging rejeitado por falta de evidência verificável', [
+            $rejectedFacts = [
                 'artifact_refs' => [$artifactRef],
                 'errors' => array_slice($errors, 0, 8),
                 'command_exit_code' => $commandResult['exit_code'],
                 'timed_out' => $commandResult['timed_out'],
                 'tree_unchanged' => ! in_array('o comando de systematic debugging alterou a working tree', $errors, true),
-            ]));
+            ];
+            $policyDivergence = executionPolicyDivergence($workflow);
+            $reportClaimsFeatureBug = is_array($report) && ($report['cause_kind'] ?? null) === 'feature_bug';
+            if ($policyDivergence !== null || ($reportClaimsFeatureBug && ! debugHasCodeEvidence($report))) {
+                $rejectedFacts = array_merge($rejectedFacts, [
+                    'cause_kind' => 'harness_defect',
+                    'reason' => 'policy_violation',
+                    'execution_policy_hash' => $policyDivergence['frozen_hash'] ?? $workflow['execution_policy_hash'] ?? null,
+                    'current_execution_policy_hash' => $policyDivergence['current_hash'] ?? null,
+                    'policy_lock' => 'policy.lock',
+                ]);
+                if ($policyDivergence !== null) {
+                    writePolicyLock($workflowId, $policyDivergence);
+                }
+            } else {
+                $rejectedFacts['cause_kind'] = is_array($report) && in_array($report['cause_kind'] ?? null, ['harness_defect', 'capacity', 'unknown'], true)
+                    ? $report['cause_kind']
+                    : 'unknown';
+            }
+            appendEvent(eventContext($arguments, $feature, 'debugging.rejected', 'Systematic debugging rejeitado por falta de evidência verificável', $rejectedFacts));
+            if (($rejectedFacts['reason'] ?? null) === 'policy_violation') {
+                appendEvent(eventContext(array_merge($arguments, [
+                    'idempotency-key' => 'idem_debug_policy_recovery_'.$workflowId.'_'.$featureKey.'_'.$feature['attempt'],
+                ]), $feature, 'recovery.required', 'Systematic debugging sem evidência de código; policy_violation exige recovery', $rejectedFacts));
+            }
 
             return;
         }

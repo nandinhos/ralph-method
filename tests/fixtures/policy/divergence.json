@@ -1,0 +1,11 @@
+{
+  "frozen_hash": "sha256:abc...ZERO",
+  "current_hash": "sha256:def...CURR",
+  "divergence": true,
+  "expected_behavior": {
+    "approveFeature": "rejeita com 'execution_policy divergiu'",
+    "supervisor_before_retry": "registra recovery.required/policy_violation",
+    "attempt_count": 0,
+    "feature_status": "policy_violation"
+  }
+}

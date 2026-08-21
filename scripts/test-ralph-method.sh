@@ -1352,5 +1352,9 @@ bash "$ROOT/scripts/test-sanitize-redact.sh"
 bash "$ROOT/tests/test-cursor-adversarial.sh"
 bash "$ROOT/tests/test-cursor-hero.sh"
 
+# ---------------------------------------------------------------------------
+# FEATURE-102C (Phase 3): policy_violation como failed/harness_defect
+# ---------------------------------------------------------------------------
+bash "$ROOT/tests/test-policy-failed.sh"
 
 
