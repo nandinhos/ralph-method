@@ -13,7 +13,7 @@
       {
         "runner": "agy",
         "profile": "agy",
-        "required_failure_domain_status": "observed"
+        "required_failure_domain_status": "declared"
       },
       {
         "runner": "codex",
