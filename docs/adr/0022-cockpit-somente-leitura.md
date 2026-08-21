@@ -117,3 +117,13 @@ inspeciona o manifesto, o stderr do supervisor e o ledger: se o
 cria o arquivo, e o preflight recusa novo `supervise`. A autoridade
 continua no `ralph-control`; a UI não aprova gate nem escolhe a próxima
 feature.
+
+## Emenda — fonte única: stream e controlador (2026-08-21)
+
+O cockpit não utiliza parsing de texto nem expressões regulares em logs de
+processo (`exitReasonFromLog`) para determinar razões de término ou falha do
+supervisor. A decisão e a observação de estados apoiam-se exclusivamente na
+fonte autoritativa do controlador (`ralph-control status`) e no stream de
+eventos estruturado (`events.jsonl` / feedback), eliminando heurísticas sobre
+logs e unificando a fonte de verdade entre o terminal (`ralph-watch`) e o cockpit.
+

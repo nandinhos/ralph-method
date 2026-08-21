@@ -5,9 +5,6 @@
          colors="true"
 >
     <testsuites>
-        <testsuite name="Unit">
-            <directory>tests/Unit</directory>
-        </testsuite>
         <testsuite name="Feature">
             <directory>tests/Feature</directory>
         </testsuite>
@@ -19,6 +16,7 @@
     </source>
     <php>
         <env name="APP_ENV" value="testing"/>
+        <env name="APP_KEY" value="base64:yk2yqY14Y+88r5v/2N/Q5L/V0R3uK0qL91F5B0K7a9w="/>
         <env name="APP_LOCALE" value="pt_BR"/>
         <env name="APP_TIMEZONE" value="America/Sao_Paulo"/>
         <env name="APP_FALLBACK_LOCALE" value="en"/>

@@ -142,7 +142,7 @@ final class RalphLauncher
             if (! $this->pidAlive($pid)) {
                 $this->clearPidFile();
 
-                return ['started' => false, 'reason' => $this->exitReasonFromLog(), 'pid' => null];
+                return ['started' => false, 'reason' => $this->exitReasonFromControllerAndStream($workflowId), 'pid' => null];
             }
         }
 
@@ -528,28 +528,105 @@ final class RalphLauncher
         return null;
     }
 
-    private function exitReasonFromLog(): string
+    private function exitReasonFromControllerAndStream(string $workflowId): string
     {
-        $path = storage_path('logs/ralph-supervise.log');
-        if (! is_file($path)) {
-            return 'cockpit.run.start_failed';
+        $cursorState = $this->controlCursorState($workflowId);
+        if ($cursorState === 'debugging_required') {
+            return 'cockpit.run.debug_required';
         }
 
-        $tail = substr((string) file_get_contents($path), -12000);
-        if (preg_match_all('/\{[^{}]*"status"\s*:\s*"([^"]+)"[^{}]*\}/', $tail, $matches) < 1) {
-            return 'cockpit.run.start_failed';
+        if ($cursorState === 'recovery_required' || $cursorState === 'blocked') {
+            $lastReason = $this->lastLedgerRecoveryReason($workflowId);
+            if (str_contains($lastReason, 'exit_code') || str_contains($lastReason, 'retry_limit') || str_contains($lastReason, 'exit')) {
+                return 'cockpit.run.block_failed';
+            }
+
+            return 'cockpit.run.recovery_required';
         }
 
-        $status = (string) end($matches[1]);
+        $lastEvent = $this->lastLedgerEvent($workflowId);
+        if ($lastEvent !== null) {
+            $type = (string) ($lastEvent['type'] ?? '');
+            if ($type === 'debugging.required' || $type === 'debugging.rejected') {
+                return 'cockpit.run.debug_required';
+            }
 
-        return match ($status) {
-            'recovery_required' => str_contains($tail, '"exit_code"') || str_contains($tail, 'retry_limit')
-                ? 'cockpit.run.block_failed'
-                : 'cockpit.run.recovery_required',
-            'debugging_required' => 'cockpit.run.debug_required',
-            'complete' => 'cockpit.run.queue_empty',
-            default => 'cockpit.run.start_failed',
-        };
+            if ($type === 'recovery.required') {
+                $reason = (string) data_get($lastEvent, 'facts.reason', '');
+                $exitCode = data_get($lastEvent, 'facts.exit_code');
+                if ($exitCode !== null || str_contains($reason, 'exit') || str_contains($reason, 'retry_limit')) {
+                    return 'cockpit.run.block_failed';
+                }
+
+                return 'cockpit.run.recovery_required';
+            }
+
+            if ($type === 'workflow.completed') {
+                return 'cockpit.run.queue_empty';
+            }
+        }
+
+        $next = $this->nextFeature($workflowId);
+        if ($next['key'] === null) {
+            return 'cockpit.run.queue_empty';
+        }
+
+        return 'cockpit.run.start_failed';
+    }
+
+    private function lastLedgerRecoveryReason(string $workflowId): string
+    {
+        $ledgerPath = $this->runtime->ledgerPath();
+        if (! is_file($ledgerPath)) {
+            return '';
+        }
+
+        $reason = '';
+        $handle = fopen($ledgerPath, 'r');
+        if ($handle === false) {
+            return '';
+        }
+
+        while (($line = fgets($handle)) !== false) {
+            $event = json_decode($line, true);
+            if (! is_array($event) || ($event['workflow_id'] ?? null) !== $workflowId || ($event['type'] ?? null) !== 'recovery.required') {
+                continue;
+            }
+            $candidate = $event['facts']['reason'] ?? '';
+            if (is_string($candidate) && $candidate !== '') {
+                $reason = $candidate;
+            }
+        }
+        fclose($handle);
+
+        return $reason;
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function lastLedgerEvent(string $workflowId): ?array
+    {
+        $ledgerPath = $this->runtime->ledgerPath();
+        if (! is_file($ledgerPath)) {
+            return null;
+        }
+
+        $last = null;
+        $handle = fopen($ledgerPath, 'r');
+        if ($handle === false) {
+            return null;
+        }
+
+        while (($line = fgets($handle)) !== false) {
+            $event = json_decode($line, true);
+            if (is_array($event) && ($event['workflow_id'] ?? null) === $workflowId) {
+                $last = $event;
+            }
+        }
+        fclose($handle);
+
+        return $last;
     }
 
     /**
