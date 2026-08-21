@@ -2723,6 +2723,10 @@ function supervisorExecuteGateCommand(array $arguments, array $feature, string $
         'RALPH_ATTEMPT' => (string) $attempt,
         'RALPH_GATE' => $gate,
         'RALPH_REPORT_PATH' => $reportPath,
+        // O engine do supervisor é fato público da execução; o comando de gate
+        // (ex: technical_review) precisa dele para escolher o runner correto
+        // sem re-derivar por heurística de perfis.
+        'RALPH_ENGINE' => (string) (resolveEngine($arguments) ?: ''),
     ]);
     unset($environment['RALPH_LEASE'], $environment['RALPH_LEASE_TOKEN']);
     $before = workingTreeFingerprint();
