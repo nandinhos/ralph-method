@@ -106,6 +106,22 @@ while :; do
       prog=$(printf '%s' "$snap" | php -r '$d=json_decode(stream_get_contents(STDIN),true);echo round((float)($d["progress"]["feature_percent"]??0),1);' 2>/dev/null)
       gates=$(printf '%s' "$snap" | php -r '$d=json_decode(stream_get_contents(STDIN),true);$p=$d["progress"]??[];echo ($p["passed_gates"]??0)."/".($p["total_gates"]??0);' 2>/dev/null)
       echo "${CYAN}${BOLD}[$(stamp)]${RESET} snapshot → feature=${MAGENTA}${feat:-—}${RESET} (${title:-—}) estado=${YELLOW}${st:-—}${RESET} progresso=${prog:-—}% gates=${gates:-—}"
+
+      # Workflow completo: sem cursor e estado complete = todas as features
+      # liberadas. Para de monitorar e avisa — não fica repetindo o snapshot.
+      if [ "$st" = "complete" ] && [ -z "$feat" ]; then
+        echo ""
+        echo "${GREEN}${BOLD}══════════════════════════════════════════════════════════${RESET}"
+        echo "${GREEN}${BOLD}  ✅ WORKFLOW COMPLETO — ${WORKFLOW}${RESET}"
+        echo "${GREEN}${BOLD}  Todas as features foram liberadas com os 5 gates verdes.${RESET}"
+        echo "${CYAN}  Ledger:  ${LEDGER}${RESET}"
+        echo "${CYAN}  Relatório de tempo:${RESET}"
+        echo "${CYAN}    php bin/ralph-time-report.php --ledger ${LEDGER} --workflow ${WORKFLOW} --format md${RESET}"
+        echo "${GREEN}${BOLD}══════════════════════════════════════════════════════════${RESET}"
+        echo ""
+        echo "encerrado em $(date '+%Y-%m-%d %H:%M:%S')"
+        exit 0
+      fi
     fi
   fi
 
