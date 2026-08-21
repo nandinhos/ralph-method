@@ -11,7 +11,13 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # RALPH_BIN permite apontar para uma copia patchada (prova red dos testes).
+# O valor pode vir relativo do perfil do executor (RALPH_BIN=scripts/ralph.sh
+# exportado pelo controlador); resolve contra o ROOT como configuredRalph faz.
 RALPH="${RALPH_BIN:-$ROOT/scripts/ralph.sh}"
+case "$RALPH" in
+  /*) ;;
+  *) RALPH="$ROOT/$RALPH" ;;
+esac
 ONLY="${1:-}"
 
 TMP=$(mktemp -d)
