@@ -1173,6 +1173,171 @@ printf '%s\n' "$watch_dbg_text" | grep -q "1 confirmada(s)" || fail 'ralph-watch
 
 printf 'ok   systematic debugging ao vivo emite debug.progress sanitizado, DBG-* oficial, monitor e watch exibem progresso (FEATURE-101 Phase 4)\n'
 
+# ---------------------------------------------------------------------------
+# FEATURE-101 (Phase 5): Conhecimento em tempo real
+# - Emissão de knowledge.telemetry ao criar candidato (após feature.released)
+# - Emissão de knowledge.telemetry nas decisões (curated / rejected / skipped / review_required)
+# - Conteúdo sanitizado (título, categoria, tópicos, sem conteúdo bruto)
+# - knowledge_policy.mode: non_blocking preservado (liberação independente da curadoria)
+# - ralph-monitor --once --json inclui knowledge_summary sem mutar ledger (read-only)
+# - ralph-watch exibe fila de conhecimento e contagem por status na TUI e no JSON
+# ---------------------------------------------------------------------------
+live_k_tmp="$TMP/live-knowledge-fixture"
+mkdir -p "$live_k_tmp"
+git -C "$live_k_tmp" init -q
+git -C "$live_k_tmp" config user.email ralph-method@example.invalid
+git -C "$live_k_tmp" config user.name 'Ralph Method Live Knowledge Test'
+printf '%s\n' '# Live Knowledge' > "$live_k_tmp/README.md"
+printf '%s\n' '# Plano' > "$live_k_tmp/plan.md"
+printf '%s\n' '{"schema_version":"1.3.0","workflow_id":"wf_live_knowledge","plan_file":"plan.md","knowledge_policy":{"mode":"non_blocking"},"features":[{"feature_key":"FEATURE-K1","title":"Memória em tempo real 1","position":1},{"feature_key":"FEATURE-K2","title":"Memória em tempo real 2","position":2}]}' > "$live_k_tmp/workflow.json"
+git -C "$live_k_tmp" add .
+git -C "$live_k_tmp" commit -qm base
+
+(cd "$live_k_tmp" && control init --workflow wf_live_knowledge --manifest workflow.json >/dev/null)
+
+# Executa e libera FEATURE-K1
+k1_claim="$(cd "$live_k_tmp" && control claim --workflow wf_live_knowledge --feature FEATURE-K1 --actor k-test)"
+k1_lease="$(json_field "$k1_claim" lease_token)"
+printf '%s\n' 'k1 implementado' > "$live_k_tmp/k1.txt"
+git -C "$live_k_tmp" add k1.txt
+git -C "$live_k_tmp" commit -qm '[feat] (k1): implementa k1'
+(cd "$live_k_tmp" && control finish --workflow wf_live_knowledge --feature FEATURE-K1 --lease "$k1_lease" --exit-code 0 >/dev/null)
+
+for g in validation quality runtime_evidence technical_review curation; do
+  (cd "$live_k_tmp" && control gate --workflow wf_live_knowledge --feature FEATURE-K1 --lease "$k1_lease" \
+    --gate "$g" --status passed --producer test --actor test --exit-code 0 >/dev/null)
+done
+
+(cd "$live_k_tmp" && control approve --workflow wf_live_knowledge --feature FEATURE-K1 --lease "$k1_lease" >/dev/null)
+(cd "$live_k_tmp" && control handoff --workflow wf_live_knowledge --feature FEATURE-K1 --output .ralph/handoffs/FEATURE-K1 >/dev/null)
+(cd "$live_k_tmp" && control handoff-commit --workflow wf_live_knowledge --feature FEATURE-K1 --lease "$k1_lease" >/dev/null)
+(cd "$live_k_tmp" && control release --workflow wf_live_knowledge --feature FEATURE-K1 --lease "$k1_lease" >/dev/null)
+
+# 1. Verifica emissão de knowledge.telemetry ao criar candidato pós-release
+events_k1="$(cat "$live_k_tmp/.git/ralph-control/events.jsonl")"
+printf '%s\n' "$events_k1" | grep -q '"type":"knowledge.telemetry"' \
+  || fail 'evento knowledge.telemetry não foi emitido após feature.released'
+
+# 2. advance avança para FEATURE-K2 mesmo antes da curadoria (non_blocking)
+advance_k1="$(cd "$live_k_tmp" && control advance --workflow wf_live_knowledge --feature FEATURE-K1 --lease "$k1_lease")"
+assert_eq 'FEATURE-K2' "$(json_field "$advance_k1" next_feature)" 'workflow avançou para próxima feature sem bloquear em curadoria'
+
+# 3. Curadoria da FEATURE-K1 emite knowledge.curated e knowledge.telemetry
+curated_k1="$(cd "$live_k_tmp" && control knowledge curated --workflow wf_live_knowledge --feature FEATURE-K1 \
+  --title 'Telemetria Contínua de Memória' \
+  --summary 'Stream sanitizado permite observabilidade de candidatos em tempo real.' \
+  --category telemetry --root-cause telemetry-stream-visibility \
+  --topics streaming,events,knowledge --stack php,bash --domain control-plane \
+  --commit "$(git -C "$live_k_tmp" rev-parse HEAD~1)" \
+  --test 'scripts/test-ralph-knowledge.sh' 2>&1)"
+k1_lesson_id="$(json_field "$curated_k1" lesson_id)"
+printf '%s' "$k1_lesson_id" | grep -Eq '^LES-[0-9]{4}-[0-9]{4}$' || fail 'lição curada recebeu ID padronizado'
+
+git -C "$live_k_tmp" add docs/
+git -C "$live_k_tmp" commit -qm '[docs] (k1): curadoria de conhecimento k1'
+
+# Executa, libera e rejeita FEATURE-K2
+k2_claim="$(cd "$live_k_tmp" && control claim --workflow wf_live_knowledge --feature FEATURE-K2 --actor k-test)"
+k2_lease="$(json_field "$k2_claim" lease_token)"
+printf '%s\n' 'k2 implementado' > "$live_k_tmp/k2.txt"
+git -C "$live_k_tmp" add k2.txt
+git -C "$live_k_tmp" commit -qm '[feat] (k2): implementa k2'
+(cd "$live_k_tmp" && control finish --workflow wf_live_knowledge --feature FEATURE-K2 --lease "$k2_lease" --exit-code 0 >/dev/null)
+for g in validation quality runtime_evidence technical_review curation; do
+  (cd "$live_k_tmp" && control gate --workflow wf_live_knowledge --feature FEATURE-K2 --lease "$k2_lease" \
+    --gate "$g" --status passed --producer test --actor test --exit-code 0 >/dev/null)
+done
+(cd "$live_k_tmp" && control approve --workflow wf_live_knowledge --feature FEATURE-K2 --lease "$k2_lease" >/dev/null)
+(cd "$live_k_tmp" && control handoff --workflow wf_live_knowledge --feature FEATURE-K2 --output .ralph/handoffs/FEATURE-K2 >/dev/null)
+(cd "$live_k_tmp" && control handoff-commit --workflow wf_live_knowledge --feature FEATURE-K2 --lease "$k2_lease" >/dev/null)
+(cd "$live_k_tmp" && control release --workflow wf_live_knowledge --feature FEATURE-K2 --lease "$k2_lease" >/dev/null)
+(cd "$live_k_tmp" && control knowledge rejected --workflow wf_live_knowledge --feature FEATURE-K2 --reason 'sem aprendizado duradouro' >/dev/null)
+
+# 4. Validação estrita dos eventos knowledge.telemetry no ledger
+EVENTS_FILE_K="$live_k_tmp/.git/ralph-control/events.jsonl" LESSON_ID_K="$k1_lesson_id" php -r '
+  $lines = file(getenv("EVENTS_FILE_K"), FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+  $ktEvents = [];
+  foreach ($lines as $line) {
+      $event = json_decode($line, true, 512, JSON_THROW_ON_ERROR);
+      if (($event["type"] ?? "") === "knowledge.telemetry") {
+          $ktEvents[] = $event;
+      }
+  }
+  if (count($ktEvents) < 4) {
+      fwrite(STDERR, "esperava ao menos 4 eventos knowledge.telemetry (2 criados, 1 curado, 1 rejeitado), obtido: ".count($ktEvents)."\n");
+      exit(1);
+  }
+  // Valida que todos contêm política non_blocking e nenhum conteúdo bruto/sensível
+  foreach ($ktEvents as $e) {
+      $facts = $e["facts"] ?? [];
+      if (($facts["policy"] ?? "") !== "non_blocking") {
+          fwrite(STDERR, "evento knowledge.telemetry sem policy=non_blocking: ".json_encode($facts)."\n");
+          exit(2);
+      }
+      if (isset($facts["yaml"]) || isset($facts["markdown"]) || isset($facts["prompt"]) || isset($facts["raw"])) {
+          fwrite(STDERR, "evento knowledge.telemetry contém campo bruto proibido: ".json_encode($facts)."\n");
+          exit(3);
+      }
+  }
+  $actions = array_map(static fn($e): string => (string)($e["facts"]["action"] ?? ""), $ktEvents);
+  if (! in_array("candidate_created", $actions, true) || ! in_array("curated", $actions, true) || ! in_array("rejected", $actions, true)) {
+      fwrite(STDERR, "ações de telemetria esperadas não encontradas: ".json_encode($actions)."\n");
+      exit(4);
+  }
+' || fail 'validação de estrutura e sanitização de knowledge.telemetry falhou'
+
+# 5. ralph-monitor --once --json expõe knowledge_summary (read-only, sem mutar ledger)
+k_events_hash_before="$(sha256sum "$live_k_tmp/.git/ralph-control/events.jsonl")"
+monitor_k_json="$(cd "$live_k_tmp" && php "$ROOT/bin/ralph-monitor" --workflow wf_live_knowledge --once --json)"
+k_events_hash_after="$(sha256sum "$live_k_tmp/.git/ralph-control/events.jsonl")"
+[ "$k_events_hash_before" = "$k_events_hash_after" ] || fail 'ralph-monitor mutou o ledger ao consultar knowledge_summary'
+
+MONITOR_K_PAYLOAD="$monitor_k_json" LESSON_ID_K="$k1_lesson_id" php -r '
+  $snap = json_decode(getenv("MONITOR_K_PAYLOAD"), true, 512, JSON_THROW_ON_ERROR);
+  $ks = $snap["knowledge_summary"] ?? null;
+  if (! is_array($ks)) {
+      fwrite(STDERR, "knowledge_summary ausente no snapshot do monitor\n");
+      exit(1);
+  }
+  if (($ks["total"] ?? 0) !== 2 || ($ks["curated"] ?? 0) !== 1 || ($ks["rejected"] ?? 0) !== 1 || ($ks["pending"] ?? 0) !== 0) {
+      fwrite(STDERR, "contagens de knowledge_summary no monitor incorretas: ".json_encode($ks)."\n");
+      exit(2);
+  }
+  $cands = $ks["candidates"] ?? [];
+  if (count($cands) !== 2) {
+      fwrite(STDERR, "esperava 2 candidatos no knowledge_summary do monitor\n");
+      exit(3);
+  }
+  $statuses = array_column($cands, "status");
+  if (! in_array("persisted", $statuses, true) || ! in_array("rejected", $statuses, true)) {
+      fwrite(STDERR, "status dos candidatos no monitor incorretos: ".json_encode($cands)."\n");
+      exit(4);
+  }
+' || fail 'knowledge_summary no snapshot do ralph-monitor inválido'
+
+# 6. ralph-watch expõe knowledge_summary no snapshot e exibe na TUI
+watch_k_json="$(cd "$live_k_tmp" && php "$ROOT/bin/ralph-watch" --workflow wf_live_knowledge --once --json)"
+WATCH_K_PAYLOAD="$watch_k_json" php -r '
+  $snap = json_decode(getenv("WATCH_K_PAYLOAD"), true, 512, JSON_THROW_ON_ERROR);
+  $ks = $snap["knowledge_summary"] ?? null;
+  if (! is_array($ks) || ($ks["total"] ?? 0) !== 2 || ($ks["curated"] ?? 0) !== 1 || ($ks["rejected"] ?? 0) !== 1) {
+      fwrite(STDERR, "knowledge_summary no snapshot do ralph-watch incorreto: ".json_encode($ks)."\n");
+      exit(1);
+  }
+' || fail 'knowledge_summary no snapshot do ralph-watch inválido'
+
+watch_k_text="$(cd "$live_k_tmp" && php "$ROOT/bin/ralph-watch" --workflow wf_live_knowledge --once)"
+printf '%s\n' "$watch_k_text" | grep -q "FILA DE CONHECIMENTO & LIÇÕES" || fail 'ralph-watch não exibiu FILA DE CONHECIMENTO & LIÇÕES'
+printf '%s\n' "$watch_k_text" | grep -q "CURATED" || fail 'ralph-watch não exibiu badge CURATED'
+printf '%s\n' "$watch_k_text" | grep -q "REJECTED" || fail 'ralph-watch não exibiu badge REJECTED'
+printf '%s\n' "$watch_k_text" | grep -q "$k1_lesson_id" || fail "ralph-watch não exibiu lesson_id $k1_lesson_id"
+
+# 7. Ledger íntegro com hash-chain válida
+(cd "$live_k_tmp" && control verify >/dev/null) || fail 'verify falhou no ledger com eventos de conhecimento'
+
+printf 'ok   conhecimento em tempo real emite knowledge.telemetry sanitizado, non_blocking, monitor e watch exibem resumo (FEATURE-101 Phase 5)\n'
+
+
 
 
 

@@ -2381,6 +2381,9 @@ function project(array $workflow, array $events): array
                     break;
                 case 'knowledge.skipped': $feature['knowledge_state'] = 'knowledge_skipped';
                     break;
+                case 'knowledge.telemetry':
+                    $feature['knowledge_telemetry'] = $event['facts'] ?? [];
+                    break;
                 case 'delegation.started':
                 case 'delegation.completed':
                 case 'delegation.failed':
@@ -4380,6 +4383,18 @@ function releaseFeature(array $arguments): void
             ],
             'created_at' => gmdate('Y-m-d\TH:i:s\Z'),
         ]);
+        appendEvent(eventContext(array_merge($arguments, [
+            'idempotency-key' => 'idem_ktel_'.bin2hex(random_bytes(12)),
+        ]), $feature, 'knowledge.telemetry', 'Telemetria de candidato de conhecimento criado após release', [
+            'action' => 'candidate_created',
+            'status' => 'pending',
+            'curation_id' => $curationId,
+            'lesson_id' => null,
+            'title' => sanitize((string) ($feature['title'] ?? $featureKey)),
+            'category' => 'engineering',
+            'topics' => [],
+            'policy' => 'non_blocking',
+        ]));
         clearGateSession($feature);
     });
     printJson(['status' => 'released', 'feature_key' => $featureKey, 'knowledge' => 'pending_non_blocking']);
@@ -6700,6 +6715,18 @@ function knowledge(array $arguments): void
                 ],
                 'created_at' => gmdate('Y-m-d\TH:i:s\Z'),
             ]);
+            appendEvent(eventContext(array_merge($arguments, [
+                'idempotency-key' => 'idem_ktel_'.bin2hex(random_bytes(12)),
+            ]), $feature, 'knowledge.telemetry', 'Telemetria de candidato de conhecimento criado', [
+                'action' => 'candidate_created',
+                'status' => 'pending',
+                'curation_id' => $curationId,
+                'lesson_id' => null,
+                'title' => sanitize((string) ($arguments['title'] ?? ($feature['title'] ?? $featureKey))),
+                'category' => $category,
+                'topics' => $topics,
+                'policy' => 'non_blocking',
+            ]));
 
             return ['lesson_id' => null, 'curation_id' => $curationId, 'index_path' => null];
         }
@@ -6726,6 +6753,21 @@ function knowledge(array $arguments): void
             'domain' => $domain,
             'fingerprints' => $fingerprints,
         ]));
+        $telemetryTitle = (string) ($arguments['title'] ?? ($feature['title'] ?? $featureKey));
+        $telemetryFacts = [
+            'action' => $action === 'review-required' ? 'review_required' : $action,
+            'status' => $candidateStatus,
+            'curation_id' => $curationId,
+            'lesson_id' => $lessonId,
+            'title' => sanitize($telemetryTitle),
+            'category' => $category,
+            'topics' => $topics,
+            'reason' => isset($arguments['reason']) ? sanitize((string) $arguments['reason']) : null,
+            'policy' => 'non_blocking',
+        ];
+        appendEvent(eventContext(array_merge($arguments, [
+            'idempotency-key' => 'idem_ktel_'.bin2hex(random_bytes(12)),
+        ]), $feature, 'knowledge.telemetry', 'Telemetria de decisão sobre memória de engenharia', array_filter($telemetryFacts, static fn ($v): bool => $v !== null)));
 
         return ['lesson_id' => $lessonId, 'curation_id' => $curationId, 'index_path' => $indexPath, 'idempotent' => false];
     });

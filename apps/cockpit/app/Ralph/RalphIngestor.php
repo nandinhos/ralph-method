@@ -193,6 +193,10 @@ final class RalphIngestor
             $this->ingestDebugKnowledge($workflowId, $featureKey, $event);
         }
 
+        if ($type === 'knowledge.telemetry') {
+            $this->applyKnowledgeTelemetry($workflowId, $featureKey, $event);
+        }
+
         if (str_contains($type, 'delegation') || $type === 'attempt.started') {
             $this->applyDelegation($workflowId, $event);
         }
@@ -331,8 +335,15 @@ final class RalphIngestor
         $status = match ($type) {
             'gate.passed' => 'passed',
             'gate.rejected', 'gate.failed' => 'failed',
+            'gate.stalled' => 'stalled',
+            'gate.started' => 'running',
             default => 'pending',
         };
+
+        $detail = is_string($event['summary'] ?? null) ? $event['summary'] : null;
+        if ($type === 'gate.stalled' && is_numeric($facts['age_seconds'] ?? null)) {
+            $detail = $detail ?: sprintf('stalled (%ds)', (int) $facts['age_seconds']);
+        }
 
         GateProjection::query()->updateOrCreate(
             [
@@ -342,7 +353,45 @@ final class RalphIngestor
             ],
             [
                 'status' => $status,
-                'detail' => is_string($event['summary'] ?? null) ? $event['summary'] : null,
+                'detail' => $detail,
+            ],
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $event
+     */
+    private function applyKnowledgeTelemetry(string $workflowId, ?string $featureKey, array $event): void
+    {
+        $facts = is_array($event['facts'] ?? null) ? $event['facts'] : [];
+        $curationId = is_string($facts['curation_id'] ?? null)
+            ? $facts['curation_id']
+            : (is_string($facts['candidate_id'] ?? null) ? $facts['candidate_id'] : null);
+        if ($curationId === null || $curationId === '') {
+            return;
+        }
+
+        $title = is_string($facts['title'] ?? null) && $facts['title'] !== ''
+            ? $facts['title']
+            : ($featureKey ?: $curationId);
+        $status = is_string($facts['status'] ?? null)
+            ? $facts['status']
+            : (is_string($facts['decision'] ?? null) ? $facts['decision'] : 'pending');
+        $subtitle = trim(sprintf(
+            '%s · %s%s',
+            $curationId,
+            $featureKey ?: $workflowId,
+            is_string($facts['category'] ?? null) && $facts['category'] !== '' ? ' · '.$facts['category'] : ''
+        ));
+
+        KnowledgeItem::query()->updateOrCreate(
+            ['item_key' => $curationId],
+            [
+                'workflow_id' => $workflowId,
+                'feature_key' => $featureKey,
+                'title' => $title,
+                'subtitle' => $subtitle,
+                'status' => $status,
             ],
         );
     }
@@ -584,9 +633,15 @@ final class RalphIngestor
         $eventId = is_string($event['event_id'] ?? null)
             ? $event['event_id']
             : (is_string($event['run_id'] ?? null) ? $event['run_id'].':'.$name.':'.($event['timestamp'] ?? '') : sha1(json_encode($event) ?: $name));
-        $detail = is_string($event['summary'] ?? null)
+        $detail = is_string($event['summary'] ?? null) && $event['summary'] !== ''
             ? $event['summary']
-            : (is_string($event['detail'] ?? null) ? $event['detail'] : null);
+            : (is_string($event['detail'] ?? null) && $event['detail'] !== ''
+                ? $event['detail']
+                : (is_string(data_get($event, 'facts.activity_preview'))
+                    ? (string) data_get($event, 'facts.activity_preview')
+                    : (is_string(data_get($event, 'facts.hypothesis'))
+                        ? (string) data_get($event, 'facts.hypothesis')
+                        : null)));
 
         TimelineEvent::query()->updateOrCreate(
             ['event_key' => $source.':'.$eventId],

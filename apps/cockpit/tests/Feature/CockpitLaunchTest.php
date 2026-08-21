@@ -25,9 +25,24 @@ function cockpitLaunchRoot(string $workflowId = 'wf_cockpit_field'): string
     $spec = cockpitFieldSpecDir();
     $dest = $root.'/.spec/features/'.COCKPIT_FIELD_SPEC;
     File::ensureDirectoryExists($dest);
-    File::copy($spec.'/plan.md', $dest.'/plan.md');
-    File::copy($spec.'/PHASES.md', $dest.'/PHASES.md');
-    File::copy($spec.'/workflow.json', $dest.'/workflow.json');
+    if (is_dir($spec)) {
+        File::copy($spec.'/plan.md', $dest.'/plan.md');
+        File::copy($spec.'/PHASES.md', $dest.'/PHASES.md');
+        File::copy($spec.'/workflow.json', $dest.'/workflow.json');
+    } else {
+        File::put($dest.'/plan.md', "# Plan\n");
+        File::put($dest.'/PHASES.md', "# Phases\n");
+        File::put($dest.'/workflow.json', json_encode([
+            'schema_version' => '1.0.0',
+            'workflow_id' => $workflowId,
+            'plan_file' => '.spec/features/'.COCKPIT_FIELD_SPEC.'/PHASES.md',
+            'features' => [
+                ['feature_key' => COCKPIT_FIELD_FEATURE_A, 'title' => 'Manifesto e preflight do checkout de campo', 'position' => 1, 'input_file' => '.spec/features/'.COCKPIT_FIELD_SPEC.'/PHASES.md'],
+                ['feature_key' => COCKPIT_FIELD_FEATURE_B, 'title' => 'Ingestão contínua', 'position' => 2, 'input_file' => '.spec/features/'.COCKPIT_FIELD_SPEC.'/PHASES.md'],
+                ['feature_key' => COCKPIT_FIELD_FEATURE_C, 'title' => 'Supervisão do loop', 'position' => 3, 'input_file' => '.spec/features/'.COCKPIT_FIELD_SPEC.'/PHASES.md'],
+            ],
+        ], JSON_THROW_ON_ERROR));
+    }
     File::ensureDirectoryExists($root.'/.git/ralph-control');
     File::copy($dest.'/workflow.json', $root.'/.git/ralph-control/workflow.json');
     File::ensureDirectoryExists($root.'/bin');
@@ -37,6 +52,7 @@ function cockpitLaunchRoot(string $workflowId = 'wf_cockpit_field'): string
     config([
         'ralph.project_root' => $root,
         'ralph.control_bin' => $root.'/bin/ralph-control',
+        'ralph.debug_command' => null,
     ]);
 
     $pidFile = storage_path('app/ralph-supervise.pid');
@@ -418,6 +434,7 @@ it('não sinaliza um processo vivo que não é supervise', function () {
 });
 
 it('não pausa pela UI quando não há supervisor do cockpit', function () {
+    cockpitLaunchRoot('wf_cockpit_demo');
     Process::fake();
     $pidFile = storage_path('app/ralph-supervise.pid');
     if (is_file($pidFile)) {

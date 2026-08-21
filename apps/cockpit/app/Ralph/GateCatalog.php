@@ -39,7 +39,8 @@ final class GateCatalog
     {
         return match ($status) {
             'passed' => 'is-ok',
-            'failed', 'rejected' => 'is-fail',
+            'failed', 'rejected', 'stalled' => 'is-fail',
+            'running', 'started' => 'is-wait',
             default => 'is-wait',
         };
     }
@@ -48,7 +49,8 @@ final class GateCatalog
     {
         return match ($status) {
             'passed' => '✓',
-            'failed', 'rejected' => '✕',
+            'failed', 'rejected', 'stalled' => '✕',
+            'running', 'started' => '→',
             default => '○',
         };
     }

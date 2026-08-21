@@ -7,26 +7,42 @@ controlado Codex → OpenCode) e a **FEATURE-098** (adapter Cursor) sobre a base
 `0.9.2`. A tag anotada `v0.10.0` aponta para o commit promovido, publicada em
 `origin/main`.
 
-### Foco da branch `feat/trace-cockpit`
+### FEATURE-101 — Ralph Method 2.0: telemetria contínua em tempo real (Onda 1)
 
-A visibilidade operacional ainda é CLI (`ralph-monitor`, métricas, relatórios).
-Nesta branch o trabalho exclusivo é o **Trace Cockpit**: uma UI Laravel 13
-em `apps/cockpit/` (scaffold + ingestor + Livewire) que observa
-feedback JSONL, ledger e snapshot do monitor via Reverb, dispara
-`supervise` com preflight verde e, quando o orquestrador está travado,
-corre debug sistemático + recover no `ralph-control`. O diagnóstico
-lê stderr do supervisor e recusa novo disparo se o `plan_file`
-declarado não existir no checkout. Decisão:
-[`ADR-0022`](adr/0022-cockpit-somente-leitura.md) (emendas 2026-08-16). PRD:
-[`prd-trace-cockpit.md`](prd/prd-trace-cockpit.md). Design:
-[`docs/design/ralph-method-trace-design/`](design/ralph-method-trace-design/).
-O núcleo portátil não passa a depender de Laravel, Postgres ou Reverb.
+A FEATURE-101 implementa a Onda 1 da evolução do Ralph Method 2.0, trazendo
+visibilidade contínua e telemetria estruturada do loop de execução em tempo real,
+preservando o núcleo portátil sem dependências externas e a autoridade única do
+`ralph-control`:
 
-A FEATURE-098 foi promovida sem campo opt-in real (a CLI
-headless `agent`/`cursor-agent` ainda não está disponível nesta máquina); a
-prova real de inferência permanece uma política futura, separada e opt-in, no
-mesmo rito do `agy`. O relatório da promoção está em
-[`docs/reports/0030-promocao-v0-10-0.md`](reports/0030-promocao-v0-10-0.md).
+- **Phase 1 (Contrato de telemetria):** promoção do schema para `1.3.0` em
+  `bin/ralph-control`, aceitando compatibilidade retroativa `1.0.0`–`1.3.0` e
+  rejeitando `1.4.0` (fail-closed); adição dos eventos `telemetry.activity`,
+  `telemetry.heartbeat_rich`, `gate.started`, `gate.stalled`, `debug.progress` e
+  `knowledge.telemetry` com sanitização estrita (redação de segredos e remoção
+  de conteúdo bruto);
+- **Phase 2 (Watchdog de gates):** registro de `gate.started` determinístico ao
+  entrar em `awaiting_gates` (idempotente por replay); emissão de `gate.stalled`
+  acima do limiar `RALPH_GATE_STALL_AFTER` e transição explícita para
+  `recovery_required` acima de `RALPH_GATE_MAX_AGE`; exposição de `gate_ages`
+  somente leitura no `ralph-monitor --once --json`;
+- **Phase 3 (Terminal dashboard - `ralph-watch`):** ferramenta TUI em PHP puro
+  (`bin/ralph-watch`) para visualização do progresso em tempo real, saúde,
+  fila, idade de gates e telemetria operacional com snapshot `--once --json` e
+  sem dependências externas;
+- **Phase 4 (Systematic debugging ao vivo):** emissão do evento `debug.progress`
+  durante o ciclo de diagnose/investigação, reportando hipóteses, causa raiz e
+  referências oficiais no monitor e no `ralph-watch`;
+- **Phase 5 (Conhecimento em tempo real):** emissão de `knowledge.telemetry` em
+  criação, curadoria e decisões de descarte de candidatos de conhecimento
+  sob política `non_blocking`, com resumo agregado exposto em `ralph-monitor` e
+  `ralph-watch`;
+- **Phase 6 (Cockpit consumindo o stream):** o read-model em `apps/cockpit/`
+  (`RalphIngestor`) ingere todos os eventos da nova telemetria (`telemetry.*`,
+  `gate.started`, `gate.stalled`, `debug.progress`, `knowledge.telemetry`) nas
+  projeções e timelines; eliminação de heurísticas e parsing de log por regex
+  em favor de fonte única autoritativa baseada no stream (`events.jsonl`) e no
+  estado do controlador (`ralph-control status`), com emenda no [`ADR-0022`](adr/0022-cockpit-somente-leitura.md).
+
 
 ### FEATURE-094 — failover controlado entre providers (publicada na v0.10.0)
 

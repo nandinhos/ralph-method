@@ -151,26 +151,94 @@ assert_eq '0' "$(printf '%s' "$irrelevant" | php -r '$v=json_decode(stream_get_c
 
 EVENTS_FILE="$TMP/project/.git/ralph-control/events.jsonl" LESSON_ID="$lesson_id" php -r '
   $counts = [];
+  $telemetryEvents = [];
   foreach (file(getenv("EVENTS_FILE"), FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $line) {
       $event = json_decode($line, true, 512, JSON_THROW_ON_ERROR);
       $type = $event["type"] ?? "";
       $counts[$type] = ($counts[$type] ?? 0) + 1;
+      if ($type === "knowledge.telemetry") {
+          $telemetryEvents[] = $event;
+      }
   }
   if (($counts["feature.released"] ?? 0) !== 1 || ($counts["knowledge.candidate_created"] ?? 0) !== 1 || ($counts["knowledge.curated"] ?? 0) !== 1) {
+      fwrite(STDERR, "contagem de eventos incorreta: ".json_encode($counts)."\n");
       exit(1);
   }
-'
+  if (count($telemetryEvents) < 2) {
+      fwrite(STDERR, "esperava ao menos 2 eventos knowledge.telemetry (criação e curadoria), obtido: ".count($telemetryEvents)."\n");
+      exit(2);
+  }
+  $firstTel = $telemetryEvents[0]["facts"] ?? [];
+  if (($firstTel["action"] ?? "") !== "candidate_created" || ($firstTel["status"] ?? "") !== "pending" || ($firstTel["policy"] ?? "") !== "non_blocking") {
+      fwrite(STDERR, "primeiro knowledge.telemetry inválido: ".json_encode($firstTel)."\n");
+      exit(3);
+  }
+  $secondTel = $telemetryEvents[1]["facts"] ?? [];
+  if (($secondTel["action"] ?? "") !== "curated" || ($secondTel["status"] ?? "") !== "persisted" || ($secondTel["lesson_id"] ?? "") !== getenv("LESSON_ID")) {
+      fwrite(STDERR, "segundo knowledge.telemetry inválido: ".json_encode($secondTel)."\n");
+      exit(4);
+  }
+  if (($secondTel["category"] ?? "") !== "architecture" || ! in_array("concurrency", $secondTel["topics"] ?? [], true)) {
+      fwrite(STDERR, "taxonomia do knowledge.telemetry ausente: ".json_encode($secondTel)."\n");
+      exit(5);
+  }
+' || fail 'verificação de eventos knowledge.telemetry falhou'
+
+# Verificação de leitura read-only de knowledge_summary pelo ralph-monitor e ralph-watch
+project_events_hash_before="$(sha256sum "$TMP/project/.git/ralph-control/events.jsonl")"
+
+monitor_snap="$(cd "$TMP/project" && php "$ROOT/bin/ralph-monitor" --workflow wf_knowledge --once --json)"
+MONITOR_SNAP="$monitor_snap" LESSON_ID="$lesson_id" php -r '
+  $snap = json_decode(getenv("MONITOR_SNAP"), true, 512, JSON_THROW_ON_ERROR);
+  $ks = $snap["knowledge_summary"] ?? null;
+  if (! is_array($ks)) {
+      fwrite(STDERR, "knowledge_summary ausente no snapshot do ralph-monitor\n");
+      exit(1);
+  }
+  if (($ks["total"] ?? 0) !== 1 || ($ks["curated"] ?? 0) !== 1 || ($ks["pending"] ?? 0) !== 0) {
+      fwrite(STDERR, "contagens de knowledge_summary no monitor incorretas: ".json_encode($ks)."\n");
+      exit(2);
+  }
+  $cands = $ks["candidates"] ?? [];
+  if (count($cands) !== 1 || ($cands[0]["status"] ?? "") !== "persisted" || ($cands[0]["lesson_id"] ?? "") !== getenv("LESSON_ID")) {
+      fwrite(STDERR, "candidatos no monitor incorretos: ".json_encode($cands)."\n");
+      exit(3);
+  }
+' || fail 'ralph-monitor não expôs knowledge_summary corretamente'
+
+watch_snap="$(cd "$TMP/project" && php "$ROOT/bin/ralph-watch" --workflow wf_knowledge --once --json)"
+WATCH_SNAP="$watch_snap" LESSON_ID="$lesson_id" php -r '
+  $snap = json_decode(getenv("WATCH_SNAP"), true, 512, JSON_THROW_ON_ERROR);
+  $ks = $snap["knowledge_summary"] ?? null;
+  if (! is_array($ks)) {
+      fwrite(STDERR, "knowledge_summary ausente no snapshot do ralph-watch\n");
+      exit(1);
+  }
+  if (($ks["total"] ?? 0) !== 1 || ($ks["curated"] ?? 0) !== 1 || ($ks["pending"] ?? 0) !== 0) {
+      fwrite(STDERR, "contagens de knowledge_summary no watch incorretas: ".json_encode($ks)."\n");
+      exit(2);
+  }
+' || fail 'ralph-watch não expôs knowledge_summary corretamente'
+
+# Validação da renderização TUI do ralph-watch com candidatos curados
+watch_tui="$(cd "$TMP/project" && php "$ROOT/bin/ralph-watch" --workflow wf_knowledge --once)"
+printf '%s\n' "$watch_tui" | grep -q "FILA DE CONHECIMENTO & LIÇÕES" || fail 'TUI do ralph-watch não exibiu seção de conhecimento'
+printf '%s\n' "$watch_tui" | grep -q "$lesson_id" || fail "TUI do ralph-watch não listou lição $lesson_id"
+printf '%s\n' "$watch_tui" | grep -q "CURATED" || fail 'TUI do ralph-watch não exibiu badge CURATED'
+
+project_events_hash_after="$(sha256sum "$TMP/project/.git/ralph-control/events.jsonl")"
+assert_eq "$project_events_hash_before" "$project_events_hash_after" 'monitor e watch não mutaram o ledger de eventos'
 
 (cd "$TMP/project" && control verify) >/dev/null
 
-# Um segundo projeto comprova que rejeitar/descartar o candidato não publica lição.
+# Um segundo projeto comprova que rejeitar/descartar o candidato não publica lição e sanitiza segredo-canário.
 mkdir -p "$TMP/discard"
 git -C "$TMP/discard" init -q
 git -C "$TMP/discard" config user.email ralph-method@example.invalid
 git -C "$TMP/discard" config user.name 'Ralph Method Knowledge Discard Test'
 printf '%s\n' '# Descarte' > "$TMP/discard/README.md"
 printf '%s\n' '# Plano' > "$TMP/discard/plan.md"
-printf '%s\n' '{"schema_version":"1.0.0","workflow_id":"wf_discard","plan_file":"plan.md","knowledge_policy":{"mode":"non_blocking"},"features":[{"feature_key":"FEATURE-001","title":"Candidato descartável","position":1}]}' > "$TMP/discard/workflow.json"
+printf '%s\n' '{"schema_version":"1.0.0","workflow_id":"wf_discard","plan_file":"plan.md","knowledge_policy":{"mode":"non_blocking"},"features":[{"feature_key":"FEATURE-001","title":"Candidato descartável api_key=sk-live-canary1234567890","position":1}]}' > "$TMP/discard/workflow.json"
 git -C "$TMP/discard" add README.md plan.md workflow.json
 git -C "$TMP/discard" commit -qm base
 (cd "$TMP/discard" && control init --workflow wf_discard --manifest workflow.json >/dev/null)
@@ -188,6 +256,149 @@ done
 (cd "$TMP/discard" && control handoff --workflow wf_discard --feature FEATURE-001 --output .ralph/handoffs/FEATURE-001 >/dev/null)
 (cd "$TMP/discard" && control handoff-commit --workflow wf_discard --feature FEATURE-001 --lease "$discard_lease" >/dev/null)
 (cd "$TMP/discard" && control release --workflow wf_discard --feature FEATURE-001 --lease "$discard_lease" >/dev/null)
-(cd "$TMP/discard" && control knowledge rejected --workflow wf_discard --feature FEATURE-001 --reason 'sem aprendizado reutilizável' >/dev/null)
+(cd "$TMP/discard" && control knowledge rejected --workflow wf_discard --feature FEATURE-001 --reason 'token=ghp_secretCanary123456789012345 sem aprendizado reutilizável' >/dev/null)
 [ ! -d "$TMP/discard/docs/engineering/lessons" ] || [ -z "$(find "$TMP/discard/docs/engineering/lessons" -type f -print -quit)" ] || fail 'candidato rejeitado publicou lição'
-printf 'OK: handoff, taxonomia, índices, retenção seletiva, descarte e recuperação passaram (%s).\n' "$lesson_id"
+
+DISCARD_EVENTS="$TMP/discard/.git/ralph-control/events.jsonl" php -r '
+  $lines = file(getenv("DISCARD_EVENTS"), FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+  $rejectedTel = null;
+  $createdTel = null;
+  foreach ($lines as $line) {
+      $event = json_decode($line, true, 512, JSON_THROW_ON_ERROR);
+      if (($event["type"] ?? "") === "knowledge.telemetry") {
+          if (($event["facts"]["action"] ?? "") === "rejected") {
+              $rejectedTel = $event;
+          } elseif (($event["facts"]["action"] ?? "") === "candidate_created") {
+              $createdTel = $event;
+          }
+      }
+  }
+  if ($createdTel === null || $rejectedTel === null) {
+      fwrite(STDERR, "eventos knowledge.telemetry não encontrados\n");
+      exit(1);
+  }
+  $cFacts = $createdTel["facts"] ?? [];
+  if (str_contains($cFacts["title"] ?? "", "sk-live-canary1234567890")) {
+      fwrite(STDERR, "canário de segredo vazou no título do candidate_created: ".json_encode($cFacts)."\n");
+      exit(2);
+  }
+  if (! str_contains($cFacts["title"] ?? "", "[REDACTED]")) {
+      fwrite(STDERR, "título do candidate_created não foi redigido: ".json_encode($cFacts)."\n");
+      exit(3);
+  }
+  $rFacts = $rejectedTel["facts"] ?? [];
+  if (($rFacts["status"] ?? "") !== "rejected" || ($rFacts["policy"] ?? "") !== "non_blocking") {
+      fwrite(STDERR, "fatos do knowledge.telemetry de rejeição inválidos: ".json_encode($rFacts)."\n");
+      exit(4);
+  }
+  if (str_contains($rFacts["reason"] ?? "", "ghp_secretCanary123456789012345")) {
+      fwrite(STDERR, "canário de segredo vazou na razão da rejeição: ".json_encode($rFacts)."\n");
+      exit(5);
+  }
+  if (! str_contains($rFacts["reason"] ?? "", "[REDACTED]")) {
+      fwrite(STDERR, "razão da rejeição não foi redigida: ".json_encode($rFacts)."\n");
+      exit(6);
+  }
+' || fail 'verificação de knowledge.telemetry de rejeição e sanitização falhou'
+
+discard_monitor_snap="$(cd "$TMP/discard" && php "$ROOT/bin/ralph-monitor" --workflow wf_discard --once --json)"
+DISCARD_SNAP="$discard_monitor_snap" php -r '
+  $snap = json_decode(getenv("DISCARD_SNAP"), true, 512, JSON_THROW_ON_ERROR);
+  $ks = $snap["knowledge_summary"] ?? null;
+  if (! is_array($ks) || ($ks["rejected"] ?? 0) !== 1 || ($ks["curated"] ?? 0) !== 0 || ($ks["pending"] ?? 0) !== 0) {
+      fwrite(STDERR, "knowledge_summary de rejeição inválido: ".json_encode($ks)."\n");
+      exit(1);
+  }
+' || fail 'ralph-monitor não exibiu contagem de rejeição corretamente'
+
+(cd "$TMP/discard" && control verify) >/dev/null
+
+# Um terceiro projeto comprova skipped e review-required
+mkdir -p "$TMP/decisions"
+git -C "$TMP/decisions" init -q
+git -C "$TMP/decisions" config user.email ralph-method@example.invalid
+git -C "$TMP/decisions" config user.name 'Ralph Method Knowledge Decisions Test'
+printf '%s\n' '# Decisões' > "$TMP/decisions/README.md"
+printf '%s\n' '# Plano' > "$TMP/decisions/plan.md"
+printf '%s\n' '{"schema_version":"1.0.0","workflow_id":"wf_decisions","plan_file":"plan.md","knowledge_policy":{"mode":"non_blocking"},"features":[{"feature_key":"FEATURE-001","title":"Candidato skipped","position":1},{"feature_key":"FEATURE-002","title":"Candidato review required","position":2}]}' > "$TMP/decisions/workflow.json"
+git -C "$TMP/decisions" add README.md plan.md workflow.json
+git -C "$TMP/decisions" commit -qm base
+(cd "$TMP/decisions" && control init --workflow wf_decisions --manifest workflow.json >/dev/null)
+
+# FEATURE-001: skipped
+f1_claim="$(cd "$TMP/decisions" && control claim --workflow wf_decisions --feature FEATURE-001 --actor ralph)"
+f1_lease="$(json_field "$f1_claim" lease_token)"
+printf '%s\n' 'f1' > "$TMP/decisions/f1.txt"
+git -C "$TMP/decisions" add f1.txt
+git -C "$TMP/decisions" commit -qm '[feat] f1'
+(cd "$TMP/decisions" && control finish --workflow wf_decisions --feature FEATURE-001 --lease "$f1_lease" --exit-code 0 >/dev/null)
+for gate in validation quality runtime_evidence technical_review curation; do
+  (cd "$TMP/decisions" && control gate --workflow wf_decisions --feature FEATURE-001 --lease "$f1_lease" \
+    --gate "$gate" --status passed --producer test --actor test --exit-code 0 >/dev/null)
+done
+(cd "$TMP/decisions" && control approve --workflow wf_decisions --feature FEATURE-001 --lease "$f1_lease" >/dev/null)
+(cd "$TMP/decisions" && control handoff --workflow wf_decisions --feature FEATURE-001 --output .ralph/handoffs/FEATURE-001 >/dev/null)
+(cd "$TMP/decisions" && control handoff-commit --workflow wf_decisions --feature FEATURE-001 --lease "$f1_lease" >/dev/null)
+(cd "$TMP/decisions" && control release --workflow wf_decisions --feature FEATURE-001 --lease "$f1_lease" >/dev/null)
+(cd "$TMP/decisions" && control knowledge skipped --workflow wf_decisions --feature FEATURE-001 >/dev/null)
+
+# FEATURE-002: review-required
+(cd "$TMP/decisions" && control advance --workflow wf_decisions --feature FEATURE-001 --lease "$f1_lease" >/dev/null)
+f2_claim="$(cd "$TMP/decisions" && control claim --workflow wf_decisions --feature FEATURE-002 --actor ralph)"
+f2_lease="$(json_field "$f2_claim" lease_token)"
+printf '%s\n' 'f2' > "$TMP/decisions/f2.txt"
+git -C "$TMP/decisions" add f2.txt
+git -C "$TMP/decisions" commit -qm '[feat] f2'
+(cd "$TMP/decisions" && control finish --workflow wf_decisions --feature FEATURE-002 --lease "$f2_lease" --exit-code 0 >/dev/null)
+for gate in validation quality runtime_evidence technical_review curation; do
+  (cd "$TMP/decisions" && control gate --workflow wf_decisions --feature FEATURE-002 --lease "$f2_lease" \
+    --gate "$gate" --status passed --producer test --actor test --exit-code 0 >/dev/null)
+done
+(cd "$TMP/decisions" && control approve --workflow wf_decisions --feature FEATURE-002 --lease "$f2_lease" >/dev/null)
+(cd "$TMP/decisions" && control handoff --workflow wf_decisions --feature FEATURE-002 --output .ralph/handoffs/FEATURE-002 >/dev/null)
+(cd "$TMP/decisions" && control handoff-commit --workflow wf_decisions --feature FEATURE-002 --lease "$f2_lease" >/dev/null)
+(cd "$TMP/decisions" && control release --workflow wf_decisions --feature FEATURE-002 --lease "$f2_lease" >/dev/null)
+(cd "$TMP/decisions" && control knowledge review-required --workflow wf_decisions --feature FEATURE-002 --reason 'necessita parecer de arquitetura' >/dev/null)
+
+DECISIONS_EVENTS="$TMP/decisions/.git/ralph-control/events.jsonl" php -r '
+  $lines = file(getenv("DECISIONS_EVENTS"), FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+  $skippedTel = null;
+  $reviewTel = null;
+  foreach ($lines as $line) {
+      $event = json_decode($line, true, 512, JSON_THROW_ON_ERROR);
+      if (($event["type"] ?? "") === "knowledge.telemetry") {
+          $action = $event["facts"]["action"] ?? "";
+          if ($action === "skipped") {
+              $skippedTel = $event;
+          } elseif ($action === "review_required") {
+              $reviewTel = $event;
+          }
+      }
+  }
+  if ($skippedTel === null || $reviewTel === null) {
+      fwrite(STDERR, "eventos skipped e review_required não encontrados\n");
+      exit(1);
+  }
+  if (($skippedTel["facts"]["status"] ?? "") !== "skipped" || ($skippedTel["facts"]["policy"] ?? "") !== "non_blocking") {
+      fwrite(STDERR, "fatos do skipped inválidos: ".json_encode($skippedTel)."\n");
+      exit(2);
+  }
+  if (($reviewTel["facts"]["status"] ?? "") !== "review_required" || ($reviewTel["facts"]["policy"] ?? "") !== "non_blocking") {
+      fwrite(STDERR, "fatos do review_required inválidos: ".json_encode($reviewTel)."\n");
+      exit(3);
+  }
+' || fail 'verificação de telemetria skipped e review-required falhou'
+
+decisions_monitor_snap="$(cd "$TMP/decisions" && php "$ROOT/bin/ralph-monitor" --workflow wf_decisions --once --json)"
+DECISIONS_SNAP="$decisions_monitor_snap" php -r '
+  $snap = json_decode(getenv("DECISIONS_SNAP"), true, 512, JSON_THROW_ON_ERROR);
+  $ks = $snap["knowledge_summary"] ?? null;
+  if (! is_array($ks) || ($ks["total"] ?? 0) !== 2 || ($ks["skipped"] ?? 0) !== 1 || ($ks["review_required"] ?? 0) !== 1) {
+      fwrite(STDERR, "knowledge_summary de decisões inválido: ".json_encode($ks)."\n");
+      exit(1);
+  }
+' || fail 'ralph-monitor não exibiu contagens de skipped e review_required corretamente'
+
+(cd "$TMP/decisions" && control verify) >/dev/null
+
+printf 'OK: handoff, taxonomia, índices, retenção seletiva, descarte, skipped, review-required, sanitização, monitor e watch passaram (%s).\n' "$lesson_id"

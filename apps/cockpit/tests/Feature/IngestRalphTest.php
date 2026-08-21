@@ -164,3 +164,111 @@ it('formata timestamps da timeline no fuso da aplicação', function () {
     expect(TimelineEvent::query()->where('name', 'attempt.started')->value('occurred_at')?->format('H:i:s'))
         ->toBe('04:29:45');
 });
+
+it('ingere telemetry.*, debug.progress e knowledge.telemetry na timeline e read-model', function () {
+    $root = cockpitFixtureRoot();
+    File::append($root.'/.git/ralph-control/events.jsonl', "\n".implode("\n", [
+        json_encode([
+            'schema_version' => '1.3.0',
+            'event_id' => 'evt-tel-1',
+            'workflow_id' => 'wf_cockpit_demo',
+            'feature_key' => 'FEATURE-092',
+            'attempt' => 1,
+            'type' => 'telemetry.activity',
+            'timestamp' => '2026-08-16T12:03:20Z',
+            'summary' => 'Atividade sanitizada do processo controlado',
+            'facts' => [
+                'activity_preview' => 'executando suite de testes',
+                'elapsed' => 20,
+                'idle_seconds' => 0,
+                'phase' => 'running',
+            ],
+        ], JSON_THROW_ON_ERROR),
+        json_encode([
+            'schema_version' => '1.3.0',
+            'event_id' => 'evt-dbg-1',
+            'workflow_id' => 'wf_cockpit_demo',
+            'feature_key' => 'FEATURE-092',
+            'attempt' => 1,
+            'type' => 'debug.progress',
+            'timestamp' => '2026-08-16T12:03:30Z',
+            'summary' => 'Systematic debugging em andamento',
+            'facts' => [
+                'hypothesis' => 'H1: permissão de arquivo no checkout',
+                'cause_kind' => 'harness_defect',
+            ],
+        ], JSON_THROW_ON_ERROR),
+        json_encode([
+            'schema_version' => '1.3.0',
+            'event_id' => 'evt-k-tel-1',
+            'workflow_id' => 'wf_cockpit_demo',
+            'feature_key' => 'FEATURE-091',
+            'attempt' => 1,
+            'type' => 'knowledge.telemetry',
+            'timestamp' => '2026-08-16T12:03:40Z',
+            'summary' => 'Telemetria de decisão sobre memória de engenharia',
+            'facts' => [
+                'curation_id' => 'CUR-2026-0100',
+                'status' => 'curated',
+                'title' => 'FEATURE-091 Legacy detection pattern',
+                'category' => 'architecture',
+                'topics' => ['detection', 'legacy'],
+                'policy' => 'non_blocking',
+            ],
+        ], JSON_THROW_ON_ERROR),
+    ]));
+    config(['ralph.project_root' => $root, 'ralph.monitor_bin' => null]);
+
+    $this->artisan('ralph:ingest', ['--rebuild' => true, '--no-broadcast' => true])
+        ->assertSuccessful();
+
+    expect(TimelineEvent::query()->where('name', 'telemetry.activity')->where('kind', 'events')->exists())->toBeTrue()
+        ->and(TimelineEvent::query()->where('name', 'telemetry.activity')->value('detail'))->toBe('Atividade sanitizada do processo controlado')
+        ->and(TimelineEvent::query()->where('name', 'debug.progress')->where('kind', 'events')->exists())->toBeTrue()
+        ->and(TimelineEvent::query()->where('name', 'knowledge.telemetry')->where('kind', 'events')->exists())->toBeTrue()
+        ->and(KnowledgeItem::query()->where('item_key', 'CUR-2026-0100')->value('status'))->toBe('curated')
+        ->and(KnowledgeItem::query()->where('item_key', 'CUR-2026-0100')->value('title'))->toBe('FEATURE-091 Legacy detection pattern');
+});
+
+it('ingere gate.started e gate.stalled projetando status running e stalled na visão gates', function () {
+    $root = cockpitFixtureRoot();
+    File::append($root.'/.git/ralph-control/events.jsonl', "\n".implode("\n", [
+        json_encode([
+            'schema_version' => '1.3.0',
+            'event_id' => 'evt-gate-start',
+            'workflow_id' => 'wf_cockpit_demo',
+            'feature_key' => 'FEATURE-092',
+            'attempt' => 1,
+            'type' => 'gate.started',
+            'timestamp' => '2026-08-16T12:03:15Z',
+            'facts' => ['gate' => 'quality'],
+            'summary' => 'Início do processamento do gate quality',
+        ], JSON_THROW_ON_ERROR),
+        json_encode([
+            'schema_version' => '1.3.0',
+            'event_id' => 'evt-gate-stall',
+            'workflow_id' => 'wf_cockpit_demo',
+            'feature_key' => 'FEATURE-092',
+            'attempt' => 1,
+            'type' => 'gate.stalled',
+            'timestamp' => '2026-08-16T12:13:15Z',
+            'facts' => [
+                'gate' => 'validation',
+                'age_seconds' => 605,
+                'threshold' => 600,
+            ],
+            'summary' => 'Gate validation demorando além do esperado (605s >= 600s)',
+        ], JSON_THROW_ON_ERROR),
+    ]));
+    config(['ralph.project_root' => $root, 'ralph.monitor_bin' => null]);
+
+    app(RalphIngestor::class)->rebuild();
+
+    expect(GateProjection::query()->where('feature_key', 'FEATURE-092')->where('gate_key', 'quality')->value('status'))->toBe('running')
+        ->and(GateProjection::query()->where('feature_key', 'FEATURE-092')->where('gate_key', 'validation')->value('status'))->toBe('stalled')
+        ->and(TimelineEvent::query()->where('name', 'gate.started')->where('kind', 'gates')->exists())->toBeTrue()
+        ->and(TimelineEvent::query()->where('name', 'gate.stalled')->where('kind', 'gates')->exists())->toBeTrue()
+        ->and(\App\Ralph\GateCatalog::visualClass('running'))->toBe('is-wait')
+        ->and(\App\Ralph\GateCatalog::visualClass('stalled'))->toBe('is-fail');
+});
+

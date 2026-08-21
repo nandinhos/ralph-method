@@ -327,6 +327,24 @@ final class RalphWatchReader
                 'last_event' => null,
                 'last_telemetry' => null,
                 'debug' => null,
+                'knowledge_summary' => [
+                    'total' => 0,
+                    'pending' => 0,
+                    'curated' => 0,
+                    'persisted' => 0,
+                    'rejected' => 0,
+                    'skipped' => 0,
+                    'review_required' => 0,
+                    'counts' => [
+                        'pending' => 0,
+                        'curated' => 0,
+                        'persisted' => 0,
+                        'rejected' => 0,
+                        'skipped' => 0,
+                        'review_required' => 0,
+                    ],
+                    'candidates' => [],
+                ],
                 'gates' => array_fill_keys($mandatoryGates, 'pending'),
                 'gate_ages' => array_fill_keys($mandatoryGates, null),
                 'queue' => [],
@@ -391,6 +409,7 @@ final class RalphWatchReader
 
         // 2. Processa eventos para derivar projeção e estado atual
         $featuresMap = [];
+        $candidatesMap = [];
         $cursor = null;
         $lastEvent = null;
         $lastTelemetry = null;
@@ -535,12 +554,107 @@ final class RalphWatchReader
                         if ($featuresMap[$featureKey]['state'] === 'released') {
                             $featuresMap[$featureKey]['state'] = 'knowledge_pending';
                         }
+                        $cId = is_string($facts['curation_id'] ?? null) ? $facts['curation_id'] : null;
+                        if ($cId !== null && $cId !== '') {
+                            $candidatesMap[$cId] = array_merge($candidatesMap[$cId] ?? [], [
+                                'curation_id' => $cId,
+                                'workflow_id' => $this->workflowId,
+                                'feature_key' => $featureKey !== '' ? $featureKey : null,
+                                'attempt' => $attempt,
+                                'status' => 'pending',
+                                'title' => $featuresMap[$featureKey]['title'] ?? ($candidatesMap[$cId]['title'] ?? null),
+                                'category' => $candidatesMap[$cId]['category'] ?? 'engineering',
+                                'topics' => $candidatesMap[$cId]['topics'] ?? [],
+                                'lesson_id' => null,
+                                'reason' => null,
+                                'timestamp' => is_string($event['timestamp'] ?? null) ? $event['timestamp'] : null,
+                            ]);
+                        }
                         break;
                     case 'knowledge.curated':
                         $featuresMap[$featureKey]['state'] = 'knowledge_curated';
+                        $cId = is_string($facts['curation_id'] ?? null) ? $facts['curation_id'] : null;
+                        if ($cId !== null && $cId !== '') {
+                            $candidatesMap[$cId] = array_merge($candidatesMap[$cId] ?? [
+                                'curation_id' => $cId,
+                                'workflow_id' => $this->workflowId,
+                                'feature_key' => $featureKey !== '' ? $featureKey : null,
+                                'attempt' => $attempt,
+                            ], [
+                                'status' => 'persisted',
+                                'lesson_id' => is_string($facts['lesson_id'] ?? null) ? $facts['lesson_id'] : null,
+                                'category' => is_string($facts['category'] ?? null) ? $facts['category'] : 'engineering',
+                                'topics' => is_array($facts['topics'] ?? null) ? $facts['topics'] : [],
+                                'timestamp' => is_string($event['timestamp'] ?? null) ? $event['timestamp'] : null,
+                            ]);
+                        }
+                        break;
+                    case 'knowledge.rejected':
+                        $featuresMap[$featureKey]['state'] = 'knowledge_rejected';
+                        $cId = is_string($facts['curation_id'] ?? null) ? $facts['curation_id'] : null;
+                        if ($cId !== null && $cId !== '') {
+                            $candidatesMap[$cId] = array_merge($candidatesMap[$cId] ?? [
+                                'curation_id' => $cId,
+                                'workflow_id' => $this->workflowId,
+                                'feature_key' => $featureKey !== '' ? $featureKey : null,
+                                'attempt' => $attempt,
+                            ], [
+                                'status' => 'rejected',
+                                'reason' => is_string($facts['reason'] ?? null) ? $facts['reason'] : null,
+                                'timestamp' => is_string($event['timestamp'] ?? null) ? $event['timestamp'] : null,
+                            ]);
+                        }
+                        break;
+                    case 'knowledge.review_required':
+                        $featuresMap[$featureKey]['state'] = 'knowledge_review_required';
+                        $cId = is_string($facts['curation_id'] ?? null) ? $facts['curation_id'] : null;
+                        if ($cId !== null && $cId !== '') {
+                            $candidatesMap[$cId] = array_merge($candidatesMap[$cId] ?? [
+                                'curation_id' => $cId,
+                                'workflow_id' => $this->workflowId,
+                                'feature_key' => $featureKey !== '' ? $featureKey : null,
+                                'attempt' => $attempt,
+                            ], [
+                                'status' => 'review_required',
+                                'timestamp' => is_string($event['timestamp'] ?? null) ? $event['timestamp'] : null,
+                            ]);
+                        }
                         break;
                     case 'knowledge.skipped':
                         $featuresMap[$featureKey]['state'] = 'knowledge_skipped';
+                        $cId = is_string($facts['curation_id'] ?? null) ? $facts['curation_id'] : null;
+                        if ($cId !== null && $cId !== '') {
+                            $candidatesMap[$cId] = array_merge($candidatesMap[$cId] ?? [
+                                'curation_id' => $cId,
+                                'workflow_id' => $this->workflowId,
+                                'feature_key' => $featureKey !== '' ? $featureKey : null,
+                                'attempt' => $attempt,
+                            ], [
+                                'status' => 'skipped',
+                                'timestamp' => is_string($event['timestamp'] ?? null) ? $event['timestamp'] : null,
+                            ]);
+                        }
+                        break;
+                    case 'knowledge.telemetry':
+                        $cId = is_string($facts['curation_id'] ?? null) ? $facts['curation_id'] : null;
+                        if ($cId !== null && $cId !== '') {
+                            $action = (string) ($facts['action'] ?? '');
+                            $status = (string) ($facts['status'] ?? ($action === 'candidate_created' ? 'pending' : ($action === 'curated' ? 'persisted' : $action)));
+                            $candidatesMap[$cId] = array_merge($candidatesMap[$cId] ?? [
+                                'curation_id' => $cId,
+                                'workflow_id' => $this->workflowId,
+                                'feature_key' => $featureKey !== '' ? $featureKey : null,
+                                'attempt' => $attempt,
+                            ], [
+                                'status' => $status,
+                                'title' => is_string($facts['title'] ?? null) ? $facts['title'] : ($candidatesMap[$cId]['title'] ?? null),
+                                'category' => is_string($facts['category'] ?? null) ? $facts['category'] : ($candidatesMap[$cId]['category'] ?? 'engineering'),
+                                'topics' => is_array($facts['topics'] ?? null) ? $facts['topics'] : ($candidatesMap[$cId]['topics'] ?? []),
+                                'lesson_id' => is_string($facts['lesson_id'] ?? null) ? $facts['lesson_id'] : ($candidatesMap[$cId]['lesson_id'] ?? null),
+                                'reason' => is_string($facts['reason'] ?? null) ? $facts['reason'] : ($candidatesMap[$cId]['reason'] ?? null),
+                                'timestamp' => is_string($event['timestamp'] ?? null) ? $event['timestamp'] : null,
+                            ]);
+                        }
                         break;
                 }
             }
@@ -700,6 +814,86 @@ final class RalphWatchReader
             };
         }
 
+        // Sincroniza com o diretório local de candidatos se presente
+        $candidatesDir = $this->root.DIRECTORY_SEPARATOR.'.ralph'.DIRECTORY_SEPARATOR.'knowledge-candidates';
+        if (is_dir($candidatesDir)) {
+            foreach (glob($candidatesDir.DIRECTORY_SEPARATOR.'CUR-*.json') ?: [] as $cFile) {
+                try {
+                    $cData = json_decode((string) file_get_contents($cFile), true, 512, JSON_THROW_ON_ERROR);
+                    if (is_array($cData) && ($cData['workflow_id'] ?? null) === $this->workflowId) {
+                        $cId = is_string($cData['curation_id'] ?? null) ? $cData['curation_id'] : null;
+                        if ($cId !== null && $cId !== '') {
+                            $existing = $candidatesMap[$cId] ?? [];
+                            $cStatus = (string) ($cData['status'] ?? 'pending');
+                            $decision = is_array($cData['decision'] ?? null) ? $cData['decision'] : [];
+                            $candidatesMap[$cId] = array_merge([
+                                'curation_id' => $cId,
+                                'workflow_id' => $this->workflowId,
+                                'feature_key' => $cData['feature_key'] ?? null,
+                                'attempt' => $cData['attempt'] ?? 1,
+                                'status' => $cStatus,
+                                'title' => null,
+                                'category' => 'engineering',
+                                'topics' => [],
+                                'lesson_id' => $decision['lesson_id'] ?? null,
+                                'reason' => $decision['reason'] ?? null,
+                                'timestamp' => $cData['created_at'] ?? null,
+                            ], $existing, [
+                                'status' => $existing['status'] ?? $cStatus,
+                                'lesson_id' => $existing['lesson_id'] ?? ($decision['lesson_id'] ?? null),
+                                'reason' => $existing['reason'] ?? ($decision['reason'] ?? null),
+                            ]);
+                        }
+                    }
+                } catch (Throwable) {
+                    // ignore
+                }
+            }
+        }
+
+        $pendingKCount = 0;
+        $curatedKCount = 0;
+        $rejectedKCount = 0;
+        $skippedKCount = 0;
+        $reviewRequiredKCount = 0;
+
+        foreach ($candidatesMap as $cand) {
+            $st = (string) ($cand['status'] ?? 'pending');
+            if ($st === 'pending') {
+                $pendingKCount++;
+            } elseif ($st === 'persisted' || $st === 'curated') {
+                $curatedKCount++;
+            } elseif ($st === 'rejected') {
+                $rejectedKCount++;
+            } elseif ($st === 'skipped') {
+                $skippedKCount++;
+            } elseif ($st === 'review_required') {
+                $reviewRequiredKCount++;
+            }
+        }
+
+        $candidatesList = array_values($candidatesMap);
+        usort($candidatesList, static fn (array $a, array $b): int => strcmp((string) ($a['curation_id'] ?? ''), (string) ($b['curation_id'] ?? '')));
+
+        $knowledgeSummary = [
+            'total' => count($candidatesList),
+            'pending' => $pendingKCount,
+            'curated' => $curatedKCount,
+            'persisted' => $curatedKCount,
+            'rejected' => $rejectedKCount,
+            'skipped' => $skippedKCount,
+            'review_required' => $reviewRequiredKCount,
+            'counts' => [
+                'pending' => $pendingKCount,
+                'curated' => $curatedKCount,
+                'persisted' => $curatedKCount,
+                'rejected' => $rejectedKCount,
+                'skipped' => $skippedKCount,
+                'review_required' => $reviewRequiredKCount,
+            ],
+            'candidates' => $candidatesList,
+        ];
+
         // Fila simplificada para o snapshot
         $queue = array_values(array_map(static fn (array $f): array => [
             'position' => $f['position'],
@@ -742,6 +936,7 @@ final class RalphWatchReader
             ] : null,
             'last_telemetry' => $lastTelemetry,
             'debug' => $lastDebug,
+            'knowledge_summary' => $knowledgeSummary,
             'gates' => $gatesStatus,
             'gate_ages' => $gateAges,
             'queue' => $queue,
@@ -990,6 +1185,46 @@ function watchRenderTui(array $snapshot, bool $useAnsi = true, int $refreshInter
         }
         if (count($queue) > 6) {
             $out[] = sprintf('│   ... e mais %d feature(s) na fila                                         │', count($queue) - 6);
+        }
+    }
+    $out[] = watchColor('├'.$border.'┤', 'dim', $useAnsi);
+
+    // Fila de Conhecimento & Lições (LES)
+    $out[] = watchColor('│ FILA DE CONHECIMENTO & LIÇÕES (LES)                                         │', 'bold', $useAnsi);
+    $kSummary = is_array($snapshot['knowledge_summary'] ?? null) ? $snapshot['knowledge_summary'] : [];
+    $kCandidates = is_array($kSummary['candidates'] ?? null) ? $kSummary['candidates'] : [];
+    $kPending = (int) ($kSummary['pending'] ?? 0);
+    $kCurated = (int) ($kSummary['curated'] ?? ($kSummary['persisted'] ?? 0));
+    $kRejected = (int) ($kSummary['rejected'] ?? 0);
+    $kTotal = (int) ($kSummary['total'] ?? count($kCandidates));
+
+    $kSummaryLine = sprintf('Resumo: %d pendente(s), %d curada(s), %d rejeitada(s) (total: %d)', $kPending, $kCurated, $kRejected, $kTotal);
+    $out[] = sprintf('│   %-71s │', watchColor($kSummaryLine, 'bold', $useAnsi));
+
+    if ($kCandidates === []) {
+        $out[] = '│   (nenhum candidato de conhecimento registrado no workflow)                │';
+    } else {
+        $kShown = array_slice($kCandidates, 0, 4);
+        foreach ($kShown as $cand) {
+            $cId = (string) ($cand['curation_id'] ?? 'CUR-????');
+            $cStatus = (string) ($cand['status'] ?? 'pending');
+            $cFeature = (string) ($cand['feature_key'] ?? '-');
+            $cLesson = is_string($cand['lesson_id'] ?? null) && $cand['lesson_id'] !== '' ? $cand['lesson_id'] : '--';
+            $cCategory = (string) ($cand['category'] ?? 'engineering');
+
+            $cBadge = match ($cStatus) {
+                'persisted', 'curated' => watchColor('[ ✔ CURATED   ]', 'bold_green', $useAnsi),
+                'rejected' => watchColor('[ ✖ REJECTED  ]', 'bold_red', $useAnsi),
+                'review_required' => watchColor('[ ? REVIEW REQ]', 'bold_yellow', $useAnsi),
+                'skipped' => watchColor('[ · SKIPPED   ]', 'gray', $useAnsi),
+                default => watchColor('[ · PENDING   ]', 'bold_yellow', $useAnsi),
+            };
+
+            $candLine = sprintf('%-14s %-22s %-12s %-13s (%s)', $cId, $cBadge, $cFeature, $cLesson, $cCategory);
+            $out[] = sprintf('│   %-71s │', mb_strimwidth($candLine, 0, 71, '...'));
+        }
+        if (count($kCandidates) > 4) {
+            $out[] = sprintf('│   ... e mais %d candidato(s) de conhecimento                                │', count($kCandidates) - 4);
         }
     }
     $out[] = watchColor('├'.$border.'┤', 'dim', $useAnsi);
