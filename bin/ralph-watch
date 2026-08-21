@@ -1,0 +1,1082 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+/**
+ * Ralph Method 2.0 — Terminal Dashboard (ralph-watch)
+ *
+ * Dashboard TUI em tempo real (PHP puro, sem dependências externas) para
+ * acompanhar a execução do Ralph Method.
+ *
+ * Lê `events.jsonl` e feedback por delta mtime de forma eficiente,
+ * renderiza saúde, feature/tentativa, gates com idade, fila de execução
+ * e última atividade sanitizada.
+ *
+ * Suporta modo interativo TTY, modo não-TTY/pipe, `--once`, `--json` e
+ * restauração segura de terminal no SIGINT.
+ */
+
+const RALPH_WATCH_VERSION = '2.0.0';
+
+/**
+ * Processa os argumentos da linha de comando.
+ *
+ * @param list<string> $argv
+ * @return array<string, string|bool>
+ */
+function watchArguments(array $argv): array
+{
+    $arguments = [];
+    for ($index = 1; $index < count($argv); $index++) {
+        $argument = $argv[$index];
+
+        if ($argument === '-h' || $argument === '--help') {
+            $arguments['help'] = true;
+            continue;
+        }
+
+        if ($argument === '-w') {
+            $next = $argv[$index + 1] ?? null;
+            if ($next !== null && ! str_starts_with($next, '-')) {
+                $arguments['workflow'] = $next;
+                $index++;
+                continue;
+            }
+        }
+
+        if (! str_starts_with($argument, '--')) {
+            continue;
+        }
+
+        $argument = substr($argument, 2);
+        if (str_contains($argument, '=')) {
+            [$key, $value] = explode('=', $argument, 2);
+            $arguments[$key] = $value;
+            continue;
+        }
+
+        $next = $argv[$index + 1] ?? null;
+        if ($next !== null && ! str_starts_with($next, '--')) {
+            $arguments[$argument] = $next;
+            $index++;
+            continue;
+        }
+
+        $arguments[$argument] = true;
+    }
+
+    return $arguments;
+}
+
+/**
+ * Exibe a mensagem de ajuda e sai.
+ */
+function watchHelp(): never
+{
+    $help = <<<'HELP'
+Ralph Method 2.0 — Terminal Dashboard (ralph-watch)
+
+Uso:
+  bin/ralph-watch --workflow <id> [opções]
+
+Opções:
+  -w, --workflow <id>           ID do workflow a monitorar (obrigatório)
+  --root <caminho>              Raiz do projeto (padrão: diretório atual)
+  --interval <segundos>         Intervalo de refresh em segundos (padrão: 1, mín: 1)
+  --once                        Executa apenas um ciclo de leitura e sai
+  --json                        Emite snapshot em formato JSON para stdout
+  --events-file <caminho>       Caminho explícito para events.jsonl
+  --feedback-file <caminho>     Caminho explícito para events.jsonl de feedback
+  --stale-after <segundos>      Limiar para heartbeat stale (padrão: 180s)
+  --activity-stale-after <seg>  Limiar para atividade stale (padrão: 900s)
+  --no-color                    Desativa formatação com cores ANSI
+  -h, --help                    Exibe esta ajuda
+
+Exemplos:
+  bin/ralph-watch --workflow wf_telemetry_001
+  bin/ralph-watch --workflow wf_telemetry_001 --interval 2
+  bin/ralph-watch --workflow wf_telemetry_001 --once --json | jq .
+HELP;
+
+    fwrite(STDOUT, $help."\n");
+    exit(0);
+}
+
+/**
+ * Retorna o timestamp atual (com suporte ao relógio injetado para testes determinísticos).
+ */
+function watchNow(): int
+{
+    $injected = getenv('RALPH_TEST_CLOCK_EPOCH');
+    if (is_string($injected) && preg_match('/^\d+$/', $injected) === 1) {
+        return (int) $injected;
+    }
+
+    return time();
+}
+
+/**
+ * Calcula a idade em segundos a partir de um timestamp ISO 8601.
+ */
+function watchAge(?string $timestamp): ?int
+{
+    if ($timestamp === null || trim($timestamp) === '') {
+        return null;
+    }
+
+    try {
+        $eventTime = new DateTimeImmutable($timestamp);
+    } catch (Throwable) {
+        return null;
+    }
+
+    return max(0, watchNow() - $eventTime->getTimestamp());
+}
+
+/**
+ * Formata segundos em texto legível.
+ */
+function watchFormatAge(?int $seconds): string
+{
+    if ($seconds === null) {
+        return 'indisponível';
+    }
+    if ($seconds < 60) {
+        return $seconds.'s';
+    }
+    if ($seconds < 3600) {
+        return intdiv($seconds, 60).'min '.($seconds % 60).'s';
+    }
+
+    return intdiv($seconds, 3600).'h '.intdiv($seconds % 3600, 60).'min';
+}
+
+/**
+ * Gera uma barra de progresso visual.
+ */
+function watchProgressBar(float|int $percent, int $width = 20): string
+{
+    $percent = max(0.0, min(100.0, (float) $percent));
+    $filled = (int) round(($percent / 100.0) * $width);
+
+    return '['.str_repeat('█', $filled).str_repeat('·', max(0, $width - $filled)).']';
+}
+
+/**
+ * Executa um comando simples do sistema.
+ *
+ * @return array{exit: int, stdout: string, stderr: string}
+ */
+function watchCommand(string $command, ?string $cwd = null): array
+{
+    $pipes = [];
+    $process = proc_open($command, [
+        0 => ['pipe', 'r'],
+        1 => ['pipe', 'w'],
+        2 => ['pipe', 'w'],
+    ], $pipes, $cwd);
+
+    if (! is_resource($process)) {
+        return ['exit' => 1, 'stdout' => '', 'stderr' => 'não foi possível iniciar o comando'];
+    }
+
+    fclose($pipes[0]);
+    $stdout = stream_get_contents($pipes[1]);
+    $stderr = stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+
+    return ['exit' => proc_close($process), 'stdout' => (string) $stdout, 'stderr' => (string) $stderr];
+}
+
+/**
+ * Localiza o diretório git comum se disponível.
+ */
+function watchGitCommonDir(string $root): ?string
+{
+    $git = watchCommand('git -C '.escapeshellarg($root).' rev-parse --git-common-dir');
+    if ($git['exit'] !== 0) {
+        return null;
+    }
+
+    $gitCommonDir = trim($git['stdout']);
+    if ($gitCommonDir === '') {
+        return null;
+    }
+    if (! str_starts_with($gitCommonDir, DIRECTORY_SEPARATOR)) {
+        $gitCommonDir = $root.DIRECTORY_SEPARATOR.$gitCommonDir;
+    }
+
+    return realpath($gitCommonDir) ?: $gitCommonDir;
+}
+
+/**
+ * Localiza os processos ativos associados ao workflow.
+ *
+ * @return list<array{pid: int, age: int, command: string}>
+ */
+function watchProcesses(string $workflowId): array
+{
+    $result = watchCommand('ps -eo pid=,etimes=,cmd=');
+    if ($result['exit'] !== 0) {
+        return [];
+    }
+
+    $processes = [];
+    foreach (preg_split('/\R/', $result['stdout']) ?: [] as $line) {
+        if (! str_contains($line, $workflowId) || ! preg_match('/ralph-control|ralph\.sh|ralph-block|ralph-bloco/', $line)) {
+            continue;
+        }
+        if (preg_match('/^\s*(\d+)\s+(\d+)\s+(.+)$/', $line, $matches) !== 1) {
+            continue;
+        }
+
+        $processes[] = [
+            'pid' => (int) $matches[1],
+            'age' => (int) $matches[2],
+            'command' => trim($matches[3]),
+        ];
+    }
+
+    return $processes;
+}
+
+/**
+ * Leitor delta por mtime para o ledger e feedback do Ralph Method.
+ */
+final class RalphWatchReader
+{
+    private string $root;
+
+    private string $workflowId;
+
+    private string $eventsFile;
+
+    private string $loopFeedbackFile;
+
+    private ?int $lastEventsMtime = null;
+
+    private int $lastEventsSize = 0;
+
+    private int $lastEventsOffset = 0;
+
+    /** @var list<array<string, mixed>> */
+    private array $cachedEvents = [];
+
+    private ?int $lastFeedbackMtime = null;
+
+    private int $lastFeedbackSize = 0;
+
+    private ?array $cachedFeedback = null;
+
+    public function __construct(string $root, string $workflowId, ?string $explicitEventsFile = null, ?string $explicitFeedbackFile = null)
+    {
+        $this->root = $root;
+        $this->workflowId = $workflowId;
+
+        $gitCommonDir = watchGitCommonDir($root);
+        $runtimeDir = ($gitCommonDir ?: $root).DIRECTORY_SEPARATOR.'ralph-control';
+
+        $this->eventsFile = $explicitEventsFile ?? ($runtimeDir.DIRECTORY_SEPARATOR.'events.jsonl');
+        $this->loopFeedbackFile = $explicitFeedbackFile ?? ($runtimeDir.DIRECTORY_SEPARATOR.'feedback'.DIRECTORY_SEPARATOR.'events.jsonl');
+    }
+
+    /**
+     * Coleta o snapshot atual com leitura delta por mtime.
+     *
+     * @return array<string, mixed>
+     */
+    public function collectSnapshot(int $staleAfter = 180, int $activityStaleAfter = 900): array
+    {
+        $now = watchNow();
+        $mandatoryGates = ['validation', 'quality', 'runtime_evidence', 'technical_review', 'curation'];
+
+        // 1. Leitura delta de events.jsonl
+        $deltaCached = false;
+        if (! is_file($this->eventsFile)) {
+            $this->cachedEvents = [];
+            $this->lastEventsMtime = null;
+            $this->lastEventsSize = 0;
+            $this->lastEventsOffset = 0;
+
+            return [
+                'health' => 'waiting',
+                'workflow_id' => $this->workflowId,
+                'cursor' => null,
+                'state' => 'idle',
+                'position' => null,
+                'title' => null,
+                'attempt' => null,
+                'total_features' => 0,
+                'completed_features' => 0,
+                'message' => 'ledger ausente: aguardando eventos do workflow',
+                'progress' => [
+                    'feature_percent' => 0.0,
+                    'gate_percent' => 0.0,
+                    'estimated_percent' => 0.0,
+                    'completed_features' => 0,
+                    'total_features' => 0,
+                    'passed_gates' => 0,
+                    'total_gates' => count($mandatoryGates),
+                    'feature_bar' => watchProgressBar(0.0),
+                    'gate_bar' => watchProgressBar(0.0),
+                    'estimated_bar' => watchProgressBar(0.0),
+                ],
+                'event_count' => 0,
+                'last_event' => null,
+                'last_telemetry' => null,
+                'gates' => array_fill_keys($mandatoryGates, 'pending'),
+                'gate_ages' => array_fill_keys($mandatoryGates, null),
+                'queue' => [],
+                'loop_feedback' => $this->readLoopFeedback(),
+                'processes' => watchProcesses($this->workflowId),
+                'stale_after_seconds' => $staleAfter,
+                'activity_stale_after_seconds' => $activityStaleAfter,
+                'provider_circuits' => [],
+                'delta' => [
+                    'mtime' => null,
+                    'size' => 0,
+                    'events_loaded' => 0,
+                    'cached' => false,
+                ],
+            ];
+        }
+
+        clearstatcache(true, $this->eventsFile);
+        $currentMtime = filemtime($this->eventsFile);
+        $currentSize = filesize($this->eventsFile);
+
+        if ($currentMtime !== false && $currentSize !== false) {
+            if ($this->lastEventsMtime !== null
+                && $currentMtime === $this->lastEventsMtime
+                && $currentSize === $this->lastEventsSize
+                && $this->cachedEvents !== []) {
+                $deltaCached = true;
+            } else {
+                // Arquivo foi alterado ou novo.
+                if ($currentSize < $this->lastEventsOffset) {
+                    // Arquivo foi truncado/rotacionado: reinicia leitura do começo.
+                    $this->lastEventsOffset = 0;
+                    $this->cachedEvents = [];
+                }
+
+                $fp = @fopen($this->eventsFile, 'rb');
+                if (is_resource($fp)) {
+                    if ($this->lastEventsOffset > 0) {
+                        fseek($fp, $this->lastEventsOffset);
+                    }
+                    while (($line = fgets($fp)) !== false) {
+                        $line = trim($line);
+                        if ($line === '') {
+                            continue;
+                        }
+                        try {
+                            $event = json_decode($line, true, 512, JSON_THROW_ON_ERROR);
+                        } catch (Throwable) {
+                            continue;
+                        }
+                        if (is_array($event) && ($event['workflow_id'] ?? null) === $this->workflowId) {
+                            $this->cachedEvents[] = $event;
+                        }
+                    }
+                    $this->lastEventsOffset = ftell($fp);
+                    fclose($fp);
+                }
+                $this->lastEventsMtime = $currentMtime;
+                $this->lastEventsSize = $currentSize;
+            }
+        }
+
+        // 2. Processa eventos para derivar projeção e estado atual
+        $featuresMap = [];
+        $cursor = null;
+        $lastEvent = null;
+        $lastTelemetry = null;
+        $circuits = [];
+
+        // Tenta carregar workflow.json se disponível para enriquecer títulos e fila inicial
+        $workflowFile = dirname($this->eventsFile).DIRECTORY_SEPARATOR.'workflow.json';
+        if (is_file($workflowFile)) {
+            try {
+                $wfData = json_decode((string) file_get_contents($workflowFile), true, 512, JSON_THROW_ON_ERROR);
+                if (is_array($wfData) && is_array($wfData['features'] ?? null)) {
+                    $pos = 1;
+                    foreach ($wfData['features'] as $f) {
+                        if (is_array($f) && isset($f['key'])) {
+                            $key = (string) $f['key'];
+                            $featuresMap[$key] = [
+                                'position' => $pos++,
+                                'feature_key' => $key,
+                                'title' => (string) ($f['title'] ?? $key),
+                                'state' => 'pending',
+                                'attempt' => 1,
+                                'gates' => array_fill_keys($mandatoryGates, 'pending'),
+                                'gate_started' => array_fill_keys($mandatoryGates, null),
+                                'gate_finished' => array_fill_keys($mandatoryGates, null),
+                            ];
+                        }
+                    }
+                }
+            } catch (Throwable) {
+                // workflow.json opcional ou não parseável
+            }
+        }
+
+        foreach ($this->cachedEvents as $event) {
+            $lastEvent = $event;
+            $type = (string) ($event['type'] ?? '');
+            $featureKey = (string) ($event['feature_key'] ?? '');
+            $attempt = (int) ($event['attempt'] ?? 1);
+            $facts = is_array($event['facts'] ?? null) ? $event['facts'] : [];
+            $ts = is_string($event['timestamp'] ?? null) ? strtotime($event['timestamp']) : null;
+
+            if ($type === 'workflow.initialized' && is_array($facts['features'] ?? null)) {
+                $pos = 1;
+                foreach ($facts['features'] as $f) {
+                    $k = is_array($f) ? (string) ($f['key'] ?? '') : (string) $f;
+                    $title = is_array($f) ? (string) ($f['title'] ?? $k) : $k;
+                    if ($k !== '' && ! isset($featuresMap[$k])) {
+                        $featuresMap[$k] = [
+                            'position' => $pos++,
+                            'feature_key' => $k,
+                            'title' => $title,
+                            'state' => 'pending',
+                            'attempt' => 1,
+                            'gates' => array_fill_keys($mandatoryGates, 'pending'),
+                            'gate_started' => array_fill_keys($mandatoryGates, null),
+                            'gate_finished' => array_fill_keys($mandatoryGates, null),
+                        ];
+                    }
+                }
+            }
+
+            if ($featureKey !== '') {
+                if (! isset($featuresMap[$featureKey])) {
+                    $featuresMap[$featureKey] = [
+                        'position' => count($featuresMap) + 1,
+                        'feature_key' => $featureKey,
+                        'title' => $featureKey,
+                        'state' => 'pending',
+                        'attempt' => $attempt,
+                        'gates' => array_fill_keys($mandatoryGates, 'pending'),
+                        'gate_started' => array_fill_keys($mandatoryGates, null),
+                        'gate_finished' => array_fill_keys($mandatoryGates, null),
+                    ];
+                }
+
+                $featuresMap[$featureKey]['attempt'] = $attempt;
+
+                // Transições de estado por eventos
+                switch ($type) {
+                    case 'feature.claimed':
+                        $featuresMap[$featureKey]['state'] = 'running';
+                        $cursor = $featureKey;
+                        break;
+                    case 'attempt.started':
+                        $featuresMap[$featureKey]['state'] = 'running';
+                        $cursor = $featureKey;
+                        break;
+                    case 'block.finished':
+                        $featuresMap[$featureKey]['state'] = 'awaiting_gates';
+                        break;
+                    case 'feature.approved':
+                        $featuresMap[$featureKey]['state'] = 'approved';
+                        break;
+                    case 'feature.released':
+                        $featuresMap[$featureKey]['state'] = 'released';
+                        break;
+                    case 'recovery.required':
+                        $featuresMap[$featureKey]['state'] = 'recovery_required';
+                        break;
+                    case 'recovery.resolved':
+                        $featuresMap[$featureKey]['state'] = 'running';
+                        break;
+                    case 'debug.progress':
+                        $featuresMap[$featureKey]['state'] = 'debugging_running';
+                        break;
+                    case 'gate.started':
+                        $gateName = (string) ($facts['gate'] ?? '');
+                        if (in_array($gateName, $mandatoryGates, true)) {
+                            $featuresMap[$featureKey]['gates'][$gateName] = 'running';
+                            if ($ts !== null && $ts !== false) {
+                                $featuresMap[$featureKey]['gate_started'][$gateName] = (int) $ts;
+                            }
+                        }
+                        break;
+                    case 'gate.stalled':
+                        $gateName = (string) ($facts['gate'] ?? '');
+                        if (in_array($gateName, $mandatoryGates, true)) {
+                            $featuresMap[$featureKey]['gates'][$gateName] = 'stalled';
+                        }
+                        break;
+                    case 'gate.passed':
+                        $gateName = (string) ($facts['gate'] ?? '');
+                        if (in_array($gateName, $mandatoryGates, true)) {
+                            $featuresMap[$featureKey]['gates'][$gateName] = 'passed';
+                            if ($ts !== null && $ts !== false) {
+                                $featuresMap[$featureKey]['gate_finished'][$gateName] = (int) $ts;
+                            }
+                        }
+                        break;
+                    case 'gate.rejected':
+                    case 'gate.harness_error':
+                        $gateName = (string) ($facts['gate'] ?? '');
+                        if (in_array($gateName, $mandatoryGates, true)) {
+                            $featuresMap[$featureKey]['gates'][$gateName] = 'rejected';
+                            if ($ts !== null && $ts !== false) {
+                                $featuresMap[$featureKey]['gate_finished'][$gateName] = (int) $ts;
+                            }
+                        }
+                        break;
+                    case 'knowledge.candidate_created':
+                        if ($featuresMap[$featureKey]['state'] === 'released') {
+                            $featuresMap[$featureKey]['state'] = 'knowledge_pending';
+                        }
+                        break;
+                    case 'knowledge.curated':
+                        $featuresMap[$featureKey]['state'] = 'knowledge_curated';
+                        break;
+                    case 'knowledge.skipped':
+                        $featuresMap[$featureKey]['state'] = 'knowledge_skipped';
+                        break;
+                }
+            }
+
+            // Telemetria sanitizada
+            if ($type === 'telemetry.activity' || $type === 'telemetry.heartbeat_rich' || $type === 'command.heartbeat') {
+                $lastTelemetry = [
+                    'activity_preview' => is_string($facts['activity_preview'] ?? null) ? $facts['activity_preview'] : null,
+                    'elapsed' => is_int($facts['elapsed'] ?? null) ? $facts['elapsed'] : null,
+                    'idle_seconds' => is_int($facts['idle_seconds'] ?? null) ? $facts['idle_seconds'] : null,
+                    'phase' => is_string($facts['phase'] ?? null) ? $facts['phase'] : ($featuresMap[$featureKey]['state'] ?? 'running'),
+                    'timestamp' => is_string($event['timestamp'] ?? null) ? $event['timestamp'] : null,
+                    'age_seconds' => watchAge(is_string($event['timestamp'] ?? null) ? $event['timestamp'] : null),
+                ];
+            }
+
+            // Circuitos
+            if ($type === 'provider.capacity_limited') {
+                $runner = is_string($facts['runner'] ?? null) ? $facts['runner'] : 'unknown';
+                $retryAt = is_string($facts['retry_at'] ?? null) ? $facts['retry_at'] : null;
+                $retryEpoch = is_int($facts['retry_at_epoch'] ?? null) ? $facts['retry_at_epoch'] : null;
+                $cState = $retryEpoch !== null && $now >= $retryEpoch ? 'half_open' : 'open';
+                $circuits[$runner] = [
+                    'state' => $cState,
+                    'retry_at' => $retryAt,
+                    'domain' => is_string($facts['failure_domain'] ?? null) ? $facts['failure_domain'] : null,
+                ];
+            }
+        }
+
+        // Se cursor ainda não foi definido, encontra a primeira feature não concluída
+        $doneStates = ['approved', 'released', 'knowledge_pending', 'knowledge_curated', 'knowledge_skipped'];
+        if ($cursor === null) {
+            foreach ($featuresMap as $k => $fData) {
+                if (! in_array($fData['state'], $doneStates, true)) {
+                    $cursor = $k;
+                    break;
+                }
+            }
+        }
+        if ($cursor === null && $featuresMap !== []) {
+            $cursor = array_key_last($featuresMap);
+        }
+
+        $currentFeature = $cursor !== null ? ($featuresMap[$cursor] ?? null) : null;
+        $currentState = is_array($currentFeature) ? ($currentFeature['state'] ?? 'idle') : 'complete';
+
+        // Calcula idades dos gates para a feature atual
+        $gateAges = array_fill_keys($mandatoryGates, null);
+        $gatesStatus = is_array($currentFeature) ? $currentFeature['gates'] : array_fill_keys($mandatoryGates, 'pending');
+
+        if (is_array($currentFeature)) {
+            foreach ($mandatoryGates as $g) {
+                $started = $currentFeature['gate_started'][$g] ?? null;
+                $finished = $currentFeature['gate_finished'][$g] ?? null;
+                if ($started !== null) {
+                    if ($finished !== null && $finished >= $started) {
+                        $gateAges[$g] = max(0, $finished - $started);
+                    } else {
+                        $gateAges[$g] = max(0, $now - $started);
+                    }
+                }
+            }
+        }
+
+        $totalFeatures = count($featuresMap);
+        $completedFeatures = count(array_filter($featuresMap, static fn (array $f): bool => in_array($f['state'], $doneStates, true)));
+        $passedGates = is_array($currentFeature)
+            ? count(array_filter($mandatoryGates, static fn (string $g): bool => ($currentFeature['gates'][$g] ?? '') === 'passed'))
+            : 0;
+
+        $lastEventTimestamp = is_string($lastEvent['timestamp'] ?? null) ? $lastEvent['timestamp'] : null;
+        $lastEventAge = watchAge($lastEventTimestamp);
+        $lastFacts = is_array($lastEvent['facts'] ?? null) ? $lastEvent['facts'] : [];
+        $lastProcessTree = is_array($lastFacts['process_tree'] ?? null) ? $lastFacts['process_tree'] : [];
+        $idleSeconds = is_int($lastFacts['idle_seconds'] ?? null) ? $lastFacts['idle_seconds'] : ($lastTelemetry['idle_seconds'] ?? null);
+        $cpuMilli = is_int($lastProcessTree['cpu_milli'] ?? null) ? $lastProcessTree['cpu_milli'] : null;
+        $processes = watchProcesses($this->workflowId);
+
+        $hasEvents = $this->cachedEvents !== [];
+        if (! $hasEvents) {
+            $currentState = 'idle';
+            $health = 'waiting';
+            $featurePercent = 0.0;
+            $gatePercent = 0.0;
+            $estimatedPercent = 0.0;
+        } else {
+            $featurePercent = $totalFeatures > 0 ? round(($completedFeatures / $totalFeatures) * 100.0, 1) : 100.0;
+            $gatePercent = round(($passedGates / count($mandatoryGates)) * 100.0, 1);
+            $estimatedPercent = $totalFeatures > 0
+                ? round((($completedFeatures + ($currentFeature === null ? 0 : $passedGates / count($mandatoryGates))) / $totalFeatures) * 100.0, 1)
+                : 100.0;
+
+            // Derivação determinística de saúde
+            $health = match (true) {
+                $totalFeatures > 0 && $completedFeatures === $totalFeatures => 'complete',
+                $currentState === 'running' && $processes === [] => 'process_missing',
+                $currentState === 'running' && $lastEventAge !== null && $lastEventAge > $staleAfter => 'heartbeat_stale',
+                $currentState === 'running' && ($lastEvent['type'] ?? null) === 'command.heartbeat' && $idleSeconds !== null && $idleSeconds > $activityStaleAfter && ($cpuMilli ?? 0) <= 1000 => 'activity_stale',
+                $currentState === 'awaiting_gates' && ($lastEvent['type'] ?? null) === 'gate.stalled' => 'gate_stalled',
+                $currentState === 'awaiting_gates' && $lastEventAge !== null && $lastEventAge > $staleAfter => 'gates_stale',
+                in_array($currentState, ['debugging_required', 'debugging_running', 'debugging_verified'], true) => 'debugging',
+                in_array($currentState, ['blocked', 'recovery_required'], true) => 'blocked',
+                $currentState === 'complete' => 'complete',
+                default => 'ok',
+            };
+        }
+
+        // Fila simplificada para o snapshot
+        $queue = array_values(array_map(static fn (array $f): array => [
+            'position' => $f['position'],
+            'feature_key' => $f['feature_key'],
+            'title' => $f['title'],
+            'state' => $f['state'],
+            'attempt' => $f['attempt'],
+        ], $featuresMap));
+
+        return [
+            'health' => $health,
+            'workflow_id' => $this->workflowId,
+            'cursor' => $cursor,
+            'state' => $currentState,
+            'position' => is_array($currentFeature) ? ($currentFeature['position'] ?? null) : null,
+            'title' => is_array($currentFeature) ? ($currentFeature['title'] ?? null) : null,
+            'attempt' => is_array($currentFeature) ? ($currentFeature['attempt'] ?? null) : null,
+            'total_features' => $totalFeatures,
+            'completed_features' => $completedFeatures,
+            'progress' => [
+                'feature_percent' => $featurePercent,
+                'gate_percent' => $gatePercent,
+                'estimated_percent' => $estimatedPercent,
+                'completed_features' => $completedFeatures,
+                'total_features' => $totalFeatures,
+                'passed_gates' => $passedGates,
+                'total_gates' => count($mandatoryGates),
+                'feature_bar' => watchProgressBar($featurePercent),
+                'gate_bar' => watchProgressBar($gatePercent),
+                'estimated_bar' => watchProgressBar($estimatedPercent),
+            ],
+            'event_count' => count($this->cachedEvents),
+            'last_event' => $lastEvent !== null ? [
+                'type' => $lastEvent['type'] ?? null,
+                'summary' => $lastEvent['summary'] ?? null,
+                'timestamp' => $lastEventTimestamp,
+                'age_seconds' => $lastEventAge,
+                'idle_seconds' => $idleSeconds,
+                'cpu_milli' => $cpuMilli,
+            ] : null,
+            'last_telemetry' => $lastTelemetry,
+            'gates' => $gatesStatus,
+            'gate_ages' => $gateAges,
+            'queue' => $queue,
+            'loop_feedback' => $this->readLoopFeedback(),
+            'processes' => $processes,
+            'stale_after_seconds' => $staleAfter,
+            'activity_stale_after_seconds' => $activityStaleAfter,
+            'provider_circuits' => $circuits,
+            'delta' => [
+                'mtime' => $this->lastEventsMtime,
+                'size' => $this->lastEventsSize,
+                'events_loaded' => count($this->cachedEvents),
+                'cached' => $deltaCached,
+            ],
+        ];
+    }
+
+    /**
+     * Lê o feedback operacional do loop por delta.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function readLoopFeedback(): ?array
+    {
+        if (! is_file($this->loopFeedbackFile)) {
+            return null;
+        }
+
+        clearstatcache(true, $this->loopFeedbackFile);
+        $mtime = filemtime($this->loopFeedbackFile);
+        $size = filesize($this->loopFeedbackFile);
+
+        if ($mtime !== false && $size !== false
+            && $this->lastFeedbackMtime !== null
+            && $mtime === $this->lastFeedbackMtime
+            && $size === $this->lastFeedbackSize) {
+            return $this->cachedFeedback;
+        }
+
+        $lines = @file($this->loopFeedbackFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+        for ($i = count($lines) - 1; $i >= 0; $i--) {
+            try {
+                $item = json_decode($lines[$i], true, 512, JSON_THROW_ON_ERROR);
+            } catch (Throwable) {
+                continue;
+            }
+            if (is_array($item) && ($item['schema_version'] ?? null) === '1.0.0' && ($item['source'] ?? null) === 'ralph') {
+                $this->cachedFeedback = $item;
+                $this->lastFeedbackMtime = $mtime !== false ? $mtime : null;
+                $this->lastFeedbackSize = $size !== false ? $size : 0;
+
+                return $item;
+            }
+        }
+
+        return null;
+    }
+}
+
+/**
+ * Aplica estilos ANSI a um texto, respeitando a flag de ativação de cores.
+ */
+function watchColor(string $text, string $style, bool $enabled = true): string
+{
+    if (! $enabled) {
+        return $text;
+    }
+
+    $codes = [
+        'reset' => "\033[0m",
+        'bold' => "\033[1m",
+        'dim' => "\033[2m",
+        'green' => "\033[32m",
+        'bold_green' => "\033[1;32m",
+        'yellow' => "\033[33m",
+        'bold_yellow' => "\033[1;33m",
+        'red' => "\033[31m",
+        'bold_red' => "\033[1;31m",
+        'cyan' => "\033[36m",
+        'bold_cyan' => "\033[1;36m",
+        'blue' => "\033[34m",
+        'bold_blue' => "\033[1;34m",
+        'magenta' => "\033[35m",
+        'bold_magenta' => "\033[1;35m",
+        'gray' => "\033[90m",
+    ];
+
+    $code = $codes[$style] ?? '';
+    if ($code === '') {
+        return $text;
+    }
+
+    return $code.$text.$codes['reset'];
+}
+
+/**
+ * Renderiza o dashboard TUI a partir do snapshot.
+ *
+ * @param array<string, mixed> $snapshot
+ */
+function watchRenderTui(array $snapshot, bool $useAnsi = true, int $refreshInterval = 1): string
+{
+    $nowStr = (new DateTimeImmutable('@'.watchNow()))->format('Y-m-d H:i:s');
+    $health = (string) ($snapshot['health'] ?? 'error');
+    $workflowId = (string) ($snapshot['workflow_id'] ?? 'desconhecido');
+    $state = (string) ($snapshot['state'] ?? 'idle');
+    $cursor = (string) ($snapshot['cursor'] ?? 'nenhuma');
+    $attempt = $snapshot['attempt'] !== null ? (string) $snapshot['attempt'] : '-';
+    $position = $snapshot['position'] !== null ? (string) $snapshot['position'] : '-';
+    $title = (string) ($snapshot['title'] ?? '-');
+
+    $progress = is_array($snapshot['progress'] ?? null) ? $snapshot['progress'] : [];
+    $completed = (int) ($progress['completed_features'] ?? 0);
+    $total = (int) ($progress['total_features'] ?? 0);
+    $featurePct = (float) ($progress['feature_percent'] ?? 0.0);
+    $estPct = (float) ($progress['estimated_percent'] ?? 0.0);
+    $featureBar = (string) ($progress['feature_bar'] ?? watchProgressBar($featurePct));
+
+    $healthBadge = match ($health) {
+        'ok' => watchColor('● OK (execução normal)', 'bold_green', $useAnsi),
+        'complete' => watchColor('✔ CONCLUÍDO', 'bold_green', $useAnsi),
+        'waiting' => watchColor('○ AGUARDANDO', 'bold_yellow', $useAnsi),
+        'gate_stalled' => watchColor('▲ GATE EM ATRASO (stalled)', 'bold_yellow', $useAnsi),
+        'heartbeat_stale' => watchColor('▲ HEARTBEAT STALE', 'bold_yellow', $useAnsi),
+        'activity_stale' => watchColor('▲ ATIVIDADE STALE', 'bold_yellow', $useAnsi),
+        'gates_stale' => watchColor('▲ GATES STALE', 'bold_yellow', $useAnsi),
+        'debugging' => watchColor('◆ SYSTEMATIC DEBUGGING', 'bold_cyan', $useAnsi),
+        'blocked' => watchColor('✖ BLOQUEADO (recovery necessário)', 'bold_red', $useAnsi),
+        'process_missing' => watchColor('✖ PROCESSO AUSENTE', 'bold_red', $useAnsi),
+        default => watchColor('✖ ERRO', 'bold_red', $useAnsi),
+    };
+
+    $out = [];
+    $border = str_repeat('─', 76);
+
+    // Header
+    $out[] = watchColor('┌'.$border.'┐', 'dim', $useAnsi);
+    $titleHeader = sprintf('  RALPH METHOD 2.0 — TERMINAL DASHBOARD                    [%s] ', $nowStr);
+    $out[] = watchColor('│', 'dim', $useAnsi).watchColor($titleHeader, 'bold', $useAnsi).watchColor('│', 'dim', $useAnsi);
+    $out[] = watchColor('├'.$border.'┤', 'dim', $useAnsi);
+
+    // Overview
+    $out[] = sprintf('│ %-10s %-64s │', 'Workflow:', watchColor($workflowId, 'bold_cyan', $useAnsi));
+    $out[] = sprintf('│ %-10s %-38s %-8s %-16s │', 'Saúde:', $healthBadge, 'Estado:', watchColor($state.' (tentativa '.$attempt.')', 'bold', $useAnsi));
+    $progressText = sprintf('%s %5.1f%% (%d/%d features | Est: %5.1f%%)', $featureBar, $featurePct, $completed, $total, $estPct);
+    $out[] = sprintf('│ %-10s %-64s │', 'Progresso:', watchColor($progressText, 'bold', $useAnsi));
+    $out[] = watchColor('├'.$border.'┤', 'dim', $useAnsi);
+
+    // Mensagem de estado inicial ou ausência de ledger
+    if (isset($snapshot['message']) && is_string($snapshot['message']) && $snapshot['message'] !== '') {
+        $out[] = sprintf('│ %-74s │', watchColor('INFO: '.$snapshot['message'], 'yellow', $useAnsi));
+        $out[] = watchColor('├'.$border.'┤', 'dim', $useAnsi);
+    }
+
+    // Feature Atual
+    $out[] = watchColor('│ FEATURE ATUAL                                                              │', 'bold', $useAnsi);
+    $out[] = sprintf('│   %-8s %-63s │', 'Chave:', watchColor($cursor.' (Posição: '.$position.'/'.$total.')', 'bold', $useAnsi));
+    $out[] = sprintf('│   %-8s %-63s │', 'Título:', watchColor(mb_strimwidth($title, 0, 60, '...'), 'dim', $useAnsi));
+    $out[] = watchColor('├'.$border.'┤', 'dim', $useAnsi);
+
+    // Gates de Controle
+    $out[] = watchColor('│ GATES DE CONTROLE (5 gates obrigatórios)                                    │', 'bold', $useAnsi);
+    $gates = is_array($snapshot['gates'] ?? null) ? $snapshot['gates'] : [];
+    $gateAges = is_array($snapshot['gate_ages'] ?? null) ? $snapshot['gate_ages'] : [];
+
+    foreach (['validation', 'quality', 'runtime_evidence', 'technical_review', 'curation'] as $gateName) {
+        $gStatus = $gates[$gateName] ?? 'pending';
+        $gAge = $gateAges[$gateName] ?? null;
+        $ageStr = $gAge !== null ? watchFormatAge($gAge) : '--';
+
+        $badge = match ($gStatus) {
+            'passed' => watchColor('[ ✔ PASSED  ]', 'bold_green', $useAnsi),
+            'running' => watchColor('[ ⟳ RUNNING ]', 'bold_cyan', $useAnsi),
+            'stalled' => watchColor('[ ▲ STALLED ]', 'bold_yellow', $useAnsi),
+            'rejected' => watchColor('[ ✖ REJECTED]', 'bold_red', $useAnsi),
+            default => watchColor('[ · PENDING ]', 'gray', $useAnsi),
+        };
+
+        $out[] = sprintf('│   %-18s %-25s  idade: %-26s │', $gateName, $badge, $ageStr);
+    }
+    $out[] = watchColor('├'.$border.'┤', 'dim', $useAnsi);
+
+    // Fila de Execução (até 5 itens ao redor do cursor)
+    $out[] = watchColor('│ FILA DE EXECUÇÃO                                                           │', 'bold', $useAnsi);
+    $queue = is_array($snapshot['queue'] ?? null) ? $snapshot['queue'] : [];
+    if ($queue === []) {
+        $out[] = '│   (nenhuma feature carregada no workflow)                                  │';
+    } else {
+        $shown = array_slice($queue, 0, 6);
+        foreach ($shown as $item) {
+            $isCurrent = ($item['feature_key'] ?? '') === $cursor;
+            $marker = $isCurrent ? watchColor('►', 'bold_cyan', $useAnsi) : ' ';
+            $fKey = (string) ($item['feature_key'] ?? '');
+            $fState = (string) ($item['state'] ?? 'pending');
+            $fPos = (string) ($item['position'] ?? '?');
+
+            $stateBadge = match ($fState) {
+                'released', 'approved', 'knowledge_curated', 'knowledge_pending', 'knowledge_skipped' => watchColor('✔ '.$fState, 'green', $useAnsi),
+                'running' => watchColor('⟳ running (att. '.($item['attempt'] ?? 1).')', 'bold_cyan', $useAnsi),
+                'awaiting_gates' => watchColor('⏳ awaiting_gates', 'yellow', $useAnsi),
+                'recovery_required', 'blocked' => watchColor('✖ '.$fState, 'bold_red', $useAnsi),
+                'debugging_running', 'debugging_required', 'debugging_verified' => watchColor('◆ '.$fState, 'cyan', $useAnsi),
+                default => watchColor('· pending', 'gray', $useAnsi),
+            };
+
+            $lineContent = sprintf('%s %2s. %-20s  %-45s', $marker, $fPos, $fKey, $stateBadge);
+            $out[] = sprintf('│   %-71s │', $lineContent);
+        }
+        if (count($queue) > 6) {
+            $out[] = sprintf('│   ... e mais %d feature(s) na fila                                         │', count($queue) - 6);
+        }
+    }
+    $out[] = watchColor('├'.$border.'┤', 'dim', $useAnsi);
+
+    // Última Atividade & Telemetria
+    $out[] = watchColor('│ TELEMETRIA & ÚLTIMA ATIVIDADE SANITIZADA                                   │', 'bold', $useAnsi);
+    $lastEvent = is_array($snapshot['last_event'] ?? null) ? $snapshot['last_event'] : null;
+    $lastTelemetry = is_array($snapshot['last_telemetry'] ?? null) ? $snapshot['last_telemetry'] : null;
+
+    if ($lastEvent !== null) {
+        $eType = (string) ($lastEvent['type'] ?? 'indisponível');
+        $eAge = watchFormatAge($lastEvent['age_seconds'] ?? null);
+        $eSummary = (string) ($lastEvent['summary'] ?? '');
+        $out[] = sprintf('│   %-10s %-61s │', 'Evento:', watchColor($eType, 'bold', $useAnsi).' há '.$eAge.' — '.watchColor(mb_strimwidth($eSummary, 0, 35, '...'), 'dim', $useAnsi));
+    }
+
+    if ($lastTelemetry !== null && is_string($lastTelemetry['activity_preview'] ?? null) && $lastTelemetry['activity_preview'] !== '') {
+        $preview = (string) $lastTelemetry['activity_preview'];
+        $elapsed = $lastTelemetry['elapsed'] !== null ? watchFormatAge((int) $lastTelemetry['elapsed']) : '--';
+        $idle = $lastTelemetry['idle_seconds'] !== null ? watchFormatAge((int) $lastTelemetry['idle_seconds']) : '--';
+        $out[] = sprintf('│   %-10s %-61s │', 'Preview:', watchColor(mb_strimwidth($preview, 0, 58, '...'), 'cyan', $useAnsi));
+        $out[] = sprintf('│   %-10s decorrido: %-20s  inativo: %-22s │', 'Tempos:', $elapsed, $idle);
+    }
+
+    $processes = is_array($snapshot['processes'] ?? null) ? $snapshot['processes'] : [];
+    $procCount = count($processes);
+    if ($procCount > 0) {
+        $p0 = $processes[0];
+        $out[] = sprintf('│   %-10s %d ativo(s) (PID: %d, idade: %s)                           │', 'Processos:', $procCount, $p0['pid'], watchFormatAge($p0['age']));
+    } else {
+        $out[] = sprintf('│   %-10s nenhum processo do Ralph em execução                              │', 'Processos:');
+    }
+
+    $loopFeedback = is_array($snapshot['loop_feedback'] ?? null) ? $snapshot['loop_feedback'] : null;
+    if ($loopFeedback !== null) {
+        $fbEvent = (string) ($loopFeedback['event'] ?? 'feedback');
+        $fbDetail = trim((string) preg_replace('/\s+/', ' ', (string) ($loopFeedback['detail'] ?? '')));
+        $out[] = sprintf('│   %-10s %-61s │', 'Loop:', watchColor($fbEvent.': '.mb_strimwidth($fbDetail, 0, 50, '...'), 'dim', $useAnsi));
+    }
+
+    $out[] = watchColor('├'.$border.'┤', 'dim', $useAnsi);
+
+    // Footer
+    $delta = is_array($snapshot['delta'] ?? null) ? $snapshot['delta'] : [];
+    $deltaStr = ($delta['cached'] ?? false) ? 'delta cache (sem I/O)' : sprintf('delta I/O (%d eventos lidos)', (int) ($delta['events_loaded'] ?? 0));
+    $footer = sprintf(' [q/Ctrl+C] Sair | Refresh: %ds | %s', $refreshInterval, $deltaStr);
+    $out[] = sprintf('│ %-74s │', watchColor($footer, 'dim', $useAnsi));
+    $out[] = watchColor('└'.$border.'┘', 'dim', $useAnsi);
+
+    return implode("\n", $out)."\n";
+}
+
+// -----------------------------------------------------------------------------
+// Inicialização e execução da CLI
+// -----------------------------------------------------------------------------
+
+/**
+ * Função principal de execução da CLI.
+ *
+ * @param list<string> $argv
+ */
+function watchMain(array $argv): void
+{
+    $arguments = watchArguments($argv);
+
+    if (isset($arguments['help'])) {
+        watchHelp();
+    }
+
+    $workflowId = $arguments['workflow'] ?? null;
+    if (! is_string($workflowId) || trim($workflowId) === '') {
+        fwrite(STDERR, "erro: parâmetro obrigatório ausente: --workflow\n");
+        exit(2);
+    }
+    $workflowId = trim($workflowId);
+
+    $root = realpath((string) ($arguments['root'] ?? getcwd()));
+    if ($root === false || ! is_dir($root)) {
+        fwrite(STDERR, "erro: raiz do projeto não encontrada\n");
+        exit(2);
+    }
+
+    $interval = isset($arguments['interval']) ? (int) $arguments['interval'] : 1;
+    if ($interval < 1) {
+        fwrite(STDERR, "erro: --interval deve ser maior ou igual a 1\n");
+        exit(2);
+    }
+
+    $staleAfter = isset($arguments['stale-after']) ? (int) $arguments['stale-after'] : max(180, $interval * 3);
+    $activityStaleAfter = isset($arguments['activity-stale-after']) ? (int) $arguments['activity-stale-after'] : max(900, $staleAfter * 5);
+    $once = isset($arguments['once']);
+    $asJson = isset($arguments['json']);
+
+    $eventsFile = is_string($arguments['events-file'] ?? null) && trim((string) $arguments['events-file']) !== ''
+        ? trim((string) $arguments['events-file'])
+        : null;
+
+    $feedbackFile = is_string($arguments['feedback-file'] ?? null) && trim((string) $arguments['feedback-file']) !== ''
+        ? trim((string) $arguments['feedback-file'])
+        : null;
+
+    $isTty = function_exists('posix_isatty') ? posix_isatty(STDOUT) : false;
+    if (isset($arguments['no-color']) || getenv('NO_COLOR') !== false || ! $isTty) {
+        $useAnsi = false;
+    } else {
+        $useAnsi = true;
+    }
+
+    $reader = new RalphWatchReader($root, $workflowId, $eventsFile, $feedbackFile);
+
+    // Restauração do terminal no SIGINT/SIGTERM e no shutdown
+    $restoreTerminal = static function () use ($isTty): void {
+        if ($isTty) {
+            fwrite(STDOUT, "\033[?25h\033[0m\n");
+            fflush(STDOUT);
+        }
+    };
+
+    register_shutdown_function($restoreTerminal);
+
+    if (function_exists('pcntl_signal')) {
+        $signalHandler = static function () use ($restoreTerminal): void {
+            $restoreTerminal();
+            exit(0);
+        };
+        pcntl_async_signals(true);
+        pcntl_signal(SIGINT, $signalHandler);
+        pcntl_signal(SIGTERM, $signalHandler);
+    }
+
+    // Configura terminal para modo dashboard se interativo TTY
+    if ($isTty && ! $once && ! $asJson) {
+        // Oculta cursor
+        fwrite(STDOUT, "\033[?25l");
+        fflush(STDOUT);
+    }
+
+    do {
+        $snapshot = $reader->collectSnapshot($staleAfter, $activityStaleAfter);
+
+        if ($asJson) {
+            fwrite(STDOUT, json_encode($snapshot, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT)."\n");
+            fflush(STDOUT);
+        } else {
+            if ($isTty && ! $once) {
+                // Limpa tela e posiciona cursor no topo
+                fwrite(STDOUT, "\033[2J\033[H");
+            }
+            fwrite(STDOUT, watchRenderTui($snapshot, $useAnsi, $interval));
+            fflush(STDOUT);
+        }
+
+        if ($once || ($snapshot['health'] ?? null) === 'complete') {
+            break;
+        }
+
+        // Se for TTY e interativo, verifica se usuário pressionou 'q' para sair
+        if ($isTty && function_exists('stream_select')) {
+            $read = [STDIN];
+            $write = null;
+            $except = null;
+            $tvSec = $interval;
+            $tvUsec = 0;
+            $numChanged = @stream_select($read, $write, $except, $tvSec, $tvUsec);
+            if ($numChanged > 0) {
+                $char = fgetc(STDIN);
+                if ($char === 'q' || $char === 'Q') {
+                    break;
+                }
+            }
+        } else {
+            sleep($interval);
+        }
+    } while (true);
+
+    $restoreTerminal();
+    exit(0);
+}
+
+if (isset($_SERVER['SCRIPT_FILENAME']) && realpath((string) $_SERVER['SCRIPT_FILENAME']) === realpath(__FILE__)) {
+    watchMain($argv);
+}

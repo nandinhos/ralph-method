@@ -27,6 +27,7 @@ A evolução publicada está registrada no [CHANGELOG](CHANGELOG.md); a versão 
 bin/ralph-control       autoridade e ledger
 bin/ralph-trace         registro/relatório de delegação
 bin/ralph-monitor       snapshot de saúde
+bin/ralph-watch         terminal dashboard em tempo real (TUI)
 bin/ralph-block         uma feature por invocação
 scripts/ralph.sh        loop de fases do harness
 scripts/ralph-hook.sh   observabilidade best-effort

@@ -247,9 +247,18 @@ bin/ralph-control supervise \
   --max-retries 3
 ```
 
-Para acompanhamento em outro terminal:
+Para acompanhamento em outro terminal (snapshot pontual ou dashboard em tempo real):
 
 ```bash
+# Dashboard interativo em tempo real (TUI sem dependências externas, refresh default 1s):
+bin/ralph-watch \
+  --workflow wf_exemplo_20260810_001 \
+  --interval 1
+
+# Snapshot JSON consumível para scripts e integrações:
+bin/ralph-watch --workflow wf_exemplo_20260810_001 --once --json | jq .
+
+# Monitor periódico em modo linha:
 bin/ralph-monitor \
   --workflow wf_exemplo_20260810_001 \
   --interval 30
@@ -384,6 +393,7 @@ O agente nunca deve:
 | curadoria de entrega | confirmar os cinco gates e o handoff | não é curadoria de memória |
 | `ralph-trace` | registrar delegações e identidade de provider | não aprova nem libera |
 | `ralph-monitor` | mostrar saúde, processo, progresso e último feedback | não faz retry, recovery ou avanço |
+| `ralph-watch` | renderizar dashboard TUI em tempo real via delta mtime (saúde, feature, gates com idade, fila, telemetria sanitizada) | não aprova gates, não altera leases nem muta ledger |
 | cockpit (`apps/cockpit/`) | projetar fatos ao vivo; disparar `supervise` com preflight verde (plano declarado presente); diagnosticar (`debug` read-only, stderr do supervisor) e recover quando o orquestrador está travado; pausar com SIGTERM o supervise que ele mesmo iniciou | não aprova gate, não altera lease, não escolhe a próxima feature, não cria o plano ausente |
 | `ralph-metrics` | agregar o ledger em JSON/Markdown | não muta eventos, estados, gates ou custo/token |
 | hook | observar eventos e emitir fatos | não muda estado global |
@@ -921,8 +931,28 @@ bin/ralph-control supervise \
 
 O supervisor seleciona somente a feature autorizada, adquire lease, executa
 um bloco, acompanha heartbeat, roda gates, aciona systematic debugging quando
-necessário e tenta avançar apenas após o estado correto. O monitor de tela
-pode rodar em outro terminal:
+necessário e tenta avançar apenas após o estado correto.
+
+Para acompanhamento do loop em tempo real via terminal dashboard, use `bin/ralph-watch`:
+
+```bash
+# Dashboard TUI com refresh contínuo (default 1s) e leitura delta por mtime:
+bin/ralph-watch \
+  --workflow wf_exemplo_20260807_001 \
+  --interval 1
+
+# Snapshot JSON consumível para ferramentas e scripts externos:
+bin/ralph-watch --workflow wf_exemplo_20260807_001 --once --json | jq .
+```
+
+O `ralph-watch` é implementado em PHP puro (sem dependências externas), lê
+eficientemente o ledger e feedback operacional por delta de `mtime`/offset sem
+sobrecarga de I/O, renderiza os 5 gates obrigatórios com suas respectivas
+idades, a fila de features, os processos ativos e a telemetria sanitizada do
+bloco. Em modo não-TTY ou com `--once`, opera de forma limpa para pipes e
+redirecionamentos, restaurando o cursor e estilos ANSI em sinais SIGINT/SIGTERM.
+
+Para monitoramento periódico em formato de linha única, use `bin/ralph-monitor`:
 
 ```bash
 bin/ralph-monitor \
