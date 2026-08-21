@@ -633,9 +633,8 @@ git -C "$reject_tmp" commit -qm base
 (cd "$reject_tmp" && control init --workflow wf_reject --manifest workflow.json >/dev/null)
 (cd "$reject_tmp" && control claim --workflow wf_reject --feature FEATURE-001 --actor reject-test >/dev/null)
 
-# Testar via subshell que appendEvent de tipo desconhecido falha e grava event.rejected
-set +e
-(cd "$reject_tmp" && ROOT_DIR="$ROOT" php -r '
+# Testar via subshell que appendEvent de tipo desconhecido retorna event.rejected
+rejected_output="$(cd "$reject_tmp" && ROOT_DIR="$ROOT" php -r '
   $root = realpath(getenv("ROOT_DIR"));
   $code = file_get_contents($root."/bin/ralph-control");
   $code = preg_replace("/^#\!.*?\n/", "", $code);
@@ -645,15 +644,106 @@ set +e
   $workflow = loadWorkflowForId("wf_reject");
   $projection = project($workflow, readEvents());
   $feature = featureFrom($projection, "FEATURE-001");
-  appendEvent(eventContext(["workflow" => "wf_reject"], $feature, "tipo.completamente.invalido", "Teste de rejeição"));
-') >/dev/null 2>&1
-reject_sub_exit=$?
-set -e
-[ "$reject_sub_exit" -ne 0 ] || fail 'tipo desconhecido não retornou erro'
+  echo json_encode(appendEvent(eventContext(["workflow" => "wf_reject"], $feature, "tipo.completamente.invalido", "Teste de rejeição")), JSON_UNESCAPED_UNICODE);
+')"
+REJECTED_EVENT="$rejected_output" php -r '
+  $event = json_decode(getenv("REJECTED_EVENT"), true, 512, JSON_THROW_ON_ERROR);
+  if (($event["type"] ?? null) !== "event.rejected"
+      || ! is_string($event["idempotency_key"] ?? null)
+      || ! str_starts_with($event["idempotency_key"], "idem_event_rejected_")) {
+      fwrite(STDERR, "appendEvent não retornou uma rejeição auditável\n");
+      exit(1);
+  }
+'
 grep -q '"type":"event.rejected"' "$reject_tmp/.git/ralph-control/events.jsonl" \
   || fail 'event.rejected não foi gravado no ledger para tipo desconhecido'
 (cd "$reject_tmp" && control verify >/dev/null) || fail 'ledger com event.rejected não passou no verify'
-printf 'ok   schema 1.3.0 promovido, 1.4.0 rejeitado fail-closed, event.rejected e novos tipos no verify (FEATURE-101 Phase 1)\n'
+printf 'ok   schema 1.3.0 promovido, 1.4.0 rejeitado fail-closed e event.rejected canônico no verify\n'
+
+# ---------------------------------------------------------------------------
+# FEATURE-102D: enum canônica e fuzz determinístico de appendEvent
+# - known-types.json é exatamente a enumeração carregada pelo controlador
+# - 100 tipos inválidos geram 100 event.rejected, sem propagar tipo inválido
+# - cada rejeição recebe idempotency_key própria e a hash chain permanece íntegra
+# ---------------------------------------------------------------------------
+event_fuzz_tmp="$TMP/event-type-fuzz-fixture"
+mkdir -p "$event_fuzz_tmp"
+git -C "$event_fuzz_tmp" init -q
+git -C "$event_fuzz_tmp" config user.email ralph-method@example.invalid
+git -C "$event_fuzz_tmp" config user.name 'Ralph Method Event Type Fuzz Test'
+printf '%s\n' '# Event type fuzz' > "$event_fuzz_tmp/README.md"
+printf '%s\n' '# Plano' > "$event_fuzz_tmp/plan.md"
+printf '%s\n' '{"schema_version":"1.3.0","workflow_id":"wf_event_fuzz","plan_file":"plan.md","knowledge_policy":{"mode":"non_blocking"},"features":[{"feature_key":"FEATURE-102D-EVENT-VALIDATION","title":"Event type validation","position":1}]}' > "$event_fuzz_tmp/workflow.json"
+git -C "$event_fuzz_tmp" add .
+git -C "$event_fuzz_tmp" commit -qm base
+(cd "$event_fuzz_tmp" && RALPH_TEST_CLOCK_EPOCH=1787270400 control init --workflow wf_event_fuzz --manifest workflow.json >/dev/null)
+(cd "$event_fuzz_tmp" && RALPH_TEST_CLOCK_EPOCH=1787270400 control claim --workflow wf_event_fuzz --feature FEATURE-102D-EVENT-VALIDATION --actor event-fuzz >/dev/null)
+
+(cd "$event_fuzz_tmp" && ROOT_DIR="$ROOT" KNOWN_TYPES_FILE="$ROOT/tests/fixtures/events/known-types.json" RALPH_TEST_CLOCK_EPOCH=1787270400 php -r '
+  $root = realpath(getenv("ROOT_DIR"));
+  $code = file_get_contents($root."/bin/ralph-control");
+  $code = preg_replace("/^#!.*?\n/", "", $code);
+  $code = preg_replace("/^<\?php\s*/", "", $code);
+  $code = preg_replace("/\\\$arguments\s*=\s*args\\(\\\$argv\\);.*$/s", "", $code);
+  eval($code);
+
+  $expected = json_decode(file_get_contents(getenv("KNOWN_TYPES_FILE")), true, 512, JSON_THROW_ON_ERROR);
+  $actual = loadKnownEventTypes();
+  $expectedSorted = $expected;
+  $actualSorted = $actual;
+  sort($expectedSorted);
+  sort($actualSorted);
+  if ($expectedSorted !== $actualSorted || count($actual) !== count(array_unique($actual))) {
+      fwrite(STDERR, "known-types.json diverge da RALPH_KNOWN_EVENT_TYPES\n");
+      exit(1);
+  }
+
+  $workflow = loadWorkflowForId("wf_event_fuzz");
+  $projection = project($workflow, readEvents());
+  $feature = featureFrom($projection, "FEATURE-102D-EVENT-VALIDATION");
+  mt_srand(10204);
+  for ($i = 0; $i < 100; $i++) {
+      $invalidType = sprintf("invalid.fuzz.%02d.%08x", $i, mt_rand());
+      appendEvent(eventContext(
+          ["workflow" => "wf_event_fuzz"],
+          $feature,
+          $invalidType,
+          "Fuzz de tipo de evento",
+          ["fuzz_index" => $i],
+      ));
+  }
+')
+
+EVENTS_FILE="$event_fuzz_tmp/.git/ralph-control/events.jsonl" KNOWN_TYPES_FILE="$ROOT/tests/fixtures/events/known-types.json" php -r '
+  $known = json_decode(file_get_contents(getenv("KNOWN_TYPES_FILE")), true, 512, JSON_THROW_ON_ERROR);
+  $lines = file(getenv("EVENTS_FILE"), FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+  $rejected = 0;
+  $invalid = 0;
+  $keys = [];
+  foreach ($lines as $line) {
+      $event = json_decode($line, true, 512, JSON_THROW_ON_ERROR);
+      $type = $event["type"] ?? null;
+      if (! in_array($type, $known, true)) {
+          $invalid++;
+      }
+      if ($type === "event.rejected") {
+          $rejected++;
+          $key = $event["idempotency_key"] ?? null;
+          if (! is_string($key) || isset($keys[$key])) {
+              fwrite(STDERR, "idempotency_key repetida ou inválida em event.rejected\n");
+              exit(2);
+          }
+          $keys[$key] = true;
+      }
+  }
+  if ($rejected !== 100 || $invalid !== 0) {
+      fwrite(STDERR, "fuzz inválido: rejeitados={$rejected}, tipos inválidos={$invalid}\n");
+      exit(3);
+  }
+'
+(cd "$event_fuzz_tmp" && RALPH_TEST_CLOCK_EPOCH=1787270400 control verify >/dev/null) \
+  || fail 'hash chain não permaneceu íntegra após fuzz de 100 tipos inválidos'
+printf 'ok   enum RALPH_KNOWN_EVENT_TYPES e fuzz determinístico: 100 rejeições, 0 tipos inválidos, hash chain íntegra (FEATURE-102D)\n'
 
 # ---------------------------------------------------------------------------
 # FEATURE-101 (Phase 2): Watchdog de gates (gate.started, gate.stalled, gate_ages)
@@ -1356,5 +1446,3 @@ bash "$ROOT/tests/test-cursor-hero.sh"
 # FEATURE-102C (Phase 3): policy_violation como failed/harness_defect
 # ---------------------------------------------------------------------------
 bash "$ROOT/tests/test-policy-failed.sh"
-
-
