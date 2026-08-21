@@ -1337,6 +1337,14 @@ printf '%s\n' "$watch_k_text" | grep -q "$k1_lesson_id" || fail "ralph-watch nã
 
 printf 'ok   conhecimento em tempo real emite knowledge.telemetry sanitizado, non_blocking, monitor e watch exibem resumo (FEATURE-101 Phase 5)\n'
 
+# ---------------------------------------------------------------------------
+# FEATURE-102A (Phase 1): Redação de conteúdo sensível
+# - sanitize() redige os seis tipos v1 e prossegue sem rejeitar o evento
+# - event.redacted registra somente metadados sanitizados
+# - a hash chain permanece íntegra após 100 redações
+# - o diagnóstico read-only alerta acima do limiar sem expor o valor original
+# ---------------------------------------------------------------------------
+bash "$ROOT/scripts/test-sanitize-redact.sh"
 
 
 
