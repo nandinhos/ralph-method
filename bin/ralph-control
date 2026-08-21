@@ -1467,7 +1467,7 @@ function sanitize(mixed $value): mixed
 
     $patterns = [
         '/-----BEGIN [A-Z ]*PRIVATE KEY-----/i',
-        '/\b(?:api[_-]?key|access[_-]?token|password|passwd|secret)\s*[:=]/i',
+        '/\b(?:api[_-]?key|access[_-]?token|password|passwd|secret)\s*[:=]\s*\S+/i',
         '/\b(?:sk|ghp|github_pat|glpat)[-_][A-Za-z0-9_-]{12,}\b/',
         '/\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b/',
         '/\b\d{3}\.\d{3}\.\d{3}-\d{2}\b/',
@@ -1475,7 +1475,7 @@ function sanitize(mixed $value): mixed
 
     foreach ($patterns as $pattern) {
         if (preg_match($pattern, $value) === 1) {
-            $value = preg_replace($pattern, '[REDACTED]', $value);
+            $value = (string) preg_replace($pattern, '[REDACTED]', $value);
         }
     }
 
