@@ -61,7 +61,7 @@ $eventTypes = [
     'debugging.required', 'debugging.started', 'debugging.verified', 'debugging.rejected',
     'gate.session.reclaimed', 'feature.advanced', 'recovery.required', 'recovery.retry_started', 'recovery.resolved', 'lease.expired', 'policy.bypass_detected',
     'delegation.started', 'delegation.completed', 'delegation.failed', 'delegation.reconciled',
-    'event.rejected',
+    'event.rejected', 'event.redacted',
     'telemetry.activity', 'telemetry.heartbeat_rich', 'gate.started', 'gate.stalled',
     'debug.progress', 'knowledge.telemetry',
     'provider.capacity_limited', 'continuation.generated', 'provider.failover_started',
@@ -1527,13 +1527,46 @@ function currentRepository(): array
     ];
 }
 
+function redactionKindForKey(string $key): ?string
+{
+    $normalized = strtolower(str_replace('-', '_', $key));
+    $kinds = [
+        'token' => 'token',
+        'github_token' => 'token',
+        'github_pat' => 'token',
+        'access_token' => 'token',
+        'api_key' => 'token',
+        'secret' => 'token',
+        'password' => 'token',
+        'passwd' => 'token',
+        'aws_secret' => 'aws_secret',
+        'aws_secret_access_key' => 'aws_secret',
+        'private_key' => 'private_key',
+        'private_key_pem' => 'private_key',
+        'db_url' => 'db_url',
+        'database_url' => 'db_url',
+        'bearer' => 'bearer',
+        'cookie' => 'cookie',
+        'set_cookie' => 'cookie',
+    ];
+
+    return $kinds[$normalized] ?? null;
+}
+
+/** @return list<string> */
+function knownRedactionKinds(): array
+{
+    return ['token', 'aws_secret', 'private_key', 'db_url', 'bearer', 'cookie'];
+}
+
 function sanitize(mixed $value): mixed
 {
     if (is_array($value)) {
         $result = [];
         foreach ($value as $key => $item) {
             $safeKey = is_string($key) ? sanitizeUtf8($key) : $key;
-            $result[$safeKey] = sanitize($item);
+            $kind = is_string($safeKey) ? redactionKindForKey($safeKey) : null;
+            $result[$safeKey] = $kind === null ? sanitize($item) : '[REDACTED:'.$kind.']';
         }
 
         return $result;
@@ -1545,21 +1578,101 @@ function sanitize(mixed $value): mixed
 
     $value = sanitizeUtf8($value);
 
-    $patterns = [
-        '/-----BEGIN [A-Z ]*PRIVATE KEY-----/i',
-        '/\b(?:api[_-]?key|access[_-]?token|password|passwd|secret)\s*[:=]\s*\S+/i',
-        '/\b(?:sk|ghp|github_pat|glpat)[-_][A-Za-z0-9_-]{12,}\b/',
-        '/\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b/',
-        '/\b\d{3}\.\d{3}\.\d{3}-\d{2}\b/',
+    // Redaction is deliberately local to the matched value. This keeps the
+    // surrounding diagnostic context while ensuring the secret itself never
+    // reaches an event, artifact preview, or report.
+    // Headers can contain several cookie pairs separated by semicolons; redact
+    // the complete header before the scalar key/value rules run.
+    $value = (string) preg_replace(
+        '/\b(?:cookie|set-cookie)\b\s*:\s*[^\r\n]*/iu',
+        '[REDACTED:cookie]',
+        $value,
+    );
+    $keyValuePatterns = [
+        'token' => '/\b((?:github[_-]?token|github_pat|access[_-]?token|api[_-]?key|token|secret|password|passwd))\b(\s*["\']?\s*[:=]\s*)(?:"[^"]*"|\'[^\']*\'|[^\s,;}\]]+)/iu',
+        'aws_secret' => '/\b(aws[_-]?secret(?:[_-]?access[_-]?key)?)\b(\s*["\']?\s*[:=]\s*)(?:"[^"]*"|\'[^\']*\'|[^\s,;}\]]+)/iu',
+        'private_key' => '/\b(private[_-]?key(?:[_-]?pem)?)\b(\s*["\']?\s*[:=]\s*)(?:"[^"]*"|\'[^\']*\'|[^\s,;}\]]+)/iu',
+        'db_url' => '/\b((?:db|database)[_-]?url)\b(\s*["\']?\s*[:=]\s*)(?:"[^"]*"|\'[^\']*\'|[^\s,;}\]]+)/iu',
+        'bearer' => '/\b(bearer)\b(\s*["\']?\s*[:=]\s*)(?:"[^"]*"|\'[^\']*\'|[^\s,;}\]]+)/iu',
+        'cookie' => '/\b(cookie|set-cookie)\b(\s*["\']?\s*[:=]\s*)(?:"[^"]*"|\'[^\']*\'|[^\s,;}\]]+)/iu',
     ];
+    foreach ($keyValuePatterns as $kind => $pattern) {
+        $value = (string) preg_replace_callback($pattern, static function (array $match) use ($kind): string {
+            return $match[1].$match[2].'[REDACTED:'.$kind.']';
+        }, $value);
+    }
 
-    foreach ($patterns as $pattern) {
-        if (preg_match($pattern, $value) === 1) {
-            $value = (string) preg_replace($pattern, '[REDACTED]', $value);
+    $value = (string) preg_replace_callback(
+        '/\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|amqp(?:s)?):\/\/[^\s"\'<>]+/iu',
+        static fn (array $match): string => '[REDACTED:db_url]',
+        $value,
+    );
+    $value = (string) preg_replace_callback(
+        '/\bBearer\s+[A-Za-z0-9._~+\/-]+=*/i',
+        static fn (array $match): string => '[REDACTED:bearer]',
+        $value,
+    );
+    $value = (string) preg_replace_callback(
+        '/-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----/is',
+        static fn (array $match): string => '[REDACTED:private_key]',
+        $value,
+    );
+    $value = (string) preg_replace_callback(
+        '/(?<!REDACTED:)\b(?:private[_ -]?key(?:[_ -]?pem)?|with-private-key-pem)\b(?!\s*[:=])/iu',
+        static fn (array $match): string => '[REDACTED:private_key]',
+        $value,
+    );
+    $value = (string) preg_replace_callback(
+        '/\b(?:AKIA|ASIA)[A-Z0-9]{8,}\b/i',
+        static fn (array $match): string => '[REDACTED:aws_secret]',
+        $value,
+    );
+    $value = (string) preg_replace_callback(
+        '/\b(?:sk|ghp|github_pat|glpat)[-_][A-Za-z0-9_-]{12,}\b/i',
+        static fn (array $match): string => '[REDACTED:token]',
+        $value,
+    );
+
+    // Existing privacy protections remain intact, but are not part of the
+    // v1 secret-kind telemetry contract.
+    $value = (string) preg_replace('/\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b/', '[REDACTED]', $value);
+    $value = (string) preg_replace('/\b\d{3}\.\d{3}\.\d{3}-\d{2}\b/', '[REDACTED]', $value);
+
+    return preg_replace('/\r\n?/', "\n", $value) ?? $value;
+}
+
+/** @return array{redacted_count: int, redacted_kinds: list<string>} */
+function redactionMetadata(mixed $value): array
+{
+    $serialized = is_string($value)
+        ? $value
+        : (json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?: '');
+    $count = preg_match_all('/\[REDACTED:([a-z][a-z0-9_]*)\]/', $serialized, $matches);
+    $kinds = [];
+    $knownKinds = knownRedactionKinds();
+    foreach ($matches[1] ?? [] as $kind) {
+        if (in_array($kind, $knownKinds, true) && ! in_array($kind, $kinds, true)) {
+            $kinds[] = $kind;
         }
     }
 
-    return preg_replace('/\r\n?/', "\n", $value) ?? $value;
+    return [
+        'redacted_count' => is_int($count) && $count > 0 ? $count : 0,
+        'redacted_kinds' => $kinds,
+    ];
+}
+
+/** @param array{redacted_count: int, redacted_kinds: list<string>} $left */
+function mergeRedactionMetadata(array $left, array $right): array
+{
+    foreach ($right['redacted_kinds'] as $kind) {
+        if (! in_array($kind, $left['redacted_kinds'], true)) {
+            $left['redacted_kinds'][] = $kind;
+        }
+    }
+    $left['redacted_count'] += $right['redacted_count'];
+
+    return $left;
 }
 
 function sanitizeUtf8(string $value): string
@@ -2168,6 +2281,37 @@ function appendEventUnlocked(array $payload): array
     if (! is_array($facts)) {
         fail('facts precisa ser um objeto');
     }
+    if ($type === 'event.redacted'
+        && is_array($payload['facts'] ?? null)
+        && is_array($payload['facts']['redacted_kinds'] ?? null)) {
+        // Kind names are metadata, not secret payload. Restore the validated
+        // list after recursive sanitization so `private_key` is not mistaken
+        // for a second secret while the audit event is being built.
+        $facts['redacted_count'] = max(0, (int) ($payload['facts']['redacted_count'] ?? 0));
+        $facts['redacted_kinds'] = array_values(array_filter(
+            $payload['facts']['redacted_kinds'],
+            static fn (mixed $kind): bool => is_string($kind) && in_array($kind, knownRedactionKinds(), true),
+        ));
+    }
+    $summary = sanitize((string) ($payload['summary'] ?? $type));
+    $actor = sanitize($payload['actor'] ?? ['type' => 'controller', 'name' => 'ralph-control']);
+    if (! is_array($actor) || ! isset($actor['type'], $actor['name'])) {
+        fail('actor inválido');
+    }
+    $redaction = mergeRedactionMetadata(
+        redactionMetadata($facts),
+        mergeRedactionMetadata(redactionMetadata($summary), redactionMetadata($actor)),
+    );
+    if ($redaction['redacted_count'] > 0) {
+        // These fields are derived from the sanitized payload. Never copy the
+        // pre-sanitized value into the audit event.
+        $facts['redacted'] = true;
+        $facts['redacted_count'] = $redaction['redacted_count'];
+        $facts['redacted_kinds'] = $redaction['redacted_kinds'];
+        if (! array_key_exists('path', $facts)) {
+            $facts['path'] = null;
+        }
+    }
     $workflow = is_file($GLOBALS['workflowFile']) ? readJson($GLOBALS['workflowFile']) : [];
     $repository = currentRepository();
     $repositoryPayload = is_array($payload['repository'] ?? null) ? $payload['repository'] : [];
@@ -2193,10 +2337,6 @@ function appendEventUnlocked(array $payload): array
             fail('referência de artefato inválida');
         }
     }
-    $actor = sanitize($payload['actor'] ?? ['type' => 'controller', 'name' => 'ralph-control']);
-    if (! is_array($actor) || ! isset($actor['type'], $actor['name'])) {
-        fail('actor inválido');
-    }
     $event = [
         'schema_version' => RALPH_SCHEMA_VERSION,
         'event_id' => 'evt_'.bin2hex(random_bytes(12)),
@@ -2210,7 +2350,7 @@ function appendEventUnlocked(array $payload): array
         'correlation_id' => (string) ($payload['correlation_id'] ?? 'corr_'.bin2hex(random_bytes(8))),
         'causation_id' => $payload['causation_id'] ?? null,
         'idempotency_key' => (string) ($payload['idempotency_key'] ?? 'idem_'.bin2hex(random_bytes(12))),
-        'summary' => sanitize((string) ($payload['summary'] ?? $type)),
+        'summary' => $summary,
         'repository' => $repositoryEvent,
         'evidence' => ['artifact_refs' => array_values($evidenceRefs)],
         'facts' => $facts,
@@ -2243,6 +2383,27 @@ function appendEventUnlocked(array $payload): array
     }
     fflush($handle);
     fclose($handle);
+
+    if ($redaction['redacted_count'] > 0 && $type !== 'event.redacted') {
+        appendEventUnlocked([
+            'workflow_id' => $event['workflow_id'],
+            'feature_key' => $event['feature_key'],
+            'attempt' => $event['attempt'],
+            'lease_token_hash' => $event['lease_token_hash'],
+            'type' => 'event.redacted',
+            'summary' => 'Conteúdo sensível redigido antes do registro',
+            'actor' => ['type' => 'controller', 'name' => 'ralph-control'],
+            'correlation_id' => $event['correlation_id'],
+            'causation_id' => $event['event_id'],
+            'idempotency_key' => 'idem_redacted_'.$event['event_id'],
+            'facts' => [
+                'redacted_count' => $redaction['redacted_count'],
+                'redacted_kinds' => $redaction['redacted_kinds'],
+                'path' => $facts['path'] ?? null,
+                'feature_key' => $event['feature_key'],
+            ],
+        ]);
+    }
 
     return $event;
 }
@@ -2698,8 +2859,14 @@ function supervisorRecordRequiredRecovery(array $arguments, array $feature, arra
         $featureKey = (string) ($feature['feature_key'] ?? '');
         $workflow = loadWorkflowForId($workflowId);
         $currentFeature = featureFrom(project($workflow, readEvents()), $featureKey);
+        // A key inclui o timestamp: o payload do recovery.required carrega o
+        // snapshot (health/last_event/processes), que muda entre ocorrências.
+        // Com key só por workflow|feature|attempt|reason, um recovery repetido
+        // do mesmo motivo colidiria em idempotência com payload diferente
+        // (ANOM-2026-007). O timestamp torna cada ocorrência um fato único e
+        // mantém o replay no mesmo segundo idempotente.
         appendEvent(eventContext(array_merge($arguments, [
-            'idempotency-key' => 'idem_supervisor_recovery_'.substr(hash('sha256', $workflowId.'|'.$featureKey.'|'.($currentFeature['attempt'] ?? 0).'|'.$reason), 0, 32),
+            'idempotency-key' => 'idem_supervisor_recovery_'.substr(hash('sha256', $workflowId.'|'.$featureKey.'|'.($currentFeature['attempt'] ?? 0).'|'.$reason.'|'.gmdate('Y-m-d\TH:i:s\Z')), 0, 32),
         ]), $currentFeature, 'recovery.required', 'Supervisão não pôde continuar a tentativa', [
             'reason' => $reason,
             'health' => $snapshot['health'] ?? 'unknown',
@@ -5212,6 +5379,20 @@ function debugReportMarkdown(array $report): string
         $references .= '- '.($reference['provider'] ?? 'provider').': '.($reference['source'] ?? '').' — '.($reference['section'] ?? '')."\n";
     }
     $candidate = is_array($report['knowledge_candidate'] ?? null) ? $report['knowledge_candidate'] : [];
+    $redactionAlert = is_array($report['redaction_alert'] ?? null)
+        ? $report['redaction_alert']
+        : (is_array($report['facts']['redaction_alert'] ?? null) ? $report['facts']['redaction_alert'] : null);
+    $redactionSection = '';
+    if (is_array($redactionAlert) && ($redactionAlert['status'] ?? null) === 'alert') {
+        $markers = is_array($redactionAlert['markers'] ?? null) ? implode(', ', $redactionAlert['markers']) : '[REDACTED:*]';
+        $kinds = is_array($redactionAlert['redacted_kinds'] ?? null) ? implode(', ', $redactionAlert['redacted_kinds']) : 'desconhecidos';
+        $paths = is_array($redactionAlert['paths'] ?? null) ? $redactionAlert['paths'] : [];
+        $pathsText = $paths === [] ? 'não informado' : implode(', ', array_map(
+            static fn (mixed $path): string => is_string($path) ? $path : 'não informado',
+            $paths,
+        ));
+        $redactionSection = "## Alerta de redação\n\nForam detectadas {$redactionAlert['redacted_count']} redações (limiar {$redactionAlert['threshold']}). Tipos: {$kinds}. Marcadores: {$markers}. Caminhos: {$pathsText}. Os valores originais não são exibidos.\n\n";
+    }
 
     return '# '.($report['document_id'] ?? 'DBG-sem-id')." — Systematic debugging — {$report['feature_key']}\n\n"
         .'- Documento: '.($report['document_id'] ?? 'não informado')."\n"
@@ -5225,6 +5406,7 @@ function debugReportMarkdown(array $report): string
         ."## Plano de correção\n\n{$report['correction_plan']}\n\n"
         ."## Referências oficiais\n\n{$references}\n"
         ."## Validação do diagnóstico\n\nStatus: `".($report['validation']['status'] ?? 'unknown').'`; exit code: `'.($report['validation']['exit_code'] ?? 'unknown')."`.\n\n"
+        .$redactionSection
         ."## Candidato a conhecimento\n\n**Título:** ".($candidate['title'] ?? 'não informado')."\n\n"
         .($candidate['summary'] ?? '')."\n";
 }
@@ -5270,7 +5452,14 @@ function runSystematicDebug(array $arguments): array
             'feature_key' => $featureKey,
             'attempt' => (int) $feature['attempt'],
         ]);
-        appendEvent(eventContext($arguments, $feature, 'debugging.started', 'Systematic debugging iniciado pelo controlador', [
+        appendEvent(eventContext(array_merge($arguments, [
+            // O document_id é reutilizado por allocationKey (mesmo attempt), mas
+            // cada execução de systematic debugging é uma ocorrência nova; a key
+            // determinística de eventContext (type|feature|attempt|facts) colidiria
+            // com payload diferente (correlation_id/tree_hash mudam). Nonce como
+            // no debug.progress (ANOM-2026-007).
+            'idempotency-key' => 'idem_debugging_started_'.bin2hex(random_bytes(12)),
+        ]), $feature, 'debugging.started', 'Systematic debugging iniciado pelo controlador', [
             'artifact_refs' => [$artifactRef],
             'command_fingerprint' => hashValue($command),
             'attempt' => $feature['attempt'],
@@ -5345,7 +5534,8 @@ function runSystematicDebug(array $arguments): array
         try {
             $decoded = json_decode(trim($commandResult['stdout']), true, 512, JSON_THROW_ON_ERROR);
             if (is_array($decoded)) {
-                $report = $decoded;
+                $sanitizedReport = sanitize($decoded);
+                $report = is_array($sanitizedReport) ? $sanitizedReport : null;
             } else {
                 $errors[] = 'saída do systematic debugging não é um objeto JSON';
             }
@@ -5462,7 +5652,12 @@ function runSystematicDebug(array $arguments): array
 
             return;
         }
-        appendEvent(eventContext($arguments, $feature, 'debugging.verified', 'Causa raiz e hipóteses verificadas com evidência oficial', [
+        appendEvent(eventContext(array_merge($arguments, [
+            // Mesmo rationale do debugging.started: document_id é reutilizado
+            // por allocationKey; key determinística colidiria com payload
+            // diferente entre execuções (ANOM-2026-007).
+            'idempotency-key' => 'idem_debugging_verified_'.bin2hex(random_bytes(12)),
+        ]), $feature, 'debugging.verified', 'Causa raiz e hipóteses verificadas com evidência oficial', [
             'artifact_refs' => [$artifactRef],
             'report_path' => $reportPath,
             'document_id' => $documentId,
@@ -5943,6 +6138,8 @@ function runControlled(array $arguments): void
         $now = microtime(true);
         if ($now - $lastHeartbeatAt >= $heartbeatInterval) {
             $heartbeatSequence++;
+            $heartbeatPreview = sanitize($stdoutPreview."\n".$stderrPreview);
+            $heartbeatRedaction = redactionMetadata($heartbeatPreview);
             // Compute gate_age when feature is in awaiting_gates
             $gateAge = null;
             if (($feature['state'] ?? null) === 'awaiting_gates'
@@ -5963,6 +6160,8 @@ function runControlled(array $arguments): void
                 'position' => (int) ($feature['position'] ?? 0),
                 'eta_seconds' => $etaSeconds,
                 'gate_age' => $gateAge,
+                'redacted_count' => $heartbeatRedaction['redacted_count'],
+                'redacted_kinds' => $heartbeatRedaction['redacted_kinds'],
             ];
             withLock(function () use ($arguments, $feature, $heartbeatFacts): void {
                 appendEvent(eventContext($arguments, $feature, 'command.heartbeat', 'Heartbeat do processo controlado', $heartbeatFacts));

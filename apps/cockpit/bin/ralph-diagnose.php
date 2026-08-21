@@ -16,13 +16,25 @@ $declared = declaredInput($workflow, $featureKey);
 $declaredPath = $declared === '' ? '' : $cwd.DIRECTORY_SEPARATOR.ltrim($declared, '/');
 $missingInput = $declaredPath !== '' && ! is_file($declaredPath);
 $ledgerPath = $cwd.'/.git/ralph-control/events.jsonl';
-$stderr = latestSupervisorStderr($cwd, $featureKey);
+$stderr = diagnosticSanitize(latestSupervisorStderr($cwd, $featureKey));
 $inputError = $stderr !== '' && str_contains($stderr, 'input da feature não encontrado');
-$recoveryReason = lastRecoveryReason($ledgerPath, $featureKey);
-$blockStderr = latestBlockStderr($cwd, $featureKey);
-$blockStderrPreview = latestBlockStderrPreview($ledgerPath, $featureKey);
+$recoveryReason = diagnosticSanitize(lastRecoveryReason($ledgerPath, $featureKey));
+$blockStderr = diagnosticSanitize(latestBlockStderr($cwd, $featureKey));
+$blockStderrPreview = diagnosticSanitize(latestBlockStderrPreview($ledgerPath, $featureKey));
 $runnerStderr = $blockStderr !== '' ? $blockStderr : $blockStderrPreview;
 $harnessFailure = classifyRunnerHarnessFailure($runnerStderr);
+$redactionThreshold = max(0, (int) (getenv('RALPH_DEBUG_REDACTED_THRESHOLD') ?: 0));
+$redactionSummary = ledgerRedactionSummary($ledgerPath, $featureKey);
+$redactionAlert = $redactionSummary['redacted_count'] > $redactionThreshold ? [
+    'status' => 'alert',
+    'threshold' => $redactionThreshold,
+    'redacted_count' => $redactionSummary['redacted_count'],
+    'redacted_kinds' => $redactionSummary['redacted_kinds'],
+    'markers' => $redactionSummary['redacted_kinds'] === []
+        ? ['[REDACTED:*]']
+        : array_map(static fn (string $kind): string => '[REDACTED:'.$kind.']', $redactionSummary['redacted_kinds']),
+    'paths' => $redactionSummary['paths'],
+] : null;
 $blockDied = $recoveryReason !== '' && (
     str_contains($recoveryReason, 'sem evento terminal')
     || str_contains($recoveryReason, 'sem concluir')
@@ -140,6 +152,7 @@ $report = [
     'status' => 'verified',
     'incident_id' => $incidentId,
     'cause_kind' => $causeKind,
+    'redaction_alert' => $redactionAlert,
     'symptom' => $symptom,
     'severity' => 'high',
     'root_cause' => $rootCause,
@@ -177,7 +190,11 @@ $report = [
         'declared_input_present' => $declaredPath !== '' && is_file($declaredPath),
         'supervisor_stderr' => $stderr,
         'block_stderr' => $runnerStderr,
-        'recovery_reason' => $recoveryReason,
+        'recovery_reason' => diagnosticSanitize($recoveryReason),
+        'redacted_count' => $redactionSummary['redacted_count'],
+        'redacted_kinds' => $redactionSummary['redacted_kinds'],
+        'redaction_threshold' => $redactionThreshold,
+        'redaction_alert' => $redactionAlert,
     ],
 ];
 
@@ -194,6 +211,76 @@ function loadWorkflow(string $path): array
     $payload = json_decode((string) file_get_contents($path), true);
 
     return is_array($payload) ? $payload : [];
+}
+
+function diagnosticSanitize(string $value): string
+{
+    $patterns = [
+        'token' => '/\b((?:github[_-]?token|github_pat|access[_-]?token|api[_-]?key|token|secret))\b(\s*["\']?\s*[:=]\s*)(?:"[^"]*"|\'[^\']*\'|[^\s,;}\]]+)/iu',
+        'aws_secret' => '/\b(aws[_-]?secret)\b(\s*["\']?\s*[:=]\s*)(?:"[^"]*"|\'[^\']*\'|[^\s,;}\]]+)/iu',
+        'private_key' => '/\b(private[_-]?key(?:[_-]?pem)?)\b(\s*["\']?\s*[:=]\s*)(?:"[^"]*"|\'[^\']*\'|[^\s,;}\]]+)/iu',
+        'db_url' => '/\b(db[_-]?url)\b(\s*["\']?\s*[:=]\s*)(?:"[^"]*"|\'[^\']*\'|[^\s,;}\]]+)/iu',
+        'bearer' => '/\b(bearer)\b(\s*["\']?\s*[:=]\s*)(?:"[^"]*"|\'[^\']*\'|[^\s,;}\]]+)/iu',
+        'cookie' => '/\b(cookie|set-cookie)\b(\s*["\']?\s*[:=]\s*)(?:"[^"]*"|\'[^\']*\'|[^\s,;}\]]+)/iu',
+    ];
+    foreach ($patterns as $kind => $pattern) {
+        $value = (string) preg_replace_callback($pattern, static function (array $match) use ($kind): string {
+            return $match[1].$match[2].'[REDACTED:'.$kind.']';
+        }, $value);
+    }
+    $value = (string) preg_replace('/\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|amqp(?:s)?):\/\/[^\s"\'<>]+/iu', '[REDACTED:db_url]', $value);
+    $value = (string) preg_replace('/\bBearer\s+[A-Za-z0-9._~+\/-]+=*/i', '[REDACTED:bearer]', $value);
+    $value = (string) preg_replace('/-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----/is', '[REDACTED:private_key]', $value);
+    $value = (string) preg_replace('/(?<!REDACTED:)\b(?:private[_ -]?key(?:[_ -]?pem)?|with-private-key-pem)\b(?!\s*[:=])/iu', '[REDACTED:private_key]', $value);
+    $value = (string) preg_replace('/\b(?:sk|ghp|github_pat|glpat)[-_][A-Za-z0-9_-]{12,}\b/i', '[REDACTED:token]', $value);
+    $value = (string) preg_replace('/\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b/', '[REDACTED]', $value);
+    $value = (string) preg_replace('/\b\d{3}\.\d{3}\.\d{3}-\d{2}\b/', '[REDACTED]', $value);
+    $value = (string) preg_replace('/\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b/', '[REDACTED]', $value);
+
+    return $value;
+}
+
+/** @return array{redacted_count: int, redacted_kinds: list<string>, paths: list<string>} */
+function ledgerRedactionSummary(string $ledger, string $featureKey): array
+{
+    $summary = ['redacted_count' => 0, 'redacted_kinds' => [], 'paths' => []];
+    $knownKinds = ['token', 'aws_secret', 'private_key', 'db_url', 'bearer', 'cookie'];
+    if ($featureKey === '' || ! is_file($ledger)) {
+        return $summary;
+    }
+    $events = [];
+    $handle = fopen($ledger, 'r');
+    if ($handle === false) {
+        return $summary;
+    }
+    while (($line = fgets($handle)) !== false) {
+        $event = json_decode($line, true);
+        if (is_array($event) && ($event['feature_key'] ?? null) === $featureKey) {
+            $events[] = $event;
+        }
+    }
+    fclose($handle);
+
+    $redactionEvents = array_values(array_filter($events, static fn (array $event): bool => ($event['type'] ?? null) === 'event.redacted'));
+    $sourceEvents = $redactionEvents !== [] ? $redactionEvents : $events;
+    foreach ($sourceEvents as $event) {
+        $facts = is_array($event['facts'] ?? null) ? $event['facts'] : [];
+        $count = $facts['redacted_count'] ?? 0;
+        if (is_int($count) || is_float($count) || (is_string($count) && ctype_digit($count))) {
+            $summary['redacted_count'] += (int) $count;
+        }
+        foreach ($facts['redacted_kinds'] ?? [] as $kind) {
+            if (is_string($kind) && in_array($kind, $knownKinds, true) && ! in_array($kind, $summary['redacted_kinds'], true)) {
+                $summary['redacted_kinds'][] = $kind;
+            }
+        }
+        $path = $facts['path'] ?? null;
+        if (is_string($path) && $path !== '' && ! in_array($path, $summary['paths'], true)) {
+            $summary['paths'][] = diagnosticSanitize($path);
+        }
+    }
+
+    return $summary;
 }
 
 /** @param array<string, mixed> $workflow */

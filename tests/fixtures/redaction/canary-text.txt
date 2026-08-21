@@ -1,0 +1,4 @@
+github_token=ghp_abc123exampleREPLACEme
+aws_secret=AKIAEXAMPLE/verysecret
+INNER_/PATH/with-private-key-pem
+db_url=postgres://user:pwd@host/db

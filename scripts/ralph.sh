@@ -1049,19 +1049,33 @@ INTRO
 build_verify_prompt() {
   local phase_file="$1" cycle="$2"
   local prompt_file="$PROMPT_DIR/${phase_file%.md}.verify-${cycle}.txt"
+  local read_tools
+
+  # Ferramentas de leitura por engine: a sessão Codex deste checkout expõe
+  # somente o terminal, que deve ser usado em sandbox read-only com comandos
+  # de inspeção (rg, sed, find, pwd e git diff). Os adapters e Claude usam
+  # ferramentas de leitura próprias. Citar uma ferramenta inexistente faz o
+  # verificador declarar que não há evidência do código real (gate 3
+  # INCOMPLETE sistemático).
+  if [[ "$ENGINE" == "codex" ]]; then
+    read_tools="a ferramenta exec, somente com rg, sed, find, pwd e git diff --no-ext-diff; nunca use apply_patch, redirecionamentos ou comandos que escrevam"
+  else
+    read_tools="view_file, list_dir, grep_search e find_by_name"
+  fi
 
   {
-    cat <<'VERIFY'
+    cat <<VERIFY
 RALPH_VERIFY
 
 Voce e um verificador independente. NAO escreva, edite ou crie nenhum arquivo.
 Seu unico trabalho e ler o codigo real e dizer o que esta feito e o que nao esta.
-NAO execute nenhum comando e NAO use nenhuma ferramenta de execucao ou edicao:
-use somente as ferramentas de leitura (view_file, list_dir, grep_search,
-find_by_name). Nunca chame run_command, bash, terminal ou qualquer ferramenta
-que rode comandos — a revisao e read-only por construcao.
+Use somente as ferramentas de leitura (${read_tools}). A revisao e read-only por
+construcao: nao use apply_patch, redirecionamentos, comandos que escrevam,
+testes, PHP, providers ou qualquer acao que mude estado. No Codex, exec e
+permitido exclusivamente para leitura dos arquivos e deve receber apenas os
+comandos explicitamente listados acima.
 
-Para CADA task marcada com `- [ ]` ou `- [x]` na fase abaixo, na ordem em que
+Para CADA task marcada com \`- [ ]\` ou \`- [x]\` na fase abaixo, na ordem em que
 aparecem, confira os acceptance criteria contra o codigo real (arquivos, classes,
 testes, rotas, migrations — o que a task exigir) e emita EXATAMENTE UMA linha:
 

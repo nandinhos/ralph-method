@@ -61,6 +61,69 @@ function latestEvent(array $events, string $type, string $featureKey, ?int $atte
     return null;
 }
 
+function diagnosticSanitize(string $value): string
+{
+    $patterns = [
+        'token' => '/\b((?:github[_-]?token|github_pat|access[_-]?token|api[_-]?key|token|secret|password|passwd))\b(\s*["\']?\s*[:=]\s*)(?:"[^"]*"|\'[^\']*\'|[^\s,;}\]]+)/iu',
+        'aws_secret' => '/\b(aws[_-]?secret(?:[_-]?access[_-]?key)?)\b(\s*["\']?\s*[:=]\s*)(?:"[^"]*"|\'[^\']*\'|[^\s,;}\]]+)/iu',
+        'private_key' => '/\b(private[_-]?key(?:[_-]?pem)?)\b(\s*["\']?\s*[:=]\s*)(?:"[^"]*"|\'[^\']*\'|[^\s,;}\]]+)/iu',
+        'db_url' => '/\b((?:db|database)[_-]?url)\b(\s*["\']?\s*[:=]\s*)(?:"[^"]*"|\'[^\']*\'|[^\s,;}\]]+)/iu',
+        'bearer' => '/\b(bearer)\b(\s*["\']?\s*[:=]\s*)(?:"[^"]*"|\'[^\']*\'|[^\s,;}\]]+)/iu',
+        'cookie' => '/\b(cookie|set-cookie)\b(\s*["\']?\s*[:=]\s*)(?:"[^"]*"|\'[^\']*\'|[^\s,;}\]]+)/iu',
+    ];
+    foreach ($patterns as $kind => $pattern) {
+        $value = (string) preg_replace_callback($pattern, static function (array $match) use ($kind): string {
+            return $match[1].$match[2].'[REDACTED:'.$kind.']';
+        }, $value);
+    }
+
+    $value = (string) preg_replace('/\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|amqp(?:s)?):\/\/[^\s"\'<>]+/iu', '[REDACTED:db_url]', $value);
+    $value = (string) preg_replace('/\bBearer\s+[A-Za-z0-9._~+\/-]+=*/i', '[REDACTED:bearer]', $value);
+    $value = (string) preg_replace('/-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----/is', '[REDACTED:private_key]', $value);
+    $value = (string) preg_replace('/(?<!REDACTED:)\b(?:private[_ -]?key(?:[_ -]?pem)?|with-private-key-pem)\b(?!\s*[:=])/iu', '[REDACTED:private_key]', $value);
+    $value = (string) preg_replace('/\b(?:AKIA|ASIA)[A-Z0-9]{8,}\b/i', '[REDACTED:aws_secret]', $value);
+    $value = (string) preg_replace('/\b(?:sk|ghp|github_pat|glpat)[-_][A-Za-z0-9_-]{12,}\b/i', '[REDACTED:token]', $value);
+    $value = (string) preg_replace('/\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b/', '[REDACTED]', $value);
+    $value = (string) preg_replace('/\b\d{3}\.\d{3}\.\d{3}-\d{2}\b/', '[REDACTED]', $value);
+
+    return $value;
+}
+
+/** @return array{redacted_count: int, redacted_kinds: list<string>, paths: list<string>} */
+function ledgerRedactionSummary(array $events, string $featureKey): array
+{
+    $summary = ['redacted_count' => 0, 'redacted_kinds' => [], 'paths' => []];
+    $knownKinds = ['token', 'aws_secret', 'private_key', 'db_url', 'bearer', 'cookie'];
+    $featureEvents = array_values(array_filter(
+        $events,
+        static fn (array $event): bool => ($event['feature_key'] ?? null) === $featureKey,
+    ));
+    $redactionEvents = array_values(array_filter(
+        $featureEvents,
+        static fn (array $event): bool => ($event['type'] ?? null) === 'event.redacted',
+    ));
+    $sourceEvents = $redactionEvents !== [] ? $redactionEvents : $featureEvents;
+
+    foreach ($sourceEvents as $event) {
+        $facts = is_array($event['facts'] ?? null) ? $event['facts'] : [];
+        $count = $facts['redacted_count'] ?? 0;
+        if (is_int($count) || is_float($count) || (is_string($count) && ctype_digit($count))) {
+            $summary['redacted_count'] += max(0, (int) $count);
+        }
+        foreach ($facts['redacted_kinds'] ?? [] as $kind) {
+            if (is_string($kind) && in_array($kind, $knownKinds, true) && ! in_array($kind, $summary['redacted_kinds'], true)) {
+                $summary['redacted_kinds'][] = $kind;
+            }
+        }
+        $path = $facts['path'] ?? null;
+        if (is_string($path) && $path !== '' && ! in_array($path, $summary['paths'], true)) {
+            $summary['paths'][] = diagnosticSanitize($path);
+        }
+    }
+
+    return $summary;
+}
+
 function latestStderrPreview(string $artifactsDir, string $featureKey, int $attempt): string
 {
     $patterns = [
@@ -85,7 +148,19 @@ $events = readEvents($ledgerPath);
 $block = latestEvent($events, 'block.finished', $featureKey, $attempt);
 $recovery = latestEvent($events, 'recovery.required', $featureKey);
 $debugging = latestEvent($events, 'debugging.required', $featureKey);
-$stderrPreview = latestStderrPreview($artifactsDir, $featureKey, $attempt);
+$stderrPreview = diagnosticSanitize(latestStderrPreview($artifactsDir, $featureKey, $attempt));
+$redactionThreshold = max(0, (int) (getenv('RALPH_DEBUG_REDACTED_THRESHOLD') ?: 0));
+$redactionSummary = ledgerRedactionSummary($events, $featureKey);
+$redactionAlert = $redactionSummary['redacted_count'] > $redactionThreshold ? [
+    'status' => 'alert',
+    'threshold' => $redactionThreshold,
+    'redacted_count' => $redactionSummary['redacted_count'],
+    'redacted_kinds' => $redactionSummary['redacted_kinds'],
+    'markers' => $redactionSummary['redacted_kinds'] === []
+        ? ['[REDACTED:*]']
+        : array_map(static fn (string $kind): string => '[REDACTED:'.$kind.']', $redactionSummary['redacted_kinds']),
+    'paths' => $redactionSummary['paths'],
+] : null;
 $exitCode = is_array($block) ? (int) (($block['facts']['exit_code'] ?? 1)) : null;
 $dirty = trim((string) shell_exec('git status --porcelain 2>/dev/null'));
 $committed = is_array($block) && (($block['facts']['result_commit'] ?? null) !== null);
@@ -108,14 +183,14 @@ if ($exitCode !== null && $exitCode !== 0) {
     $summary = 'O bloco controlado terminou com código '.$exitCode.($stderrPreview !== '' ? ' e o stderr do artefato foi anexado ao diagnóstico.' : '; o artefato de stderr não contém texto.');
 }
 if ($recovery !== null) {
-    $reason = (string) ($recovery['facts']['reason'] ?? '');
+    $reason = diagnosticSanitize((string) ($recovery['facts']['reason'] ?? ''));
     $causeKind = str_contains($reason, 'sem evento terminal') || str_contains($reason, 'processo') ? 'harness_defect' : 'unknown';
     $incidentId = 'INC-RALPH-2-0-RECOVERY-001';
     $title = 'Recovery registrada no ledger';
     $summary = 'O supervisor registrou recovery com motivo: '.($reason !== '' ? $reason : 'sem motivo declarado').'.';
 }
 if ($debugging !== null) {
-    $reason = (string) ($debugging['facts']['reason'] ?? '');
+    $reason = diagnosticSanitize((string) ($debugging['facts']['reason'] ?? ''));
     if (str_contains($reason, 'não configurado')) {
         $causeKind = 'harness_defect';
         $incidentId = 'INC-RALPH-2-0-DEBUG-CMD-001';
@@ -140,6 +215,7 @@ $report = [
     'status' => 'verified',
     'incident_id' => $incidentId,
     'cause_kind' => $causeKind,
+    'redaction_alert' => $redactionAlert,
     'symptom' => $title,
     'severity' => 'high',
     'root_cause' => $summary,
@@ -182,6 +258,10 @@ $report = [
         'process_verified_terminated' => $processGone,
         'working_tree_clean' => $dirty === '',
         'stderr_preview' => $stderrPreview !== '' ? substr($stderrPreview, 0, 400) : '',
+        'redacted_count' => $redactionSummary['redacted_count'],
+        'redacted_kinds' => $redactionSummary['redacted_kinds'],
+        'redaction_threshold' => $redactionThreshold,
+        'redaction_alert' => $redactionAlert,
     ],
 ];
 
