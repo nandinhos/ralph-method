@@ -11,23 +11,15 @@
     "provider_strategy": "explicit_failover",
     "provider_chain": [
       {
-        "runner": "agy",
-        "profile": "agy",
-        "required_failure_domain_status": "declared"
-      },
-      {
         "runner": "codex",
         "profile": "codex",
-        "required_failure_domain_status": "observed"
-      },
-      {
-        "runner": "claude",
-        "profile": "claude",
         "required_failure_domain_status": "observed"
       }
     ],
     "failover": {
-      "eligible_reasons": ["provider_usage_limited"],
+      "eligible_reasons": [
+        "provider_usage_limited"
+      ],
       "short_wait_threshold_seconds": 120,
       "unknown_reset_cooldown_seconds": 1800,
       "max_switches_per_feature": 2,

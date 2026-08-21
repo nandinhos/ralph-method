@@ -2,13 +2,15 @@
 #
 # ralph-supervise-onda2.sh — supervisor da Onda 2 (hardening de segurança).
 #
-# Lança o ralph-control supervise para o workflow wf_ralph_method_2_0_onda2_hardening
-# no clone de execução persistente, com a suite leve de gates (check-shell +
-# test-ralph-method) em vez do ci-portable (release).
+# LANÇA o ralph-control supervise para o workflow wf_ralph_method_2_0_onda2_hardening
+# no clone de execução persistente, com o provider DEFINIDO PELO OPERADOR
+# (default: codex) para TODO o fluxo — implementação, gates e revisão.
+# Sem failover automático: se o provider definido falhar, o supervisor
+# registra recovery/debug e o orquestrador decide; não troca de provider
+# silenciosamente (ANOM-2026-002/010).
 #
-# Engine primário: codex (runner nativo, perfil .ralph/codex.env) com
-# CODEX_HOME redirecionado para o workspace — o agy não opera no sandbox
-# (HOME read-only), anomalia ANOM-2026-002 documentada no registro da onda.
+# O workflow.json já congela provider_chain=[codex] (operador define o
+# provider; o ralph executa tudo com ele).
 #
 # Somente o supervisor roda aqui: ele é a única autoridade de transição do
 # ledger. Este script não aprova gates nem escolhe a próxima feature.
@@ -19,7 +21,7 @@
 # Variáveis de ambiente (com defaults deste checkout):
 #   RALPH_FIELD       clone de execução (default: raiz do repo)
 #   RALPH_WORKFLOW    workflow da Onda 2
-#   RALPH_ENGINE      engine primário (default: codex)
+#   RALPH_ENGINE      provider do fluxo inteiro (default: codex)
 #   RALPH_TEST_CMD    suite leve de gates
 #   RALPH_INTERVAL    intervalo do supervisor em segundos
 #   RALPH_MAX_RETRIES limite de retries do supervisor
@@ -34,35 +36,26 @@ TEST_CMD="${RALPH_TEST_CMD:-bash scripts/check-shell.sh && bash scripts/test-ral
 INTERVAL="${RALPH_INTERVAL:-30}"
 MAX_RETRIES="${RALPH_MAX_RETRIES:-3}"
 DEBUG_CMD="${RALPH_DEBUG_COMMAND:-php bin/ralph-diagnose.php}"
-CODEX_HOME="${CODEX_HOME:-$ROOT/.onda2-home/.codex}"
 
 cd "$FIELD" || exit 2
 
 echo "[supervise-onda2] workflow=$WORKFLOW engine=$ENGINE field=$FIELD intervalo=${INTERVAL}s"
 echo "[supervise-onda2] test-cmd: $TEST_CMD"
 echo "[supervise-onda2] debug-cmd: $DEBUG_CMD"
-echo "[supervise-onda2] CODEX_HOME=$CODEX_HOME"
 
-export CODEX_HOME
+# Provider único do fluxo: codex (runner nativo) com CODEX_HOME no workspace
+# (o agy não opera no sandbox — ANOM-2026-002). O operador define o provider;
+# o ralph executa tudo com ele, sem trocar.
+export CODEX_HOME="${CODEX_HOME:-$ROOT/.onda2-home/.codex}"
 
-# Comandos explícitos dos gates (o wrapper default de quality cai em bin/check,
-# inexistente no self-hosting; runtime_evidence e technical_review usam os
-# scripts self-host read-only do próprio método — ANOM-2026-009).
+# Comandos explícitos dos gates, todos com o mesmo provider (codex):
+# - quality: suite leve (o default bin/check não existe no self-hosting);
+# - runtime_evidence: script self-host read-only;
+# - technical_review: script codex read-only (mesmo mecanismo do gate 3 do
+#   bloco; o ralph.sh --verify-only exige adapter e não se aplica ao codex).
 export RALPH_QUALITY_COMMAND="${RALPH_QUALITY_COMMAND:-bash scripts/check-shell.sh && bash scripts/test-ralph-method.sh}"
 export RALPH_RUNTIME_EVIDENCE_CMD="${RALPH_RUNTIME_EVIDENCE_CMD:-bash scripts/ralph-selfhost-runtime-evidence.sh}"
-export RALPH_TECHNICAL_REVIEW_COMMAND="${RALPH_TECHNICAL_REVIEW_COMMAND:-bash -c 'export RALPH_ENGINE=agy RALPH_VERIFY_MODEL=gemini-3.7-flash-high RALPH_AGY_MODEL=gemini-3.7-flash-high RALPH_AGY_EFFORT=high RALPH_AGY_VERIFY_AGENT=ralph-review RALPH_AGY_PRINT_TIMEOUT=30m; bash scripts/ralph-selfhost-technical-review.sh'}"
-# O --verify-only do ralph.sh exige engine com adapter (opencode/agy/cursor);
-# o agy verify roda via bwrap com mounts controlados e funciona no sandbox
-# (comprovado), enquanto o impl agy não opera (ANOM-2026-002). O impl da
-# feature continua codex via --engine explícito no supervise. As variáveis do
-# perfil agy são exportadas porque o supervisor injeta o perfil do engine do
-# gate (codex) e o comando de review precisa das variáveis agy.
-export RALPH_ENGINE="${RALPH_ENGINE:-agy}"
-export RALPH_AGY_MODEL="${RALPH_AGY_MODEL:-gemini-3.7-flash-high}"
-export RALPH_AGY_EFFORT="${RALPH_AGY_EFFORT:-high}"
-export RALPH_AGY_VERIFY_AGENT="${RALPH_AGY_VERIFY_AGENT:-ralph-review}"
-export RALPH_AGY_PRINT_TIMEOUT="${RALPH_AGY_PRINT_TIMEOUT:-30m}"
-export RALPH_VERIFY_MODEL="${RALPH_VERIFY_MODEL:-gemini-3.7-flash-high}"
+export RALPH_TECHNICAL_REVIEW_COMMAND="${RALPH_TECHNICAL_REVIEW_COMMAND:-bash scripts/ralph-selfhost-technical-review-codex.sh}"
 
 # O ralph-control supervise retorna em estados de espera (debugging_running,
 # capacity_wait, recovery_required etc.) — o wrapper relança até o workflow
