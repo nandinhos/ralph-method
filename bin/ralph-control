@@ -5477,7 +5477,7 @@ function runControlled(array $arguments): void
                 'idle_seconds' => (int) floor($now - $lastActivityAt),
                 'phase' => $feature['state'] ?? 'pending',
             ];
-            withLock(function () use ($arguments, $feature): void {
+            withLock(function () use ($arguments, $feature, $activityFacts): void {
                 appendEvent(eventContext($arguments, $feature, 'telemetry.activity', 'Atividade sanitizada do processo controlado', $activityFacts));
             });
         }
