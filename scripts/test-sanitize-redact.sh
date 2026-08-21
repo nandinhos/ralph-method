@@ -156,6 +156,9 @@ LEDGER="$TMP/.git/ralph-control/events.jsonl" php -r '
 
 (cd "$TMP" && php "$control" verify >/dev/null) || fail 'hash chain não permaneceu íntegra após 100 redações'
 
+mkdir -p "$TMP/.git/ralph-control/artifacts"
+printf '%s\n' 'Cookie: session=raw-cookie-value; tracking=second-raw-cookie-value' > "$TMP/.git/ralph-control/artifacts/FEATURE-102A-SANITIZE-REDACT-attempt-1.stderr.log"
+
 diagnose_report="$(cd "$TMP" && RALPH_DEBUG_WORKFLOW_ID=wf_redaction RALPH_DEBUG_FEATURE_KEY=FEATURE-102A-SANITIZE-REDACT RALPH_DEBUG_ATTEMPT=1 RALPH_DEBUG_REDACTED_THRESHOLD=0 php "$ROOT/bin/ralph-diagnose.php")"
 DIAGNOSE_REPORT="$diagnose_report" php -r '
     $report = json_decode(getenv("DIAGNOSE_REPORT"), true, 512, JSON_THROW_ON_ERROR);
@@ -165,7 +168,7 @@ DIAGNOSE_REPORT="$diagnose_report" php -r '
         exit(1);
     }
     $encoded = json_encode($report, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-    foreach (["ghp_abc123exampleREPLACEme", "verysecret", "secret-0"] as $leak) {
+    foreach (["ghp_abc123exampleREPLACEme", "verysecret", "secret-0", "raw-cookie-value", "second-raw-cookie-value"] as $leak) {
         if (str_contains($encoded, $leak)) {
             fwrite(STDERR, "diagnóstico vazou um valor redigido\n");
             exit(2);
@@ -189,7 +192,7 @@ report_md=("$TMP/.git/ralph-control/reports"/DBG-*.md)
 [ -f "${report_md[0]}" ] || fail 'relatório DBG-*.md não foi criado'
 grep -q '\[REDACTED:' "${report_md[0]}" || fail 'DBG-*.md não exibiu marcador de redação'
 grep -q 'tests/fixtures/redaction/canary-text.txt' "${report_md[0]}" || fail 'DBG-*.md não exibiu o path sanitizado'
-if grep -q 'ghp_abc123exampleREPLACEme\|verysecret\|secret-0' "${report_md[0]}"; then
+if grep -q 'ghp_abc123exampleREPLACEme\|verysecret\|secret-0\|raw-cookie-value\|second-raw-cookie-value' "${report_md[0]}"; then
   fail 'DBG-*.md contém valor redigido'
 fi
 

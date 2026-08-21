@@ -63,6 +63,14 @@ function latestEvent(array $events, string $type, string $featureKey, ?int $atte
 
 function diagnosticSanitize(string $value): string
 {
+    // Um cabeçalho pode conter vários pares separados por `;`. Redigir o
+    // cabeçalho inteiro evita que um segundo cookie sobreviva ao padrão
+    // key/value abaixo e apareça no stderr ou no relatório DBG.
+    $value = (string) preg_replace(
+        '/\b(?:cookie|set-cookie)\b\s*:\s*[^\r\n]*/iu',
+        '[REDACTED:cookie]',
+        $value,
+    );
     $patterns = [
         'token' => '/\b((?:github[_-]?token|github_pat|access[_-]?token|api[_-]?key|token|secret|password|passwd))\b(\s*["\']?\s*[:=]\s*)(?:"[^"]*"|\'[^\']*\'|[^\s,;}\]]+)/iu',
         'aws_secret' => '/\b(aws[_-]?secret(?:[_-]?access[_-]?key)?)\b(\s*["\']?\s*[:=]\s*)(?:"[^"]*"|\'[^\']*\'|[^\s,;}\]]+)/iu',
