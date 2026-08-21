@@ -11,6 +11,9 @@
 # Uso (invocado pelo supervisor):
 #   RALPH_TECHNICAL_REVIEW_COMMAND=bash scripts/ralph-selfhost-technical-review.sh
 
+# Expressões PHP literais dentro de aspas simples: sem expansão shell.
+# shellcheck disable=SC2016
+
 set -u
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"

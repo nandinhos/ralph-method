@@ -8,6 +8,9 @@
 # Uso (invocado pelo supervisor):
 #   RALPH_RUNTIME_EVIDENCE_CMD=bash scripts/ralph-selfhost-runtime-evidence.sh
 
+# Expressões PHP literais dentro de aspas simples: sem expansão shell.
+# shellcheck disable=SC2016
+
 set -u
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
