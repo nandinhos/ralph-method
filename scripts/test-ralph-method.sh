@@ -1346,6 +1346,11 @@ printf 'ok   conhecimento em tempo real emite knowledge.telemetry sanitizado, no
 # ---------------------------------------------------------------------------
 bash "$ROOT/scripts/test-sanitize-redact.sh"
 
+# ---------------------------------------------------------------------------
+# FEATURE-102B (Phase 2): Cursor rebaixado até prova adversarial + hero
+# ---------------------------------------------------------------------------
+bash "$ROOT/tests/test-cursor-adversarial.sh"
+bash "$ROOT/tests/test-cursor-hero.sh"
 
 
 

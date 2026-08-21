@@ -82,6 +82,12 @@ ralph-control provider-status --workflow <id>
 ralph-control failover-plan --workflow <id> --feature <key>
 ```
 
+`provider-status --format json` também expõe, em `adapters.<engine>`, o caminho
+de promoção (`optin`, `adversarial`, `hero`, `promoted`) e
+`promotion_blockers`. O estado fica em
+`.ralph/adapter-promotion/<engine>.json`; Cursor só é elegível com
+`promoted=true`.
+
 O resultado de execução evolui `schemas/runner-result.schema.json` para um
 contrato comum aos runners. `provider.failover_started` só pode ser emitido
 pelo controlador depois de processo encerrado, domínio de falha observado e

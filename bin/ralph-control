@@ -37,6 +37,8 @@ $workflowLockDepth = 0;
 
 const RALPH_DOCUMENT_SCHEMA_VERSION = '1.0.0';
 const RALPH_KNOWLEDGE_SCHEMA_VERSION = '1.0.0';
+const RALPH_ADAPTER_ENGINES = ['opencode', 'agy', 'cursor'];
+const RALPH_PROMOTION_FIELDS = ['optin', 'adversarial', 'hero', 'promoted'];
 
 $documentKinds = [
     'RPT' => 'relatório operacional',
@@ -148,6 +150,115 @@ function writeRawAtomic(string $path, string $content): void
         fail("não foi possível escrever atomicamente: {$path}");
     }
     @chmod($path, 0600);
+}
+
+function adapterPromotionPath(string $engine): string
+{
+    global $root;
+
+    return $root.DIRECTORY_SEPARATOR.'.ralph'.DIRECTORY_SEPARATOR.'adapter-promotion'.DIRECTORY_SEPARATOR.$engine.'.json';
+}
+
+/** @return array{optin: bool, adversarial: bool, hero: bool, promoted: bool} */
+function defaultAdapterPromotion(string $engine): array
+{
+    // OpenCode e agy já passaram pelo rito anterior de certificação. O Cursor
+    // conserva o opt-in da FEATURE-100A, mas começa rebaixado até as duas
+    // provas específicas desta fase.
+    if ($engine !== 'cursor') {
+        return ['optin' => true, 'adversarial' => true, 'hero' => true, 'promoted' => true];
+    }
+
+    return ['optin' => true, 'adversarial' => false, 'hero' => false, 'promoted' => false];
+}
+
+/** @return array{optin: bool, adversarial: bool, hero: bool, promoted: bool} */
+function adapterPromotionState(string $engine): array
+{
+    if (! in_array($engine, RALPH_ADAPTER_ENGINES, true)) {
+        fail('adapter inválido para promoção: '.$engine, 2);
+    }
+
+    $state = defaultAdapterPromotion($engine);
+    $path = adapterPromotionPath($engine);
+    if (is_file($path)) {
+        $stored = readJson($path);
+        foreach (RALPH_PROMOTION_FIELDS as $field) {
+            if (array_key_exists($field, $stored)) {
+                if (! is_bool($stored[$field])) {
+                    fail("estado de promoção inválido em {$path}: {$field} deve ser booleano");
+                }
+                $state[$field] = $stored[$field];
+            }
+        }
+    }
+
+    $state['promoted'] = $state['optin'] && $state['adversarial'] && $state['hero'];
+
+    return $state;
+}
+
+/** @return list<string> */
+function adapterPromotionBlockers(array $state): array
+{
+    $blockers = [];
+    foreach (['optin', 'adversarial', 'hero'] as $field) {
+        if (($state[$field] ?? false) !== true) {
+            $blockers[] = $field;
+        }
+    }
+
+    return $blockers;
+}
+
+function adapterPromotionWrite(string $engine, array $state): void
+{
+    $directory = dirname(adapterPromotionPath($engine));
+    if (! is_dir($directory) && ! mkdir($directory, 0700, true) && ! is_dir($directory)) {
+        fail('não foi possível criar o diretório de promoção de adapters');
+    }
+    @chmod($directory, 0700);
+    excludeKnowledgeCandidates();
+    $normalized = [];
+    foreach (RALPH_PROMOTION_FIELDS as $field) {
+        $normalized[$field] = ($state[$field] ?? false) === true;
+    }
+    $normalized['promoted'] = $normalized['optin'] && $normalized['adversarial'] && $normalized['hero'];
+    writeJson(adapterPromotionPath($engine), $normalized);
+    @chmod(adapterPromotionPath($engine), 0600);
+}
+
+function requirePromotedAdapter(string $engine, ?string $promotionProof = null): void
+{
+    if (! in_array($engine, RALPH_ADAPTER_ENGINES, true)) {
+        return;
+    }
+    $state = adapterPromotionState($engine);
+    if ($state['promoted']) {
+        return;
+    }
+
+    // A prova de hero precisa executar o runner real antes de registrar
+    // hero=true. Ela é uma execução explicitamente marcada, só permitida
+    // quando o opt-in e a prova adversarial já foram registrados; não é uma
+    // exceção para produção nem altera o estado de promoção.
+    if ($engine === 'cursor' && $promotionProof === 'hero'
+        && $state['optin'] === true
+        && $state['adversarial'] === true
+        && $state['hero'] === false) {
+        return;
+    }
+
+    if ($engine === 'cursor') {
+        fail('cursor rebaixado; rode tests/test-cursor-adversarial.sh e test-cursor-hero.sh');
+    }
+    fail('adapter '.$engine.' rebaixado; promoção incompleta');
+}
+
+function adapterIsPromoted(string $engine): bool
+{
+    return in_array($engine, RALPH_ADAPTER_ENGINES, true)
+        && adapterPromotionState($engine)['promoted'];
 }
 
 /** @return array{schema_version: string, documents: list<array<string, mixed>>} */
@@ -401,6 +512,8 @@ function allocateDocumentId(string $kind, string $allocationKey, array $metadata
         'feature_key' => $safeMetadata['feature_key'] ?? null,
         'attempt' => $safeMetadata['attempt'] ?? null,
         'path' => $safeMetadata['path'] ?? null,
+        'scope' => $safeMetadata['scope'] ?? null,
+        'metric' => $safeMetadata['metric'] ?? null,
     ];
     usort($index['documents'], static fn (array $left, array $right): int => strcmp((string) $left['id'], (string) $right['id']));
     writeJson($documentIndexFile, $index);
@@ -1155,6 +1268,9 @@ function selectEligibleRunner(array $chain, array $circuits, array $readiness): 
         if (($readiness[$runner]['adapter_enabled'] ?? false) !== true) {
             continue;
         }
+        if (in_array($runner, RALPH_ADAPTER_ENGINES, true) && ! adapterIsPromoted($runner)) {
+            continue;
+        }
         $circuit = $circuits[$runner] ?? ['state' => 'closed'];
         if (($circuit['state'] ?? 'closed') === 'open') {
             continue;
@@ -1756,16 +1872,16 @@ function excludeKnowledgeCandidates(): void
         fail('não foi possível preparar .git/info/exclude');
     }
     $contents = is_file($excludePath) ? (string) file_get_contents($excludePath) : '';
-    $line = '/.ralph/knowledge-candidates/';
-    foreach (preg_split('/\R/', $contents) ?: [] as $existing) {
-        if (trim($existing) === $line) {
-            return;
-        }
+    $lines = ['/.ralph/knowledge-candidates/', '/.ralph/adapter-promotion/'];
+    $existingLines = array_map('trim', preg_split('/\R/', $contents) ?: []);
+    $missing = array_values(array_filter($lines, static fn (string $line): bool => ! in_array($line, $existingLines, true)));
+    if ($missing === []) {
+        return;
     }
     if ($contents !== '' && ! str_ends_with($contents, "\n")) {
         $contents .= "\n";
     }
-    if (file_put_contents($excludePath, $contents.$line."\n", LOCK_EX) === false) {
+    if (file_put_contents($excludePath, $contents.implode("\n", $missing)."\n", LOCK_EX) === false) {
         fail('não foi possível registrar candidatos de conhecimento em .git/info/exclude');
     }
 }
@@ -2656,7 +2772,7 @@ function continuationTreeFingerprint(): array
     $lines = array_values(array_filter(preg_split('/\R/', $porcelain) ?: [], static fn (string $line): bool => trim($line) !== ''));
     $dirty = [];
     $controlled = [];
-    $allowlist = ['/.phases/', '/.git/ralph-control/', '/.ralph/knowledge-candidates/', '/.git/info/exclude'];
+    $allowlist = ['/.phases/', '/.git/ralph-control/', '/.ralph/knowledge-candidates/', '/.ralph/adapter-promotion/', '/.git/info/exclude'];
     foreach ($lines as $line) {
         $path = substr($line, 3);
         $relative = '/'.ltrim($path, '/');
@@ -3354,6 +3470,15 @@ function superviseWorkflow(array $arguments): void
 {
     global $runtime, $supervisorLockFile;
     $workflowId = required($arguments, 'workflow');
+    $requestedEngine = resolveEngine($arguments);
+    if ($requestedEngine === 'cursor' && ! adapterIsPromoted('cursor')) {
+        // O supervisor mantém a execução viva em um runner certificado, mas
+        // deixa o rebaixamento explícito para o operador e para os artefatos
+        // do processo. Uma chamada direta com --engine cursor continua
+        // fail-closed em run/ralph.sh.
+        fwrite(STDERR, '[RALPH] cursor rebaixado; usando opencode até adversarial+hero serem promovidos' . "\n");
+        $arguments['engine'] = 'opencode';
+    }
     $interval = max(1, (int) ($arguments['interval'] ?? 30));
     $staleAfter = max($interval, (int) ($arguments['stale-after'] ?? max(180, $interval * 3)));
     $activityStaleAfter = max($interval, (int) ($arguments['activity-stale-after'] ?? max(900, $staleAfter * 5)));
@@ -3888,6 +4013,11 @@ function initWorkflow(array $arguments): void
             }
         }
         saveWorkflow($workflow);
+        foreach (RALPH_ADAPTER_ENGINES as $engine) {
+            if (! is_file(adapterPromotionPath($engine))) {
+                adapterPromotionWrite($engine, defaultAdapterPromotion($engine));
+            }
+        }
         appendEvent([
             'workflow_id' => $workflow['workflow_id'],
             'type' => 'workflow.initialized',
@@ -5162,6 +5292,55 @@ function providerStatus(array $arguments): void
         ];
     }
     $cursor = $projection['cursor'];
+    $adapters = [];
+    foreach (RALPH_ADAPTER_ENGINES as $engine) {
+        $state = adapterPromotionState($engine);
+        $adapters[$engine] = [
+            'optin' => $state['optin'],
+            'adversarial' => $state['adversarial'],
+            'hero' => $state['hero'],
+            'promoted' => $state['promoted'],
+            'promotion_blockers' => adapterPromotionBlockers($state),
+        ];
+    }
+    if (array_key_exists('promote', $arguments)) {
+        $engine = $arguments['promote'];
+        if (! is_string($engine) || ! in_array($engine, RALPH_ADAPTER_ENGINES, true)) {
+            fail('--promote exige um adapter válido: '.implode(', ', RALPH_ADAPTER_ENGINES), 2);
+        }
+        $state = adapterPromotionState($engine);
+        // As flags de prova são deliberadamente explícitas. O rito oficial
+        // continua sendo executar os dois scripts. Uma flag isolada registra
+        // uma prova parcial; somente os quatro sinais verdes habilitam
+        // produção.
+        $proofFlags = [];
+        foreach (['adversarial', 'hero'] as $proof) {
+            if (array_key_exists($proof, $arguments)) {
+                $value = $arguments[$proof];
+                $state[$proof] = $value === true || $value === '1' || $value === 'true';
+                $proofFlags[] = $proof;
+            }
+        }
+        $state['promoted'] = $state['optin'] && $state['adversarial'] && $state['hero'];
+        $blockers = adapterPromotionBlockers($state);
+        if ($blockers !== [] && $proofFlags === []) {
+            fail('adapter '.$engine.' não pode ser promovido; bloqueios: '.implode(', ', $blockers));
+        }
+        adapterPromotionWrite($engine, $state);
+        $adapters[$engine] = [
+            'optin' => $state['optin'],
+            'adversarial' => $state['adversarial'],
+            'hero' => $state['hero'],
+            'promoted' => $state['promoted'],
+            'promotion_blockers' => $blockers,
+        ];
+    }
+    $out['adapters'] = $adapters;
+    // Aliases de nível superior mantêm consumidores que tratavam o status do
+    // adapter como a raiz do payload (snapshot v1).
+    foreach ($adapters as $engine => $status) {
+        $out[$engine] = $status;
+    }
     $out['policy'] = $policy['strategy'];
     $out['chain'] = $policy['chain'];
     $out['cursor_feature'] = $cursor;
@@ -5934,11 +6113,15 @@ function runControlled(array $arguments): void
     $featureKey = required($arguments, 'feature');
     $command = $arguments['command'] ?? null;
     $engine = resolveEngine($arguments);
+    $promotionProof = is_string($arguments['promotion-proof'] ?? null)
+        ? trim((string) $arguments['promotion-proof'])
+        : null;
     $generatedRalph = false;
     $verificationCommand = null;
     $verificationProof = getenv('RALPH_OPENCODE_VERIFY_POLICY_PROOF');
     $verificationAgent = getenv('RALPH_OPENCODE_VERIFY_AGENT');
     loadWorkflowForId($workflowId);
+    requirePromotedAdapter($engine, $promotionProof);
     if (! is_string($command) || trim($command) === '') {
         $ralph = configuredRalph($arguments);
         $testCommand = is_string($arguments['test-cmd'] ?? null) && trim((string) $arguments['test-cmd']) !== ''
@@ -6064,6 +6247,9 @@ function runControlled(array $arguments): void
         unset($environment['RALPH_VERIFY']);
     } elseif ($generatedRalph && $engine === 'agy') {
         $environment['RALPH_VERIFY'] = 'always';
+    }
+    if ($engine === 'cursor' && $promotionProof === 'hero') {
+        $environment['RALPH_CURSOR_PROMOTION_PROOF'] = 'hero';
     }
     $processCommand = controlledProcessCommand($command);
     $containment = $processCommand['containment'];
@@ -7074,6 +7260,7 @@ function documentIdCommand(array $arguments): void
             'feature_key' => $featureKey,
             'attempt' => $attempt,
             'scope' => $scope,
+            'metric' => in_array($scope, ['promotion-blockers', 'promotion_blockers'], true) ? 'promotion_blockers' : null,
         ]);
     });
 
@@ -7089,6 +7276,7 @@ function documentIdCommand(array $arguments): void
         'feature_key' => $featureKey,
         'attempt' => $attempt,
         'scope' => $scope,
+        'metric' => in_array($scope, ['promotion-blockers', 'promotion_blockers'], true) ? 'promotion_blockers' : null,
     ]);
 }
 

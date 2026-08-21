@@ -128,6 +128,8 @@ mensagem generativa para testar o modelo. Codex e Claude CLI usam runners
 nativos; OpenCode exige modelo explícito e revisão read-only comprovada; `agy`
 exige modelo explícito e isolamento Linux funcional para habilitar o adapter;
 Cursor exige modelo explícito (`RALPH_CURSOR_MODEL`) e sessão local da conta;
+produção exige também `promoted=true` em
+`.ralph/adapter-promotion/cursor.json`, com `optin`, `adversarial` e `hero`;
 Hermes permanece em readiness passiva.
 
 Se o plano não produzir runner elegível, não materialize configuração fictícia
@@ -691,7 +693,9 @@ listagem global `agy agents` expõe somente agentes instalados da sessão local
 e não decide a elegibilidade do agente de verify. O Cursor usa
 `status --format json` e `models`; por ser IDE com sessão local, o probe não
 procura API key e o adapter só habilita com CLI `agent`/`cursor-agent`
-presente e `RALPH_CURSOR_MODEL` definido. Hermes identifica o provider selecionado
+presente e `RALPH_CURSOR_MODEL` definido. O `provider-status --format json`
+expõe `promotion_blockers` por adapter; `--engine cursor` é fail-closed até os
+scripts adversarial e hero passarem. Hermes identifica o provider selecionado
 no próprio `status` (ou respeita `RALPH_HERMES_PROVIDER`) e valida
 `auth status <provider>`. O status de outros providers listados pelo Hermes
 não reprova o provider selecionado.
@@ -737,6 +741,18 @@ sem política, falha de capacidade não troca runner silenciosamente.
 | `selected_provider=cursor` e `adapter_enabled=true` | adapter Cursor; preencher `RALPH_CURSOR_MODEL` (sem default) no `.ralph/cursor.env` | aplicar e validar preflight impl/verify antes do loop |
 | `selected_provider=null` ou `mode=needs_review` | nenhum executor autorizado | não executar; corrigir prontidão ou solicitar decisão |
 | Hermes detectado sem adapter | readiness apenas | não promover; registrar ou consultar backlog |
+
+Para Cursor, prontidão não equivale a promoção. Depois das duas provas no
+checkout de campo, registre explicitamente a promoção:
+
+```bash
+bash tests/test-cursor-adversarial.sh
+bash tests/test-cursor-hero.sh
+bin/ralph-control provider-status --workflow <id> --promote cursor --adversarial --hero
+```
+
+O supervisor rebaixa explicitamente Cursor para OpenCode enquanto houver
+`promotion_blockers`; uma chamada direta permanece recusada.
 
 O procedimento padrão é:
 

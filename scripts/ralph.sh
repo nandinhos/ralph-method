@@ -692,6 +692,30 @@ preflight_checks() {
     exit 1
   fi
 
+  if [[ "$ENGINE" == "cursor" ]]; then
+    promotion_state=".ralph/adapter-promotion/cursor.json"
+    # shellcheck disable=SC2016
+    if [ ! -f "$promotion_state" ] || ! php -r '
+      $path = $argv[1] ?? "";
+      $state = is_file($path) ? json_decode((string) file_get_contents($path), true) : null;
+      $proof = getenv("RALPH_CURSOR_PROMOTION_PROOF");
+      $production = is_array($state)
+        && ($state["optin"] ?? false) === true
+        && ($state["adversarial"] ?? false) === true
+        && ($state["hero"] ?? false) === true
+        && ($state["promoted"] ?? false) === true;
+      $hero_proof = $proof === "hero"
+        && is_array($state)
+        && ($state["optin"] ?? false) === true
+        && ($state["adversarial"] ?? false) === true
+        && ($state["hero"] ?? true) === false;
+      exit($production || $hero_proof ? 0 : 1);
+    ' "$promotion_state" 2>/dev/null; then
+      fail "cursor rebaixado; rode tests/test-cursor-adversarial.sh e test-cursor-hero.sh"
+      exit 1
+    fi
+  fi
+
   if ! [[ "$HOOK_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || ! [[ "$HOOK_KILL_AFTER" =~ ^[1-9][0-9]*$ ]]; then
     fail "RALPH_HOOK_TIMEOUT e RALPH_HOOK_KILL_AFTER devem ser inteiros >= 1."
     exit 1

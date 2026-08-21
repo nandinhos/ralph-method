@@ -210,13 +210,15 @@ detector do `ralph-init` não procura `CURSOR_API_KEY`. Entregue sobre a base
   comprova preflight impl/verify, run impl e verify declarado, contrato 1.2.0
   no schema, e o parser fail-closed; incluído no `ci-portable.sh`.
 
-Pendente: a prova de campo opt-in (com a CLI headless real e sessão
-autenticada) permanece uma política futura, separada e opt-in — a FEATURE-098
-foi promovida na v0.10.0 no mesmo rito do `agy` (o campo real do agy também
-não faz parte da CI sem credenciais). A revisão adversarial independente foi
-realizada: 10/10 claims sustentadas e os 3 findings de baixa severidade
-corrigidos (schema `failure_domain_status` com null, parser sem código morto,
-usage do ralph-init com `cursor`).
+O opt-in de campo foi registrado na FEATURE-100A e no relatório 0031, mas não
+é suficiente para produção. A FEATURE-102B mantém o Cursor rebaixado até
+`tests/test-cursor-adversarial.sh` e `tests/test-cursor-hero.sh` passarem;
+`provider-status --format json` expõe `optin`, `adversarial`, `hero`,
+`promoted` e `promotion_blockers` por adapter, persistidos em
+`.ralph/adapter-promotion/<engine>.json`. A decisão está em
+[`ADR-0033`](adr/ADR-0033-cursor-promotion.md). A FEATURE-098 continua
+promovida como implementação do adapter, mas isso não substitui a promoção
+operacional em campo.
 
 ### FEATURE-097 — recuperação de gate
 
