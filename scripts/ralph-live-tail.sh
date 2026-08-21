@@ -23,10 +23,12 @@
 #   nohup bash scripts/ralph-live-tail.sh > /tmp/ralph-live-tail.out 2>&1 &
 #   tail -f /tmp/ralph-live-tail.out
 #
-set -u
-
 # Expressões PHP literais dentro de aspas simples: sem expansão shell.
 # shellcheck disable=SC2016
+
+set -u
+
+
 
 FIELD="${RALPH_FIELD:-/tmp/ralph-method-2.0-field}"
 WORKFLOW="${RALPH_WORKFLOW:-wf_ralph_method_2_0_onda1}"
@@ -51,7 +53,7 @@ LEDGER="$FIELD/.git/ralph-control/events.jsonl"
 MONITOR="$FIELD/bin/ralph-monitor"
 CONTROL="$FIELD/bin/ralph-control"
 
-# shellcheck disable=SC2016
+
 GREEN=$'\033[32m'; RED=$'\033[31m'; YELLOW=$'\033[33m'; CYAN=$'\033[36m'
 MAGENTA=$'\033[35m'; BOLD=$'\033[1m'; DIM=$'\033[2m'; RESET=$'\033[0m'
 
