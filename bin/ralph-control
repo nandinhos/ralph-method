@@ -5553,14 +5553,41 @@ function runControlled(array $arguments): void
         $reconfirmed = false;
         $reconfirmEvidence = [];
         $stdoutForCheck = $stdoutPreview;
-        if (preg_match('/tudo verde\s*·\s*completadas \d+\s*·\s*falharam 0/i', $stdoutForCheck) === 1) {
+        // O preview é truncado (captureLimit); o run_end com "tudo verde" pode
+        // ficar fora dele. Usamos múltiplas evidências: stdout fragmentado,
+        // feedback JSONL emitido pelo ralph.sh e o commit da árvore.
+        if (preg_match('/tudo verde/i', $stdoutForCheck) === 1
+            || preg_match('/completadas \d+\s*·\s*falharam 0/i', $stdoutForCheck) === 1) {
             $reconfirmed = true;
             $reconfirmEvidence[] = 'run_end_tudo_verde';
         }
-        if (preg_match('/Phase \d+(?:\.\d+)?: .*? (?:COMPLETA|JA IMPLEMENTADA) \(/i', $stdoutForCheck) === 1
+        if (preg_match('/(?:COMPLETA|JA IMPLEMENTADA) \(/i', $stdoutForCheck) === 1
             && preg_match('/FALHOU apos|FALHOU|falharam [1-9]/i', $stdoutForCheck) !== 1) {
             $reconfirmed = true;
             $reconfirmEvidence[] = 'phase_done_sem_falha';
+        }
+        // Feedback JSONL: o ralph.sh sempre emite run_end com "tudo verde"
+        // quando todas as fases passaram — independente do truncamento.
+        if (! $reconfirmed) {
+            $feedbackPath = $GLOBALS['runtime'].'/feedback/events.jsonl';
+            if (is_file($feedbackPath)) {
+                foreach (array_reverse(file($feedbackPath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: []) as $feedbackLine) {
+                    try {
+                        $feedbackEvent = json_decode($feedbackLine, true, 512, JSON_THROW_ON_ERROR);
+                    } catch (Throwable) {
+                        continue;
+                    }
+                    if (is_array($feedbackEvent)
+                        && ($feedbackEvent['event'] ?? null) === 'run_end'
+                        && ($feedbackEvent['state'] ?? null) === 'completed'
+                        && is_string($feedbackEvent['detail'] ?? null)
+                        && preg_match('/falharam 0/i', $feedbackEvent['detail']) === 1) {
+                        $reconfirmed = true;
+                        $reconfirmEvidence[] = 'feedback_run_end_falharam_0';
+                        break;
+                    }
+                }
+            }
         }
         if ($reconfirmed) {
             $repositoryCheck = currentRepository();
