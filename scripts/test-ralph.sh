@@ -360,6 +360,7 @@ run_ralph() {
     RALPH_HOOK_TIMEOUT="${CASE_HOOK_TIMEOUT:-}" \
     RALPH_HOOK_KILL_AFTER="${CASE_HOOK_KILL_AFTER:-}" \
       env -u RALPH_HOOK \
+        -u RALPH_TEST_CMD \
         -u RALPH_PHASE_TITLE \
         -u RALPH_PHASE_NUM \
         -u RALPH_PHASE_TOTAL \
