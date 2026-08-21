@@ -45,10 +45,33 @@ echo "[supervise-onda2] CODEX_HOME=$CODEX_HOME"
 
 export CODEX_HOME
 
-exec php "$FIELD/bin/ralph-control" supervise \
-  --workflow "$WORKFLOW" \
-  --engine "$ENGINE" \
-  --test-cmd "$TEST_CMD" \
-  --debug-command "$DEBUG_CMD" \
-  --interval "$INTERVAL" \
-  --max-retries "$MAX_RETRIES"
+# Comandos explícitos dos gates (o wrapper default de quality cai em bin/check,
+# inexistente no self-hosting; runtime_evidence e technical_review usam os
+# scripts self-host read-only do próprio método — ANOM-2026-009).
+export RALPH_QUALITY_COMMAND="${RALPH_QUALITY_COMMAND:-bash scripts/check-shell.sh && bash scripts/test-ralph-method.sh}"
+export RALPH_RUNTIME_EVIDENCE_CMD="${RALPH_RUNTIME_EVIDENCE_CMD:-bash scripts/ralph-selfhost-runtime-evidence.sh}"
+export RALPH_TECHNICAL_REVIEW_COMMAND="${RALPH_TECHNICAL_REVIEW_COMMAND:-bash scripts/ralph-selfhost-technical-review.sh}"
+
+# O ralph-control supervise retorna em estados de espera (debugging_running,
+# capacity_wait, recovery_required etc.) — o wrapper relança até o workflow
+# completar, respeitando o lock do supervisor entre execuções.
+ATTEMPT=0
+while true; do
+  ATTEMPT=$((ATTEMPT + 1))
+  echo "[supervise-onda2] ciclo $ATTEMPT em $(date '+%H:%M:%S')"
+  php "$FIELD/bin/ralph-control" supervise \
+    --workflow "$WORKFLOW" \
+    --engine "$ENGINE" \
+    --test-cmd "$TEST_CMD" \
+    --debug-command "$DEBUG_CMD" \
+    --interval "$INTERVAL" \
+    --max-retries "$MAX_RETRIES"
+  RC=$?
+  # Exit 0 com workflow completo: encerra o wrapper.
+  if [ "$RC" -eq 0 ] && php "$FIELD/bin/ralph-control" status --workflow "$WORKFLOW" 2>/dev/null \
+      | grep -q '"complete"'; then
+    echo "[supervise-onda2] workflow completo; encerrando wrapper"
+    exit 0
+  fi
+  sleep "${RALPH_RELAUNCH_SLEEP:-5}"
+done
