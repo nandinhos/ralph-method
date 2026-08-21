@@ -4172,8 +4172,28 @@ function markStaleRunningFeature(string $workflowId, string $featureKey): array
             return ['status' => (string) ($feature['state'] ?? 'unknown'), 'execution_active' => false];
         }
         $attempt = (int) $feature['attempt'];
-        if (findEventFor($events, 'attempt.started', $featureKey, $attempt) === null
-            || findEventFor($events, 'block.finished', $featureKey, $attempt) !== null) {
+        $hasClaim = findEventFor($events, 'feature.claimed', $featureKey, $attempt) !== null;
+        $hasStarted = findEventFor($events, 'attempt.started', $featureKey, $attempt) !== null;
+        $hasFinished = findEventFor($events, 'block.finished', $featureKey, $attempt) !== null;
+        // Um claim órfão (feature.claimed sem attempt.started) sem processo
+        // ativo não pode ficar preso em running: não há execução para
+        // reconciliar, apenas um claim que nunca iniciou. O recover pode
+        // liberar e re-claimar (novo attempt). Sem isso, um supervisor
+        // reiniciado entre o claim e o run travava a feature.
+        if (! $hasStarted || $hasFinished) {
+            if ($hasClaim && ! $hasStarted && ! $hasFinished) {
+                appendEvent(eventContext([
+                    'workflow' => $workflowId,
+                    'actor' => 'ralph-control',
+                    'actor-type' => 'controller',
+                ], $feature, 'recovery.required', 'Claim sem início de execução e sem processo ativo; recovery explícito exigido', [
+                    'reason' => 'orphan_claim_without_start',
+                    'attempt' => $attempt,
+                ]));
+
+                return ['status' => 'recovery_required', 'execution_active' => false, 'attempt' => $attempt];
+            }
+
             return ['status' => 'running', 'execution_active' => false];
         }
         appendEvent(eventContext([
