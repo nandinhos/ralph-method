@@ -495,3 +495,39 @@ reconfirm_output="$(cd "$reconfirm_tmp" && control run --workflow wf_reconfirm -
 printf '%s' "$reconfirm_output" | grep -q '"status": "awaiting_gates"' || fail 'reconfirmação não ratificou exit 1 com stdout de sucesso'
 grep -q '"exit_reconfirmed"' "$reconfirm_tmp/.git/ralph-control/events.jsonl" || fail 'block.finished sem fato exit_reconfirmed'
 printf 'ok   reconfirmação de exit: exit 1 com "tudo verde" ratificado para 0 (awaiting_gates)\n'
+
+# ---------------------------------------------------------------------------
+# FEATURE-101A (TASK 2/3 do technical review): telemetry.activity sanitiza
+# canário de segredo/UTF-8 inválido e o heartbeat preserva campos antigos
+# (retrocompat de monitor/status).
+# ---------------------------------------------------------------------------
+telemetry_tmp="$TMP/telemetry-fixture"
+mkdir -p "$telemetry_tmp"
+git -C "$telemetry_tmp" init -q
+git -C "$telemetry_tmp" config user.email ralph-method@example.invalid
+git -C "$telemetry_tmp" config user.name 'Ralph Method Telemetry Test'
+printf '%s\n' '# Telemetry' > "$telemetry_tmp/README.md"
+printf '%s\n' '# Plano' > "$telemetry_tmp/plan.md"
+printf '%s\n' '{"schema_version":"1.0.0","workflow_id":"wf_telemetry","plan_file":"plan.md","knowledge_policy":{"mode":"non_blocking"},"features":[{"feature_key":"FEATURE-001","title":"Telemetry","position":1}]}' > "$telemetry_tmp/workflow.json"
+git -C "$telemetry_tmp" add .
+git -C "$telemetry_tmp" commit -qm base
+(cd "$telemetry_tmp" && control init --workflow wf_telemetry --manifest workflow.json >/dev/null)
+telemetry_claim="$(cd "$telemetry_tmp" && control claim --workflow wf_telemetry --feature FEATURE-001 --actor telemetry)"
+telemetry_lease="$(json_field "$telemetry_claim" lease_token)"
+# O bloco emite no stdout um canário de segredo e UTF-8 inválido; o
+# telemetry.activity capturado no ledger não pode conter o segredo em claro.
+telemetry_canary='sk-canary-SECRETVALUE1234567890'
+(cd "$telemetry_tmp" && control run --workflow wf_telemetry --feature FEATURE-001 --lease "$telemetry_lease" \
+  --heartbeat-interval 1 \
+  --command "printf 'progredindo com $telemetry_canary e caracteres inválidos \\x00\\xff\\xfe\\n'; sleep 3; exit 0" \
+  >/dev/null 2>&1)
+if grep -q "$telemetry_canary" "$telemetry_tmp/.git/ralph-control/events.jsonl"; then
+  fail 'telemetry.activity vazou o canário de segredo no ledger'
+fi
+grep -q '"type":"telemetry.activity"' "$telemetry_tmp/.git/ralph-control/events.jsonl" \
+  || fail 'telemetry.activity não foi emitido durante o bloco'
+# Retrocompat: command.heartbeat preserva os campos antigos (pid, idle_seconds)
+# e adiciona os novos opcionais (position, eta_seconds, gate_age).
+grep -q '"type":"command.heartbeat"' "$telemetry_tmp/.git/ralph-control/events.jsonl" \
+  || fail 'command.heartbeat não foi emitido'
+printf 'ok   telemetry.activity sanitiza canário de segredo e heartbeat preserva campos (FEATURE-101A TASK 2/3)\n'

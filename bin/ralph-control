@@ -2056,7 +2056,24 @@ function appendEventUnlocked(array $payload): array
     }
     $type = $payload['type'] ?? null;
     if (! is_string($type) || ! in_array($type, $eventTypes, true)) {
-        fail('tipo de evento inválido');
+        // FEATURE-101A (TASK 1 do technical review): um tipo desconhecido
+        // tenta ser anexado — registra `event.rejected` com o tipo tentado
+        // nos facts (rastreabilidade) e falha a operação. O ledger permanece
+        // íntegro: `event.rejected` é um tipo válido do enum.
+        $rejectedPayload = $payload;
+        $rejectedPayload['type'] = 'event.rejected';
+        $rejectedPayload['summary'] = 'Evento rejeitado: tipo desconhecido '.$type;
+        $rejectedPayload['facts'] = array_merge(
+            is_array($payload['facts'] ?? null) ? $payload['facts'] : [],
+            ['rejected_type' => $type],
+        );
+        try {
+            appendEventUnlocked($rejectedPayload);
+        } catch (Throwable) {
+            // Se a tentativa de registrar a rejeição falhar, mantém o
+            // fail-closed original sem mascarar o erro.
+        }
+        fail('tipo de evento inválido: '.$type);
     }
 
     $events = readEvents();
