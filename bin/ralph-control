@@ -3474,7 +3474,7 @@ function claimFeature(array $arguments): void
             'base_tree_hash' => $repository['tree_hash'],
             'plan_hash' => $planHash,
             'spec_hash' => $workflow['spec_hash'] ?? $planHash,
-            'checkout' => $workflow['checkout'],
+            'checkout' => $workflow['checkout'] ?? null,
             'fencing_token' => $feature['attempt'],
             'implementer' => $arguments['implementer'] ?? getenv('RALPH_IMPLEMENTER') ?: 'ralph',
         ]));
@@ -4409,7 +4409,7 @@ function beginFailedRetry(array $arguments): array
             'base_tree_hash' => $repository['tree_hash'],
             'plan_hash' => $workflow['plan_hash'],
             'spec_hash' => $workflow['spec_hash'] ?? $workflow['plan_hash'],
-            'checkout' => $workflow['checkout'],
+            'checkout' => $workflow['checkout'] ?? null,
             'fencing_token' => $attempt,
             'implementer' => $arguments['implementer'] ?? 'ralph',
             'recovery' => true,
