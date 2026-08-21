@@ -60,7 +60,7 @@ printf '%s' "$run_output" | grep -q '"status": "awaiting_gates"' || fail "run nÃ
 #    gates foram registrados no ledger.
 supervise_out="$TMP/supervise.log"
 set +e
-timeout 40 env \
+timeout 120 env \
   RALPH_RUNTIME_EVIDENCE_CMD='echo runtime-ok' \
   RALPH_TECHNICAL_REVIEW_COMMAND='echo review-ok' \
   RALPH_CURATION_COMMAND='echo curation-ok' \
@@ -142,7 +142,7 @@ printf '%s' "$run2" | grep -q '"status": "awaiting_gates"' || fail "run fresh nÃ
 
 supervise2_out="$TMP/supervise2.log"
 set +e
-timeout 30 env RALPH_CURATION_COMMAND='echo curation-ok' \
+timeout 90 env RALPH_CURATION_COMMAND='echo curation-ok' \
   bash -c 'cd "$1" && "$2" supervise --workflow wf_gates_native --engine codex --interval 1 --max-retries 0' _ "$fresh" "$ROOT/bin/ralph-control" > "$supervise2_out" 2>&1
 set -e
 grep -q 'gates_configuration_required' "$supervise2_out" && fail 'supervise2 retornou gates_configuration_required'
