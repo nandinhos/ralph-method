@@ -40,6 +40,42 @@ const RALPH_DOCUMENT_SCHEMA_VERSION = '1.0.0';
 const RALPH_KNOWLEDGE_SCHEMA_VERSION = '1.0.0';
 const RALPH_ADAPTER_ENGINES = ['opencode', 'agy', 'cursor'];
 const RALPH_PROMOTION_FIELDS = ['optin', 'adversarial', 'hero', 'promoted'];
+const RALPH_KNOWN_EVENT_TYPES = [
+    // Contrato da Onda 1 e eventos de ciclo de vida do workflow.
+    'workflow.initialized', 'workflow.policy.frozen',
+    'feature.claimed', 'feature.advanced', 'feature.approved', 'feature.released',
+    'attempt.started', 'block.finished',
+    'command.started', 'command.heartbeat', 'command.passed', 'command.failed',
+    'command.finished', 'command.terminated',
+    'failure.detected', 'fix.applied', 'fix.reverted', 'verification.passed', 'evidence.generated',
+    'handoff.generated', 'handoff.committed',
+    // Gates e recuperação.
+    'gate.started', 'gate.passed', 'gate.rejected', 'gate.harness_error',
+    'gate.retry_started', 'gate.stalled', 'gate.session.reclaimed',
+    'recovery.required', 'recovery.retry_started', 'recovery.resolved',
+    'lease.expired',
+    // Systematic debugging e delegação.
+    'debugging.required', 'debugging.started', 'debugging.verified', 'debugging.rejected',
+    'debug.progress',
+    'delegation.started', 'delegation.completed', 'delegation.failed', 'delegation.reconciled',
+    // Telemetria, conhecimento e hardening.
+    'telemetry.activity', 'telemetry.heartbeat_rich', 'telemetry.redacted',
+    'knowledge.candidate_created', 'knowledge.telemetry', 'knowledge.curated',
+    'knowledge.rejected', 'knowledge.skipped', 'knowledge.review_required',
+    'harness_defect', 'policy.failed', 'policy.bypass_detected',
+    // Rejeições e eventos de redação são parte do contrato, nunca panes ad-hoc.
+    'event.rejected', 'event.redacted',
+    // Capacidade e failover de provider.
+    'provider.capacity_limited', 'provider.capacity_wait_started',
+    'provider.capacity_wait_finished', 'provider.failover_started',
+    'continuation.generated',
+];
+
+/** @return list<string> */
+function loadKnownEventTypes(): array
+{
+    return RALPH_KNOWN_EVENT_TYPES;
+}
 
 $documentKinds = [
     'RPT' => 'relatório operacional',
@@ -52,24 +88,6 @@ $documentKinds = [
     'INC' => 'incidente de engenharia',
     'PAT' => 'padrão de engenharia',
     'ANT' => 'anti-padrão de engenharia',
-];
-
-$eventTypes = [
-    'workflow.initialized', 'feature.claimed', 'attempt.started', 'block.finished',
-    'workflow.policy.frozen',
-    'command.started', 'command.heartbeat', 'command.passed', 'command.failed', 'failure.detected',
-    'fix.applied', 'fix.reverted', 'verification.passed', 'evidence.generated',
-    'gate.passed', 'gate.rejected', 'gate.harness_error', 'gate.retry_started', 'handoff.generated', 'handoff.committed', 'feature.approved',
-    'feature.released', 'knowledge.candidate_created', 'knowledge.curated',
-    'knowledge.rejected', 'knowledge.skipped', 'knowledge.review_required',
-    'debugging.required', 'debugging.started', 'debugging.verified', 'debugging.rejected',
-    'gate.session.reclaimed', 'feature.advanced', 'recovery.required', 'recovery.retry_started', 'recovery.resolved', 'lease.expired', 'policy.bypass_detected',
-    'delegation.started', 'delegation.completed', 'delegation.failed', 'delegation.reconciled',
-    'event.rejected', 'event.redacted',
-    'telemetry.activity', 'telemetry.heartbeat_rich', 'gate.started', 'gate.stalled',
-    'debug.progress', 'knowledge.telemetry',
-    'provider.capacity_limited', 'continuation.generated', 'provider.failover_started',
-    'provider.capacity_wait_started', 'provider.capacity_wait_finished',
 ];
 
 function fail(string $message, int $code = 1): never
@@ -2238,7 +2256,6 @@ function loadWorkflowForId(string $workflowId): array
 
 function validateEventShape(array $event, int $lineNumber): void
 {
-    global $eventTypes;
     $required = [
         'schema_version', 'event_id', 'workflow_id', 'feature_key', 'attempt',
         'lease_token_hash', 'type', 'timestamp', 'actor', 'correlation_id',
@@ -2250,7 +2267,7 @@ function validateEventShape(array $event, int $lineNumber): void
             fail("schema de evento inválido na linha {$lineNumber}: campo ausente {$field}");
         }
     }
-    if (! in_array($event['schema_version'], RALPH_COMPATIBLE_SCHEMA_VERSIONS, true) || ! in_array($event['type'], $eventTypes, true)) {
+    if (! in_array($event['schema_version'], RALPH_COMPATIBLE_SCHEMA_VERSIONS, true) || ! in_array($event['type'], loadKnownEventTypes(), true)) {
         fail("schema de evento inválido na linha {$lineNumber}");
     }
     if (! is_string($event['event_id']) || ! str_starts_with($event['event_id'], 'evt_') || ! is_string($event['workflow_id']) || ! str_starts_with($event['workflow_id'], 'wf_')) {
@@ -2552,7 +2569,7 @@ function appendEvent(array $payload): array
 
 function appendEventUnlocked(array $payload): array
 {
-    global $eventsFile, $eventTypes;
+    global $eventsFile;
     runtimeInit();
     if (! is_file($eventsFile)) {
         $initialHandle = fopen($eventsFile, 'x');
@@ -2565,25 +2582,45 @@ function appendEventUnlocked(array $payload): array
         @chmod($eventsFile, 0600);
     }
     $type = $payload['type'] ?? null;
-    if (! is_string($type) || ! in_array($type, $eventTypes, true)) {
-        // FEATURE-101A (TASK 1 do technical review): um tipo desconhecido
-        // tenta ser anexado — registra `event.rejected` com o tipo tentado
-        // nos facts (rastreabilidade) e falha a operação. O ledger permanece
-        // íntegro: `event.rejected` é um tipo válido do enum.
-        $rejectedPayload = $payload;
-        $rejectedPayload['type'] = 'event.rejected';
-        $rejectedPayload['summary'] = 'Evento rejeitado: tipo desconhecido '.$type;
-        $rejectedPayload['facts'] = array_merge(
-            is_array($payload['facts'] ?? null) ? $payload['facts'] : [],
-            ['rejected_type' => $type],
-        );
-        try {
-            appendEventUnlocked($rejectedPayload);
-        } catch (Throwable) {
-            // Se a tentativa de registrar a rejeição falhar, mantém o
-            // fail-closed original sem mascarar o erro.
+    if (! is_string($type) || ! in_array($type, loadKnownEventTypes(), true)) {
+        // A rejeição é o único evento que atravessa o ledger neste caminho.
+        // O payload com tipo desconhecido nunca é montado nem anexado, e a
+        // chave nova impede que duas tentativas inválidas sejam colapsadas por
+        // idempotência.
+        $rejectedType = match (true) {
+            is_string($type) => $type,
+            $type === null => 'null',
+            is_scalar($type) => (string) $type,
+            default => get_debug_type($type),
+        };
+        $rejectedPayload = [
+            'workflow_id' => is_string($payload['workflow_id'] ?? null) && $payload['workflow_id'] !== ''
+                ? $payload['workflow_id'] : 'wf_unknown',
+            'feature_key' => is_string($payload['feature_key'] ?? null) && $payload['feature_key'] !== ''
+                ? $payload['feature_key'] : 'workflow',
+            'attempt' => max(0, (int) ($payload['attempt'] ?? 0)),
+            'lease_token_hash' => $payload['lease_token_hash'] ?? null,
+            'actor' => ['type' => 'controller', 'name' => 'ralph-control'],
+            'correlation_id' => is_string($payload['correlation_id'] ?? null) && $payload['correlation_id'] !== ''
+                ? $payload['correlation_id'] : 'corr_'.bin2hex(random_bytes(8)),
+            'causation_id' => $payload['causation_id'] ?? null,
+            'repository' => is_array($payload['repository'] ?? null) ? $payload['repository'] : [],
+            'evidence' => [],
+            'idempotency_key' => 'idem_event_rejected_'.bin2hex(random_bytes(16)),
+            'type' => 'event.rejected',
+            'summary' => 'Evento rejeitado: tipo desconhecido '.$rejectedType,
+            'facts' => [
+                'rejected_type' => $rejectedType,
+            ],
+        ];
+        if (isset($payload['timestamp']) && is_string($payload['timestamp'])) {
+            $rejectedPayload['timestamp'] = $payload['timestamp'];
         }
-        fail('tipo de evento inválido: '.$type);
+        if (is_array($payload['facts'] ?? null)) {
+            $rejectedPayload['facts'] = array_merge($payload['facts'], $rejectedPayload['facts']);
+        }
+
+        return appendEventUnlocked($rejectedPayload);
     }
 
     $events = readEvents();
