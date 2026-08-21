@@ -3,8 +3,8 @@
 
 declare(strict_types=1);
 
-const RALPH_SCHEMA_VERSION = '1.2.0';
-const RALPH_COMPATIBLE_SCHEMA_VERSIONS = ['1.0.0', '1.1.0', '1.2.0'];
+const RALPH_SCHEMA_VERSION = '1.3.0';
+const RALPH_COMPATIBLE_SCHEMA_VERSIONS = ['1.0.0', '1.1.0', '1.2.0', '1.3.0'];
 
 $root = realpath(getcwd()) ?: getcwd();
 $gitCommonDir = trim((string) shell_exec('git rev-parse --git-common-dir 2>/dev/null'));
@@ -56,6 +56,8 @@ $eventTypes = [
     'gate.session.reclaimed', 'feature.advanced', 'recovery.required', 'recovery.retry_started', 'recovery.resolved', 'lease.expired', 'policy.bypass_detected',
     'delegation.started', 'delegation.completed', 'delegation.failed', 'delegation.reconciled',
     'event.rejected',
+    'telemetry.activity', 'telemetry.heartbeat_rich', 'gate.started', 'gate.stalled',
+    'debug.progress', 'knowledge.telemetry',
     'provider.capacity_limited', 'continuation.generated', 'provider.failover_started',
     'provider.capacity_wait_started', 'provider.capacity_wait_finished',
 ];
@@ -1472,7 +1474,7 @@ function sanitize(mixed $value): mixed
 
     foreach ($patterns as $pattern) {
         if (preg_match($pattern, $value) === 1) {
-            fail('conteúdo sensível detectado; evento rejeitado');
+            $value = preg_replace($pattern, '[REDACTED]', $value);
         }
     }
 
@@ -2177,6 +2179,10 @@ function project(array $workflow, array $events): array
                         $feature['state'] = (int) ($event['facts']['exit_code'] ?? 1) === 0 ? 'awaiting_gates' : 'debugging_required';
                     }
                     $feature['result'] = $event['facts'];
+                    if (($feature['state'] ?? null) === 'awaiting_gates'
+                        && ! isset($feature['gate_entered_at'])) {
+                        $feature['gate_entered_at'] = $now;
+                    }
                     break;
                 case 'gate.passed': $feature['gates'][$event['facts']['gate'] ?? 'unknown'] = 'passed';
                     break;
@@ -2195,11 +2201,17 @@ function project(array $workflow, array $events): array
                     // do bloco): mantém awaiting_gates.
                     $feature['state'] = 'awaiting_gates';
                     $feature['gate_retry'] = $event['facts'] ?? [];
+                    if (! isset($feature['gate_entered_at'])) {
+                        $feature['gate_entered_at'] = $now;
+                    }
                     break;
                 case 'gate.session.reclaimed':
                     $feature['state'] = 'awaiting_gates';
                     $feature['lease_token_hash'] = $event['lease_token_hash'] ?? null;
                     $feature['gate_session'] = $event['facts'] ?? [];
+                    if (! isset($feature['gate_entered_at'])) {
+                        $feature['gate_entered_at'] = $now;
+                    }
                     break;
                 case 'debugging.required': $feature['state'] = 'debugging_required';
                     break;
@@ -5432,6 +5444,12 @@ function runControlled(array $arguments): void
         $now = microtime(true);
         if ($now - $lastHeartbeatAt >= $heartbeatInterval) {
             $heartbeatSequence++;
+            // Compute gate_age when feature is in awaiting_gates
+            $gateAge = null;
+            if (($feature['state'] ?? null) === 'awaiting_gates'
+                && isset($feature['gate_entered_at'])) {
+                $gateAge = (int) floor($now - $feature['gate_entered_at']);
+            }
             $heartbeatFacts = [
                 'pid' => $pid,
                 'process_tree' => $processSnapshot,
@@ -5440,11 +5458,28 @@ function runControlled(array $arguments): void
                 'stderr_bytes' => $stderrBytes,
                 'idle_seconds' => (int) floor($now - $lastActivityAt),
                 'child_running' => (bool) ($status['running'] ?? false),
+                'position' => is_array($feature['gates'] ?? null)
+                    ? count(array_filter($feature['gates'], fn($v) => $v === 'passed'))
+                    : 0,
+                'eta_seconds' => isset($feature['gate_entered_at'])
+                    ? max(0, (int) ($feature['gate_stall_after'] ?? 60) - $gateAge)
+                    : null,
+                'gate_age' => $gateAge,
             ];
             withLock(function () use ($arguments, $feature, $heartbeatFacts): void {
                 appendEvent(eventContext($arguments, $feature, 'command.heartbeat', 'Heartbeat do processo controlado', $heartbeatFacts));
             });
             $lastHeartbeatAt = $now;
+            // Emit telemetry.activity with sanitized activity data
+            $activityFacts = [
+                'activity_preview' => sanitize($stdoutPreview),
+                'elapsed' => (int) floor($now - $lastActivityAt),
+                'idle_seconds' => (int) floor($now - $lastActivityAt),
+                'phase' => $feature['state'] ?? 'pending',
+            ];
+            withLock(function () use ($arguments, $feature): void {
+                appendEvent(eventContext($arguments, $feature, 'telemetry.activity', 'Atividade sanitizada do processo controlado', $activityFacts));
+            });
         }
 
         if (! ($status['running'] ?? false)) {
