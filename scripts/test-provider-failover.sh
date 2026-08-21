@@ -271,7 +271,7 @@ for entry in "${NEGATIVE_POLICY[@]}"; do
   ok "execution_policy inválida rejeitada ($label)"
 done
 
-echo '== Compatibilidade do ledger (1.0.0/1.1.0 lidos, 1.2.0 rejeitado) =='
+echo '== Compatibilidade do ledger (1.0.0/1.1.0/1.2.0 lidos, 1.4.0 rejeitado) =='
 
 project="$TMP/project"
 mkdir -p "$project/.ralph" "$project/.opencode/agents"
@@ -286,22 +286,22 @@ git -C "$project" add .
 git -C "$project" commit -qm base
 
 control init --workflow wf_failover --manifest workflow.json >/dev/null
-ok 'workflow manifest 1.0.0 aceito pelo binário novo (ledger 1.2.0)'
+ok 'workflow manifest 1.0.0 aceito pelo binário novo (ledger 1.3.0)'
 
 status="$(control status --workflow wf_failover)"
 printf '%s' "$status" | grep -q 'wf_failover' || fail 'status não leu o ledger inicializado'
-ok 'binário novo lê o ledger 1.2.0'
+ok 'binário novo lê o ledger 1.3.0'
 
-# Injeta um evento com schema 1.3.0 (tipos ainda não existem) e prova que o
+# Injeta um evento com schema 1.4.0 (tipos ainda não existem) e prova que o
 # leitor rejeita antes de qualquer transição. O evento é anexado fora da cadeia
 # de hash de propósito: o validateEventShape falha antes da hash chain.
 LEDGER="$project/.git/ralph-control/events.jsonl"
-printf '%s\n' '{"schema_version":"1.3.0","type":"provider.future_event","event_id":"evt_failover_fake","workflow_id":"wf_failover","feature_key":"FEATURE-FAILOVER","attempt":1,"lease_token_hash":"none","timestamp":"2026-08-16T00:00:00Z","actor":{"type":"fixture"},"correlation_id":"c","causation_id":"c","idempotency_key":"fake-1.3.0","summary":"evento futuro","repository":{},"evidence":{},"facts":{},"prev_event_hash":"GENESIS","event_hash":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}' >> "$LEDGER"
+printf '%s\n' '{"schema_version":"1.4.0","type":"provider.future_event","event_id":"evt_failover_fake","workflow_id":"wf_failover","feature_key":"FEATURE-FAILOVER","attempt":1,"lease_token_hash":"none","timestamp":"2026-08-16T00:00:00Z","actor":{"type":"fixture"},"correlation_id":"c","causation_id":"c","idempotency_key":"fake-1.4.0","summary":"evento futuro","repository":{},"evidence":{},"facts":{},"prev_event_hash":"GENESIS","event_hash":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}' >> "$LEDGER"
 
 reject_exit=0
 control status --workflow wf_failover >/dev/null 2>&1 || reject_exit=$?
-[ "$reject_exit" -ne 0 ] || fail 'ledger aceitou evento schema 1.3.0 (deveria falhar fechado)'
-ok 'evento 1.3.0 rejeitado (fail-closed sem leitor compatível)'
+[ "$reject_exit" -ne 0 ] || fail 'ledger aceitou evento schema 1.4.0 (deveria falhar fechado)'
+ok 'evento 1.4.0 rejeitado (fail-closed sem leitor compatível)'
 
 echo '== Regressão legado: workflow sem execution_policy =='
 
@@ -310,13 +310,13 @@ echo '== Regressão legado: workflow sem execution_policy =='
 # ledger de eventos continua sendo gravado no schema 1.2.0 vigente.
 wf_json="$(cat "$project/.git/ralph-control/workflow.json")"
 printf '%s' "$wf_json" | grep -q 'execution_policy' && fail 'execution_policy materializada sem opt-in'
-grep -q '"schema_version":"1.2.0"' "$project/.git/ralph-control/events.jsonl" || fail 'ledger sem schema_version 1.2.0'
-ok 'workflow sem opt-in não materializa execution_policy (ledger 1.2.0)'
+grep -q '"schema_version":"1.3.0"' "$project/.git/ralph-control/events.jsonl" || fail 'ledger sem schema_version 1.3.0'
+ok 'workflow sem opt-in não materializa execution_policy (ledger 1.3.0)'
 
 echo '== Validação PHP do v2 no controlador (importação real) =='
 
-# Remove o evento 1.3.0 injetado para não contaminar o run seguinte.
-grep -v '"schema_version":"1.3.0"' "$LEDGER" > "$TMP/events-clean.jsonl"
+# Remove o evento 1.4.0 injetado para não contaminar o run seguinte.
+grep -v '"schema_version":"1.4.0"' "$LEDGER" > "$TMP/events-clean.jsonl"
 mv "$TMP/events-clean.jsonl" "$LEDGER"
 
 # Fake ralph que publica um runner-result v2 (codex usage_limited) no lugar do
