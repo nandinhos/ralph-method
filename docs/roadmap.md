@@ -1,5 +1,19 @@
 # Roadmap do Ralph Method
 
+## Em curso — Trace Cockpit (`feat/trace-cockpit`)
+
+Camada de visibilidade ao vivo, somente leitura. Não entra no núcleo
+portátil. Gatilho de extração e limites: [ADR-0022](adr/0022-cockpit-somente-leitura.md).
+
+- [x] scaffold Laravel 13 em `apps/cockpit/` com Docker, Postgres e Reverb;
+- [x] ingestor incremental (feedback JSONL + ledger + `ralph-monitor`);
+- [x] Livewire da visão Tudo fiel ao `.dc.html`;
+- [x] Echo ao vivo + visões Eventos e Gates;
+- [x] Pest isolado do cockpit e prova de que `ci-portable.sh` ignora o app;
+- [ ] prova de campo com bloco Cursor e browser no hero flow
+  ([`.spec/features/100-trace-cockpit-hero/`](../.spec/features/100-trace-cockpit-hero/);
+  FEATURE-099 permanece smoke de contrato).
+
 ## Entrega concluída — engine OpenCode (`v0.4.0`)
 
 O trabalho foi executado isoladamente na branch `feat/opencode-engine` e

@@ -22,7 +22,7 @@
 #   ./ralph.sh [opcoes] [caminho-do-arquivo]
 #
 # Opcoes:
-#   --engine codex|claude|opencode|agy engine de implementacao (default: codex)
+#   --engine codex|claude|opencode|agy|cursor engine de implementacao (default: primary_runner ou codex)
 #   --from N                 comeca na fase N (limpa do progresso as fases >= N)
 #   --keep-going             continua apos uma fase falhar (default: para)
 #   --max-cycles N           ciclos de correcao por fase (default: 3)
@@ -160,6 +160,7 @@ AGY_PRINT_TIMEOUT="${RALPH_AGY_PRINT_TIMEOUT:-30m}"
 CURSOR_MODEL="${RALPH_CURSOR_MODEL:-}"
 CURSOR_TIMEOUT="${RALPH_CURSOR_TIMEOUT:-1800}"
 CURSOR_VERIFY_MODE="${RALPH_CURSOR_VERIFY_MODE:-ask}"
+CURSOR_CLI="${RALPH_CURSOR_CLI:-}"
 ENGINE_RESULT_FILE=""
 ADAPTER_SURFACE_FINGERPRINT=""
 
@@ -178,6 +179,7 @@ export RALPH_AGY_PRINT_TIMEOUT="$AGY_PRINT_TIMEOUT"
 export RALPH_CURSOR_MODEL="$CURSOR_MODEL"
 export RALPH_CURSOR_TIMEOUT="$CURSOR_TIMEOUT"
 export RALPH_CURSOR_VERIFY_MODE="$CURSOR_VERIFY_MODE"
+export RALPH_CURSOR_CLI="$CURSOR_CLI"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -662,8 +664,8 @@ resolve_test_cmd() {
 }
 
 preflight_checks() {
-  if [[ "$ENGINE" != "codex" && "$ENGINE" != "claude" && "$ENGINE" != "opencode" && "$ENGINE" != "agy" ]]; then
-    fail "Engine invalida: $ENGINE. Use 'codex', 'claude', 'opencode' ou 'agy'."
+  if [[ "$ENGINE" != "codex" && "$ENGINE" != "claude" && "$ENGINE" != "opencode" && "$ENGINE" != "agy" && "$ENGINE" != "cursor" ]]; then
+    fail "Engine invalida: $ENGINE. Use 'codex', 'claude', 'opencode', 'agy' ou 'cursor'."
     exit 1
   fi
 
@@ -1266,19 +1268,22 @@ publish_runner_result_v2() {
   EXECUTION_ID="$execution_id" \
   RETRY_AT="$retry_at" \
   EVIDENCE_HASH="$evidence_hash" \
-  RUNNER_VERSION="${CODEX_RUNNER_VERSION:-unknown}" \
-  CODEX_MODEL="${CODEX_MODEL:-}" \
+  RUNNER="$ENGINE" \
+  RUNNER_VERSION="${CODEX_RUNNER_VERSION:-${CURSOR_RUNNER_VERSION:-unknown}}" \
+  REQUESTED_MODEL="${CODEX_MODEL:-${CURSOR_MODEL:-${OPENCODE_MODEL:-${AGY_MODEL:-}}}}" \
   CLASSIFIER_SOURCE="$CLASSIFIER_SOURCE" \
   python3 - <<'PY' > "$result_file"
 import json
 import os
 
-model = os.environ.get("CODEX_MODEL", "") or None
+engine = os.environ.get("RUNNER", "codex")
+model = os.environ.get("REQUESTED_MODEL", "") or None
+schema = "2.0.0" if engine in ("codex", "claude") else "1.2.0"
 result = {
-    "schema_version": "2.0.0",
-    "runner": "codex",
+    "schema_version": schema,
+    "runner": engine,
     "runner_version": os.environ.get("RUNNER_VERSION", "unknown"),
-    "provider": "codex",
+    "provider": engine,
     "requested_model": model,
     "effective_model": model,
     "identity_status": "declared",
@@ -1302,13 +1307,11 @@ result = {
     "permission_policy_status": "not_required",
     "verification_agent": None,
     "error_summary": "limite de uso confirmado",
-    # O hash da evidência entra como referência no artifact_refs, nunca o texto
-    # bruto nem um campo fora do contrato v2.
     "artifact_refs": [
-        "artifact_" + os.environ["FEATURE_KEY"] + "_codex_stderr",
+        "artifact_" + os.environ["FEATURE_KEY"] + "_" + engine + "_stderr",
         "evidence_sha256:" + os.environ.get("EVIDENCE_HASH", ""),
     ],
-    "profile": "codex",
+    "profile": engine,
     "failure_domain": None,
     "failure_domain_status": "declared",
     "failure_domain_source": "profile",

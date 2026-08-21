@@ -184,7 +184,13 @@ Por padrão, o loop grava JSONL local em:
 .git/ralph-control/feedback/events.jsonl
 ```
 
-Para exibir o fluxo na tela do orquestrador, use:
+O consumidor visual previsto nesta branch é o Trace Cockpit
+([`trace-cockpit.md`](trace-cockpit.md)): ingere o JSONL, o ledger e o
+snapshot do monitor, projeta em Postgres e transmite no Reverb. Continua
+sem autoridade de gate; a única mutação permitida é `supervise` após
+preflight verde.
+
+Para exibir o fluxo na tela do orquestrador via CLI, use:
 
 ```bash
 RALPH_FEEDBACK_STDOUT=1 scripts/ralph.sh

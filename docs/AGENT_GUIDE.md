@@ -709,6 +709,15 @@ Depois de executar `plan --provider auto --verify-providers`, o agente deve
 seguir uma decisão determinística. Não escolha um provider pela preferência do
 modelo ou por uma mensagem textual do CLI; use os campos do plano.
 
+**Prioridade no `--provider auto`:** o detector prioriza o harness nativo
+presente no checkout (`.cursor/` → Cursor, `.codex/` → Codex, `.claude/` →
+Claude, `.opencode/` → OpenCode). Projetos Cursor com CLI `agent` funcional
+devem obter `selected_provider=cursor`, não Codex. O `ralph-control` usa
+`orchestration.primary_runner` de `.ralph/method.json` quando `--engine` não é
+passado. Failover para outro provider exige `execution_policy` com
+`explicit_failover` no workflow (cadeia inclui `cursor` e `agy` desde v0.10);
+sem política, falha de capacidade não troca runner silenciosamente.
+
 | Resultado do plano | Configuração correta | Próxima ação |
 |---|---|---|
 | `selected_provider=codex` e `adapter_enabled=true` | runner nativo Codex; perfil `.ralph/codex.env` | aplicar e executar pelo loop |
@@ -767,7 +776,10 @@ salve credenciais ou a saída integral em prompt, ledger ou documentação.
   key). O verify v1 é declarado (`--mode ask`, `permission_policy_status=
   declared`, hash `null`); o preflight do adapter reprova `verified`. Valide com
   `adapters/cursor/runner.sh preflight --mode verify --repo-root
-  "$PROJECT_ROOT"`.
+  "$PROJECT_ROOT"`. **Campo opt-in** (fora da CI): autentique com `agent login`
+  e execute `RALPH_CURSOR_FIELD=1 bash scripts/test-cursor-field.sh` — exige
+  consentimento explícito e sessão autenticada; comprova impl + verify declarado
+  com terminal `result` e árvore Git inalterada.
 - **Hermes:** não configure execução nesta versão. A presença da CLI não
   implica adapter; o agente deve manter `needs_review` ou seguir o backlog.
 

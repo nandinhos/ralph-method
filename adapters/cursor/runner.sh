@@ -35,6 +35,17 @@ cursor_cli() {
   fi
 }
 
+ensure_cursor_home() {
+  if [ -n "${HOME:-}" ]; then
+    return 0
+  fi
+  if [ -n "${USER:-}" ] && [ -d "/home/${USER}" ]; then
+    export HOME="/home/${USER}"
+    return 0
+  fi
+  return 1
+}
+
 cursor_cli_available() {
   local cli
   cli="$(cursor_cli)"
@@ -46,6 +57,7 @@ cursor_cli_available() {
 }
 
 version() {
+  ensure_cursor_home || die 'HOME ausente para executar a CLI Cursor'
   local cli output
   cli="$(cursor_cli)"
   output="$("$cli" --version 2>&1)" || die 'não foi possível obter a versão do Cursor'
@@ -73,6 +85,7 @@ preflight() {
   if ! cursor_cli_available; then
     die 'CLI do Cursor não encontrada (defina RALPH_CURSOR_CLI ou instale agent/cursor-agent)'
   fi
+  ensure_cursor_home || die 'HOME ausente para executar a CLI Cursor'
   command -v php >/dev/null 2>&1 || die 'PHP não encontrado'
   [ -f "$PARSER" ] || die 'parser cursor ausente'
   [[ "$mode" == impl || "$mode" == verify ]] || die "modo inválido: $mode"

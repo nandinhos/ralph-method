@@ -1,0 +1,72 @@
+{
+  "schema_version": "1.0.0",
+  "workflow_id": "wf_trace_cockpit_hero",
+  "plan_file": ".spec/features/100-trace-cockpit-hero/PLAN.md",
+  "test_command": "cd apps/cockpit && php artisan test",
+  "knowledge_policy": {
+    "mode": "non_blocking"
+  },
+  "execution_policy": {
+    "schema_version": "1.0.0",
+    "provider_strategy": "explicit_failover",
+    "provider_chain": [
+      {
+        "runner": "cursor",
+        "profile": "cursor",
+        "required_failure_domain_status": "declared"
+      },
+      {
+        "runner": "opencode",
+        "profile": "opencode",
+        "required_failure_domain_status": "observed"
+      },
+      {
+        "runner": "codex",
+        "profile": "codex",
+        "required_failure_domain_status": "observed"
+      }
+    ],
+    "failover": {
+      "eligible_reasons": ["provider_usage_limited"],
+      "short_wait_threshold_seconds": 120,
+      "unknown_reset_cooldown_seconds": 1800,
+      "max_switches_per_feature": 2,
+      "max_no_progress_seconds": 21600,
+      "when_chain_exhausted": "capacity_wait_then_recovery"
+    }
+  },
+  "features": [
+    {
+      "feature_key": "FEATURE-100A-CURSOR-FIELD",
+      "title": "Campo opt-in Cursor (BL-0004)",
+      "position": 1,
+      "input_file": ".spec/features/100-trace-cockpit-hero/PHASES.md",
+      "source_phase": "1",
+      "status": "pending"
+    },
+    {
+      "feature_key": "FEATURE-100B-COCKPIT-SURFACES",
+      "title": "Superfícies v1 com dados reais",
+      "position": 2,
+      "input_file": ".spec/features/100-trace-cockpit-hero/PHASES.md",
+      "source_phase": "2",
+      "status": "pending"
+    },
+    {
+      "feature_key": "FEATURE-100C-COCKPIT-HERO-FLOW",
+      "title": "Hero flow browser ao vivo",
+      "position": 3,
+      "input_file": ".spec/features/100-trace-cockpit-hero/PHASES.md",
+      "source_phase": "3",
+      "status": "pending"
+    },
+    {
+      "feature_key": "FEATURE-100D-COCKPIT-RELEASE",
+      "title": "Adversarial, relatório e fechamento do backlog",
+      "position": 4,
+      "input_file": ".spec/features/100-trace-cockpit-hero/PHASES.md",
+      "source_phase": "4",
+      "status": "pending"
+    }
+  ]
+}

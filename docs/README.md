@@ -23,6 +23,10 @@ reports/
   → evidências numeradas de validações e releases
 roadmap.md + backlog.md
   → próximos passos e itens adiados
+design/
+  → mockup canônico do Trace Cockpit
+prd/
+  → requisitos de adapters e do cockpit
 ```
 
 ## Para usuários

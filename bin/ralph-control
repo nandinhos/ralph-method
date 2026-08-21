@@ -935,9 +935,16 @@ function validateExecutionPolicy(?array $policy): array
         $runner = $member['runner'] ?? null;
         $profile = $member['profile'] ?? null;
         $required = $member['required_failure_domain_status'] ?? null;
-        if (! in_array($runner, ['codex', 'claude', 'opencode'], true)
-            || ! is_string($profile) || $profile === ''
-            || $required !== 'observed') {
+        $requiredByRunner = [
+            'codex' => 'observed',
+            'claude' => 'observed',
+            'opencode' => 'observed',
+            'cursor' => 'declared',
+            'agy' => 'declared',
+        ];
+        if (! is_string($profile) || $profile === ''
+            || ! isset($requiredByRunner[$runner])
+            || $required !== $requiredByRunner[$runner]) {
             fail('execution_policy com membro de cadeia inválido no índice '.$index);
         }
         if (isset($seen[$runner])) {
@@ -2585,7 +2592,7 @@ function supervisorStartRun(array $arguments, string $workflowId, string $featur
         .' --feature '.escapeshellarg($featureKey)
         .' --lease '.escapeshellarg($lease)
         .' --heartbeat-interval '.escapeshellarg((string) $heartbeatInterval);
-    $engine = is_string($runnerOverride) && $runnerOverride !== '' ? $runnerOverride : (string) ($arguments['engine'] ?? '');
+    $engine = is_string($runnerOverride) && $runnerOverride !== '' ? $runnerOverride : resolveEngine($arguments);
     if ($engine !== '') {
         $runCommand .= ' --engine '.escapeshellarg($engine);
     }
@@ -5069,10 +5076,126 @@ function singleFeatureInput(array $workflow, array $feature, int $attempt): stri
     return $path;
 }
 
+function resolveEngine(array $arguments): string
+{
+    $requested = $arguments['engine'] ?? null;
+    if (is_string($requested) && trim($requested) !== '') {
+        return trim($requested);
+    }
+
+    global $root;
+    $methodPath = $root.'/.ralph/method.json';
+    if (is_file($methodPath)) {
+        try {
+            $method = json_decode((string) file_get_contents($methodPath), true, 512, JSON_THROW_ON_ERROR);
+        } catch (JsonException) {
+            $method = null;
+        }
+        $runner = is_array($method) ? ($method['orchestration']['primary_runner'] ?? null) : null;
+        if (is_string($runner) && $runner !== '') {
+            return $runner;
+        }
+    }
+
+    return 'codex';
+}
+
+/** @return array<string, string> */
+function engineProfileEnvironment(string $engine): array
+{
+    global $root;
+    $profile = $root.'/.ralph/'.$engine.'.env';
+    if (! is_file($profile)) {
+        return normalizeExecutorEnvironment([], $engine);
+    }
+    $vars = [];
+    foreach (file($profile, FILE_IGNORE_NEW_LINES) ?: [] as $line) {
+        $line = trim($line);
+        if ($line === '' || str_starts_with($line, '#')) {
+            continue;
+        }
+        if (! str_contains($line, '=')) {
+            continue;
+        }
+        [$key, $value] = explode('=', $line, 2);
+        $key = trim($key);
+        $value = trim($value, " \t\"'");
+        if ($key !== '') {
+            $vars[$key] = $value;
+        }
+    }
+
+    return normalizeExecutorEnvironment($vars, $engine);
+}
+
+/** @param array<string, string> $vars */
+function normalizeExecutorEnvironment(array $vars, string $engine): array
+{
+    $home = trim((string) ($vars['HOME'] ?? getenv('HOME') ?: ''));
+    if ($home === '' && function_exists('posix_getpwuid')) {
+        $account = posix_getpwuid(posix_getuid());
+        if (is_array($account)) {
+            $home = trim((string) ($account['dir'] ?? ''));
+        }
+    }
+    if ($home !== '') {
+        $vars['HOME'] = $home;
+        $extra = array_values(array_filter([
+            $home.'/.local/bin',
+            $home.'/bin',
+        ], static fn (string $dir): bool => is_dir($dir)));
+        $path = $vars['PATH'] ?? getenv('PATH') ?: '';
+        foreach ($extra as $dir) {
+            if ($dir !== '' && ! str_contains(':'.$path.':', ':'.$dir.':')) {
+                $path = $path === '' ? $dir : $dir.':'.$path;
+            }
+        }
+        if ($path !== '') {
+            $vars['PATH'] = $path;
+        }
+    }
+
+    if ($engine === 'cursor') {
+        $cli = trim((string) ($vars['RALPH_CURSOR_CLI'] ?? ''));
+        if ($cli === '') {
+            $cli = resolveCursorCli($home, $vars['PATH'] ?? getenv('PATH') ?: '');
+        }
+        if ($cli !== '') {
+            $resolved = realpath($cli);
+            $vars['RALPH_CURSOR_CLI'] = $resolved !== false ? $resolved : $cli;
+        }
+    }
+
+    return $vars;
+}
+
+function resolveCursorCli(string $home, string $path): string
+{
+    $candidates = [];
+    if ($home !== '') {
+        $candidates[] = $home.'/.local/bin/agent';
+        $candidates[] = $home.'/.local/bin/cursor-agent';
+    }
+    foreach (explode(':', $path) as $dir) {
+        if ($dir === '') {
+            continue;
+        }
+        $candidates[] = $dir.'/agent';
+        $candidates[] = $dir.'/cursor-agent';
+    }
+    foreach ($candidates as $candidate) {
+        if (is_file($candidate) && is_executable($candidate)) {
+            return $candidate;
+        }
+    }
+
+    return '';
+}
+
 function configuredRalph(array $arguments): string
 {
     global $root;
-    $engine = (string) ($arguments['engine'] ?? 'codex');
+    $engine = resolveEngine($arguments);
     if (! in_array($engine, ['codex', 'claude', 'opencode', 'agy', 'cursor'], true)) {
         fail('engine inválido; use codex, claude, opencode, agy ou cursor');
     }
@@ -5105,7 +5228,7 @@ function runControlled(array $arguments): void
     $workflowId = required($arguments, 'workflow');
     $featureKey = required($arguments, 'feature');
     $command = $arguments['command'] ?? null;
-    $engine = (string) ($arguments['engine'] ?? 'codex');
+    $engine = resolveEngine($arguments);
     $generatedRalph = false;
     $verificationCommand = null;
     $verificationProof = getenv('RALPH_OPENCODE_VERIFY_POLICY_PROOF');
@@ -5203,7 +5326,7 @@ function runControlled(array $arguments): void
     putenv('RALPH_OPENCODE_VERIFY_AGENT');
     unset($_ENV['RALPH_OPENCODE_VERIFY_POLICY_PROOF'], $_ENV['RALPH_OPENCODE_VERIFY_AGENT']);
 
-    $environment = array_merge((array) getenv(), $_ENV, [
+    $environment = array_merge((array) getenv(), $_ENV, engineProfileEnvironment($engine), [
         // O executor recebe somente identificadores públicos da execução para
         // feedback, logs e seleção da feature. Eles não são capability de
         // escrita: lease, credenciais e proofs continuam fora do ambiente.

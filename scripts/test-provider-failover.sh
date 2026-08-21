@@ -261,7 +261,7 @@ NEGATIVE_POLICY=(
   'estratégia desconhecida|data["provider_strategy"] = "auto"'
   'when_chain_exhausted inválido|data["failover"]["when_chain_exhausted"] = "retry_forever"'
   'runner não suportado|data["provider_chain"][1]["runner"] = "hermes"'
-  'required_failure_domain_status não observado|data["provider_chain"][0]["required_failure_domain_status"] = "declared"'
+  'required_failure_domain_status inválido|data["provider_chain"][0]["required_failure_domain_status"] = "bogus"'
 )
 for entry in "${NEGATIVE_POLICY[@]}"; do
   label="${entry%%|*}"

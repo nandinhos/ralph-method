@@ -144,6 +144,20 @@ function observedModel(array $events): ?string
     return null;
 }
 
+function cursorModelKey(string $value): string
+{
+    $value = strtolower(trim($value));
+    $value = preg_replace('/[_-]+/', ' ', $value) ?? $value;
+    $value = preg_replace('/\s+/', ' ', $value) ?? $value;
+
+    return $value;
+}
+
+function cursorModelsMatch(string $requested, string $observed): bool
+{
+    return cursorModelKey($requested) === cursorModelKey($observed);
+}
+
 $arguments = array_slice($argv, 1);
 $options = parserOptions($arguments);
 $eventsPath = parserRequired($options, 'events');
@@ -233,8 +247,13 @@ if ($errorSummary === null && $writeInVerify) {
     $status = 'failed';
 }
 if ($errorSummary === null && $exitCode !== 0) {
-    $errorSummary = "Cursor terminou com exit code {$exitCode}";
-    $status = 'failed';
+    if ($exitCode === 124 || $exitCode === 137) {
+        $errorSummary = "Cursor terminou com timeout (exit {$exitCode})";
+        $status = 'usage_limited';
+    } else {
+        $errorSummary = "Cursor terminou com exit code {$exitCode}";
+        $status = 'failed';
+    }
 }
 if ($errorSummary === null && count($events) === 0) {
     $errorSummary = 'sem eventos observados';
@@ -244,7 +263,7 @@ if ($errorSummary === null && ! $terminal) {
     $errorSummary = 'sem evento terminal result';
     $status = 'failed';
 }
-if ($errorSummary === null && $modelObserved !== null && $modelObserved !== $requestedModel) {
+if ($errorSummary === null && $modelObserved !== null && ! cursorModelsMatch($requestedModel, $modelObserved)) {
     $errorSummary = 'modelo efetivo divergente do solicitado';
     $status = 'failed';
 }
@@ -279,6 +298,9 @@ $result = [
     'error_summary' => $errorSummary,
     'artifact_refs' => [basename($sanitizedPath)],
 ];
+$result['reason_code'] = $status === 'usage_limited' ? 'provider_usage_limited' : null;
+$result['classification_confidence'] = $status === 'usage_limited' ? 'high' : null;
+$result['classifier_source'] = $status === 'usage_limited' ? 'cursor_parser_v1' : null;
 
 // Sanitiza os eventos para persistência (sem prompts/respostas completas).
 $sanitized = [];

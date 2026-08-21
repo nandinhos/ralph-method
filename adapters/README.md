@@ -87,3 +87,7 @@ A verificação v1 é declarada: `verify --mode ask`, com
 verify. O parser normaliza `--output-format stream-json` e falha fechado em
 JSONL inválido, zero eventos, múltiplos eventos `result`, modelo divergente e
 escrita em verify, além de sanitizar eventos persistidos.
+
+A prova direta isolada pode ser repetida com
+`RALPH_CURSOR_FIELD=1 bash scripts/test-cursor-field.sh`; ela exige sessão local
+autenticada (`agent login`) e não faz parte da CI sem credenciais.

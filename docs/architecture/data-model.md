@@ -23,6 +23,7 @@
 | feedback do loop | `.git/ralph-control/feedback/events.jsonl` | `ralph.sh` |
 | métricas derivadas | stdout de `bin/ralph-metrics` | consumidor do projeto/orquestrador, sem persistência implícita |
 | perfis de execução | `.ralph/codex.env`, `.ralph/claude.env`, `.ralph/opencode.env`, `.ralph/agy.env`, `.ralph/cursor.env` | instalador/usuário; nunca contêm credenciais |
+| projeção do cockpit | Postgres em `apps/cockpit/` | observador; reconstruível dos JSONL; nunca fonte de transição |
 
 ## Modelo proposto para failover controlado
 

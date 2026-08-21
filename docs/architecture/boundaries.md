@@ -7,6 +7,7 @@
 | `ralph-monitor` | observar processos e publicar snapshot | aprovar, retry ou liberar lease |
 | `ralph.sh` | criar sessões e executar fases | concluir por parsing de log |
 | canal de feedback | publicar fatos sanitizados ao consumidor externo | alterar estado, gate, lease ou fila |
+| cockpit (`apps/cockpit/`) | projetar fatos ao vivo; disparar `supervise` após preflight | aprovar, retry, recover, advance, escolher provider ou gravar ledger |
 | relay do `ralph-control` | retransmitir feedback durante o bloco | interpretar feedback como aprovação |
 | adaptador provider | converter saída externa para contrato trace e reportar política comprovada | escrever ledger ou alterar código |
 | `ralph-init` | detectar contexto, instalar/remover bundle com ownership e executar evolução explícita com backup/rollback | copiar credenciais, remover histórico, importar runtime desconhecido, sobrescrever arquivos sem ownership ou liberar rollback com drift |

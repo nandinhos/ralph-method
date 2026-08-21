@@ -628,6 +628,7 @@ function detectProject(string $root, bool $verifyProviders = false): array
     }
 
     $signals = [
+        'cursor' => is_dir($root.'/.cursor') || is_file($root.'/.cursor/hooks.json'),
         'codex' => is_dir($root.'/.codex') || is_dir($root.'/.codex-plugin'),
         'claude' => is_dir($root.'/.claude') || is_dir($root.'/.claude-plugin') || is_file($root.'/CLAUDE.md'),
         'opencode' => is_dir($root.'/.opencode') || is_file($root.'/opencode.json') || is_file($root.'/opencode.yaml') || is_file($root.'/opencode.toml'),
@@ -653,6 +654,7 @@ function detectProject(string $root, bool $verifyProviders = false): array
     ];
 
     return [
+        'project_root' => $root,
         'providers' => $providers,
         'verification' => [
             'requested' => $verifyProviders,
@@ -675,12 +677,13 @@ function selectProvider(array $detected, string $requested): ?string
 
         return $requested;
     }
-    foreach (providerOrder() as $candidate) {
+    $root = is_string($detected['project_root'] ?? null) ? $detected['project_root'] : '';
+    foreach (providerOrder($root) as $candidate) {
         if (($detected['harness_signals'][$candidate] ?? false) && ($detected['providers'][$candidate]['adapter_enabled'] ?? false)) {
             return $candidate;
         }
     }
-    foreach (providerOrder() as $candidate) {
+    foreach (providerOrder($root) as $candidate) {
         if ($detected['providers'][$candidate]['adapter_enabled'] ?? false) {
             return $candidate;
         }
@@ -690,16 +693,42 @@ function selectProvider(array $detected, string $requested): ?string
 }
 
 /** @return list<string> */
-function providerOrder(): array
+function providerOrder(string $root = ''): array
 {
-    return ['codex', 'claude', 'opencode', 'hermes', 'agy', 'cursor'];
+    $default = ['codex', 'claude', 'opencode', 'hermes', 'agy', 'cursor'];
+    if ($root === '') {
+        return $default;
+    }
+
+    $prioritized = [];
+    if (is_dir($root.'/.cursor') || is_file($root.'/.cursor/hooks.json')) {
+        $prioritized[] = 'cursor';
+    }
+    if (is_dir($root.'/.codex') || is_dir($root.'/.codex-plugin')) {
+        $prioritized[] = 'codex';
+    }
+    if (is_dir($root.'/.claude') || is_dir($root.'/.claude-plugin') || is_file($root.'/CLAUDE.md')) {
+        $prioritized[] = 'claude';
+    }
+    if (is_dir($root.'/.opencode') || is_file($root.'/opencode.json') || is_file($root.'/opencode.yaml') || is_file($root.'/opencode.toml')) {
+        $prioritized[] = 'opencode';
+    }
+    foreach ($default as $provider) {
+        if (! in_array($provider, $prioritized, true)) {
+            $prioritized[] = $provider;
+        }
+    }
+
+    return $prioritized;
 }
 
 /** @return list<string> */
 function providersWithStatus(array $detected, string $status): array
 {
+    $root = is_string($detected['project_root'] ?? null) ? $detected['project_root'] : '';
+
     return array_values(array_filter(
-        providerOrder(),
+        providerOrder($root),
         static fn (string $provider): bool => ($detected['providers'][$provider]['status'] ?? null) === $status
     ));
 }
@@ -707,8 +736,10 @@ function providersWithStatus(array $detected, string $status): array
 /** @return list<string> */
 function availableRunners(array $detected): array
 {
+    $root = is_string($detected['project_root'] ?? null) ? $detected['project_root'] : '';
+
     return array_values(array_filter(
-        providerOrder(),
+        providerOrder($root),
         static fn (string $provider): bool => ($detected['providers'][$provider]['adapter_enabled'] ?? false) === true
     ));
 }
@@ -1238,7 +1269,7 @@ function generatedProfiles(): array
         '.ralph/claude.env' => "# Gerado pelo Ralph Method; altere somente se quiser uma política local.\nRALPH_BIN=scripts/ralph.sh\nRALPH_VERIFY_MODEL=sonnet\n",
         '.ralph/opencode.env' => "# Gerado pelo Ralph Method; defina um modelo e uma prova read-only externa antes de executar.\nRALPH_BIN=scripts/ralph.sh\nRALPH_OPENCODE_MODEL=\nRALPH_OPENCODE_VARIANT=\nRALPH_OPENCODE_AGENT=\nRALPH_OPENCODE_AUTO=1\nRALPH_OPENCODE_PURE=1\nRALPH_OPENCODE_VERIFY_AGENT=ralph-review\nRALPH_OPENCODE_VERIFY_POLICY_PROOF=\nRALPH_VERIFY_MODEL=\n",
         '.ralph/agy.env' => "# Gerado pelo Ralph Method; verify exige Linux, bwrap e token OAuth local do agy.\nRALPH_BIN=scripts/ralph.sh\nRALPH_AGY_MODEL=\nRALPH_AGY_EFFORT=high\nRALPH_AGY_AGENT=\nRALPH_AGY_VERIFY_AGENT=ralph-review\nRALPH_AGY_PRINT_TIMEOUT=30m\nRALPH_VERIFY_MODEL=\n",
-        '.ralph/cursor.env' => "# Gerado pelo Ralph Method. Cursor e IDE com LLM embutido: auth e a sessao local da conta (sem API key). Defina o modelo explicitamente.\nRALPH_BIN=scripts/ralph.sh\nRALPH_CURSOR_MODEL=\nRALPH_CURSOR_TIMEOUT=1800\nRALPH_CURSOR_VERIFY_MODE=ask\nRALPH_VERIFY_MODEL=\n",
+        '.ralph/cursor.env' => "# Gerado pelo Ralph Method. Cursor e IDE com LLM embutido: auth e a sessao local da conta (sem API key). Defina o modelo explicitamente.\nRALPH_BIN=scripts/ralph.sh\n# Caminho absoluto recomendado; bootstrap preenche agent/cursor-agent quando detectado.\nRALPH_CURSOR_CLI=\nRALPH_CURSOR_MODEL=\nRALPH_CURSOR_TIMEOUT=1800\nRALPH_CURSOR_VERIFY_MODE=ask\nRALPH_VERIFY_MODEL=\n",
     ];
 }
 

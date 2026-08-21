@@ -17,9 +17,9 @@
         "required": ["runner", "profile", "required_failure_domain_status"],
         "additionalProperties": false,
         "properties": {
-          "runner": {"enum": ["codex", "claude", "opencode"]},
+          "runner": {"enum": ["codex", "claude", "opencode", "cursor", "agy"]},
           "profile": {"type": "string", "minLength": 1},
-          "required_failure_domain_status": {"const": "observed"}
+          "required_failure_domain_status": {"enum": ["observed", "declared"]}
         }
       }
     },

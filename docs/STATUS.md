@@ -5,7 +5,24 @@
 A versão publicada atual é `0.10.0`. Ela publica a **FEATURE-094** (failover
 controlado Codex → OpenCode) e a **FEATURE-098** (adapter Cursor) sobre a base
 `0.9.2`. A tag anotada `v0.10.0` aponta para o commit promovido, publicada em
-`origin/main`. A FEATURE-098 foi promovida sem campo opt-in real (a CLI
+`origin/main`.
+
+### Foco da branch `feat/trace-cockpit`
+
+A visibilidade operacional ainda é CLI (`ralph-monitor`, métricas, relatórios).
+Nesta branch o trabalho exclusivo é o **Trace Cockpit**: uma UI Laravel 13
+em `apps/cockpit/` (scaffold + ingestor + Livewire) que observa
+feedback JSONL, ledger e snapshot do monitor via Reverb, dispara
+`supervise` com preflight verde e, quando o orquestrador está travado,
+corre debug sistemático + recover no `ralph-control`. O diagnóstico
+lê stderr do supervisor e recusa novo disparo se o `plan_file`
+declarado não existir no checkout. Decisão:
+[`ADR-0022`](adr/0022-cockpit-somente-leitura.md) (emendas 2026-08-16). PRD:
+[`prd-trace-cockpit.md`](prd/prd-trace-cockpit.md). Design:
+[`docs/design/ralph-method-trace-design/`](design/ralph-method-trace-design/).
+O núcleo portátil não passa a depender de Laravel, Postgres ou Reverb.
+
+A FEATURE-098 foi promovida sem campo opt-in real (a CLI
 headless `agent`/`cursor-agent` ainda não está disponível nesta máquina); a
 prova real de inferência permanece uma política futura, separada e opt-in, no
 mesmo rito do `agy`. O relatório da promoção está em
@@ -317,6 +334,16 @@ de workflow e feature para manter feedback e artefatos correlacionados; leases,
 credenciais e proofs continuam fora do ambiente. O incidente está detalhado no
 [`incidente 0017`](incidents/0017-contexto-seguro-ausente-no-executor.md), com
 regressão reproduzida no `bin/check` do projeto-alvo e corrigida antes do aceite.
+
+Em campo (`refactor-radar`, workflow supervisionado), o fluxo supervisionado
+expôs o [`incidente 0018`](incidents/0018-bloco-deixa-arvore-suja-e-retry-trava.md):
+um bloco interrompido deixa a árvore suja, o preflight do `ralph.sh` aborta o
+retry ("Árvore de trabalho suja"), o auto-debug "verifica" com relatório
+genérico e o workflow trava em `recovery_required` — exigindo intervenção
+manual (validação/commit ou limpeza + `recover`) a cada ocorrência (fases 26,
+29, 31 e 33). Correção proposta no método: reconciliar árvore suja de bloco
+interrompido, re-executar o bloco quando o debug indica correção de código, e
+tornar o auto-debug fiel ao estado real.
 
 A regressão da entrega do detector legado (`FEATURE-093-REGRESSION-RELEASE`)
 foi concluída na branch `feat/detector-bc-legacy`: lint dos componentes

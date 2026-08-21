@@ -7,6 +7,8 @@
 | O transporte do prompt será por argumento? | `--file` foi comprovado; argumento permanece fora do contrato inicial | Ralph Method | se uma versão futura retirar `--file` |
 | Probe de geração real deve existir? | não nesta versão; probe seguro explícito usa diagnóstico local e não envia prompt | Ralph Method | política de custo/consentimento antes de uma versão futura |
 | Como oferecer verify `agy` fora de Linux? | manter adapter degradado fora de Linux; não substituir `bwrap` por confiança em `--mode plan` | Ralph Method | sandbox externo equivalente comprovado em campo |
+| O cockpit observa mais de um checkout ao mesmo tempo? | v1 = um `RALPH_PROJECT_ROOT` | Ralph Method | segundo checkout simultâneo (gatilho do ADR-0022) |
+| Auth no cockpit além de localhost? | bind `127.0.0.1`, sem login na v1 | Ralph Method | exposição fora da máquina local |
 
 Hermes permanece adiado sem prioridade. O `agy` foi reaberto pelo
 [`ADR-0017`](adr/0017-reabertura-agy-e-seam-comum-de-adapters.md); o suporte

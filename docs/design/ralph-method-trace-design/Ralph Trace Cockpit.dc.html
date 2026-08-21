@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  body { margin: 0; background: #060e12; }
+  a { color: #68e5db; text-decoration: none; } a:hover { color: #b9f55b; }
+  @keyframes rt-pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(185,245,91,.35), 0 0 14px rgba(185,245,91,.7); } 50% { box-shadow: 0 0 0 6px rgba(185,245,91,0), 0 0 20px rgba(185,245,91,.9); } }
+  @keyframes rt-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  @keyframes rt-sheen { 0% { transform: translateX(-120%); } 60%,100% { transform: translateX(320%); } }
+</style>
+</helmet>
+<div style="min-height: 100vh; color: #effaf7; font-family: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif; font-size: 14px; line-height: 1.5; letter-spacing: .01em; background-image: radial-gradient(circle at 82% -12%, rgba(104,229,219,.14), transparent 36rem), radial-gradient(circle at -8% 52%, rgba(169,139,255,.1), transparent 30rem), linear-gradient(rgba(173,219,213,.03) 1px, transparent 1px), linear-gradient(90deg, rgba(173,219,213,.03) 1px, transparent 1px); background-size: auto, auto, 44px 44px, 44px 44px; background-color: #060e12;">
+  <div style="width: min(1480px, calc(100% - 48px)); margin: 0 auto; padding: 26px 0 56px;">
+
+    <header style="display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 30px;">
+      <div style="display: flex; align-items: center; gap: 14px;">
+        <div style="position: relative; display: grid; place-items: center; width: 46px; height: 46px; border: 1px solid rgba(185,245,91,.55); border-radius: 14px; color: #b9f55b; background: linear-gradient(145deg, rgba(185,245,91,.18), rgba(104,229,219,.05)); box-shadow: 0 0 32px rgba(185,245,91,.16); font-size: 22px; font-weight: 700;">R
+          <div style="position: absolute; inset: 6px; border: 1px solid rgba(104,229,219,.4); border-radius: 10px; transform: rotate(45deg);"></div>
+        </div>
+        <div>
+          <p style="margin: 0 0 3px; color: #87a39f; font-size: 10px; font-weight: 600; letter-spacing: .2em; text-transform: uppercase;">Control plane · trace cockpit</p>
+          <div style="font-size: 17px; font-weight: 700; letter-spacing: .22em;">RALPH-<span style="color: #68e5db;">METHOD</span></div>
+        </div>
+      </div>
+      <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+        <div style="display: flex; align-items: center; gap: 8px; border: 1px solid rgba(185,245,91,.22); border-radius: 99px; padding: 8px 13px; color: #b9f55b; background: rgba(185,245,91,.07); font-size: 12px; font-weight: 600;">
+          <span style="width: 7px; height: 7px; border-radius: 50%; background: #b9f55b; animation: rt-pulse 2.2s ease-in-out infinite;"></span> execução saudável
+        </div>
+        <div style="display: flex; gap: 4px; border: 1px solid rgba(173,219,213,.14); border-radius: 12px; padding: 4px; background: rgba(255,255,255,.03);">
+          <button onClick="{{ setAll }}" style="border: 1px solid {{ fAll.bd }}; border-radius: 8px; padding: 7px 14px; color: {{ fAll.co }}; background: {{ fAll.bg }}; cursor: pointer; font: 600 12px 'Space Grotesk', sans-serif;">Tudo</button>
+        <button onClick="{{ setEventos }}" style="border: 1px solid {{ fEv.bd }}; border-radius: 8px; padding: 7px 14px; color: {{ fEv.co }}; background: {{ fEv.bg }}; cursor: pointer; font: 600 12px 'Space Grotesk', sans-serif;">Eventos</button>
+        <button onClick="{{ setGates }}" style="border: 1px solid {{ fGa.bd }}; border-radius: 8px; padding: 7px 14px; color: {{ fGa.co }}; background: {{ fGa.bg }}; cursor: pointer; font: 600 12px 'Space Grotesk', sans-serif;">Gates</button>
+        </div>
+        <button onClick="{{ doRefresh }}" style-hover="filter: brightness(1.08);" style="position: relative; overflow: hidden; border: 1px solid rgba(185,245,91,.45); border-radius: 10px; padding: 10px 16px; color: #071014; background: linear-gradient(135deg, #b9f55b, #8ee04f); cursor: pointer; font: 700 12.5px 'Space Grotesk', sans-serif; box-shadow: 0 6px 24px rgba(185,245,91,.22);">{{ refreshLabel }}</button>
+      </div>
+    </header>
+
+    <section style="display: grid; grid-template-columns: 1.38fr .62fr; gap: 18px; margin-bottom: 18px;">
+      <div style="position: relative; overflow: hidden; min-height: 240px; padding: 34px; border: 1px solid rgba(173,219,213,.12); border-radius: 22px; background: linear-gradient(160deg, rgba(19,40,46,.86), rgba(9,20,25,.93)); box-shadow: 0 24px 70px rgba(0,0,0,.35);">
+        <div style="position: absolute; right: -80px; bottom: -140px; width: 360px; height: 360px; border: 1px solid rgba(104,229,219,.16); border-radius: 50%; box-shadow: 0 0 0 26px rgba(104,229,219,.03), 0 0 0 52px rgba(104,229,219,.02), 0 0 0 78px rgba(104,229,219,.02);"></div>
+        <p style="margin: 0 0 12px; color: #87a39f; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; font-family: 'JetBrains Mono', monospace;">Workflow · wf_detector_bc_legacy_20260810_001</p>
+        <h1 style="max-width: 740px; margin: 0 0 12px; font-size: clamp(34px, 4vw, 62px); font-weight: 700; line-height: .97; letter-spacing: -.045em;">O desenvolvimento em <em style="color: #b9f55b; font-style: normal;">movimento.</em></h1>
+        <p style="max-width: 620px; margin: 0 0 26px; color: #87a39f; font-size: 15px; text-wrap: pretty;">Uma visão premium, somente leitura, para acompanhar features, gates, delegações e recuperação sem misturar apresentação com autoridade operacional.</p>
+        <div style="display: flex; align-items: center; gap: 28px; flex-wrap: wrap;">
+          <div>
+            <p style="margin: 0 0 5px; color: #87a39f; font-size: 10px; font-weight: 600; letter-spacing: .16em; text-transform: uppercase;">Branch</p>
+            <code style="border: 1px solid rgba(173,219,213,.14); border-radius: 6px; padding: 4px 8px; color: #68e5db; background: rgba(104,229,219,.07); font: 500 12px 'JetBrains Mono', monospace;">feat/detector-bc-legacy</code>
+          </div>
+          <div>
+            <p style="margin: 0 0 5px; color: #87a39f; font-size: 10px; font-weight: 600; letter-spacing: .16em; text-transform: uppercase;">Último evento</p>
+            <strong style="font-size: 14px; font-weight: 600;">{{ ultimoEvento }}</strong>
+          </div>
+          <div>
+            <p style="margin: 0 0 5px; color: #87a39f; font-size: 10px; font-weight: 600; letter-spacing: .16em; text-transform: uppercase;">Autoridade</p>
+            <strong style="font-size: 14px; font-weight: 600; color: #a98bff;">ralph-control · root</strong>
+          </div>
+        </div>
+      </div>
+      <div style="position: relative; display: grid; place-items: center; padding: 24px; border: 1px solid rgba(173,219,213,.12); border-radius: 22px; background: linear-gradient(160deg, rgba(19,40,46,.86), rgba(9,20,25,.93)); box-shadow: 0 24px 70px rgba(0,0,0,.35);">
+        <div style="position: relative; width: 196px; height: 196px; display: grid; place-items: center;">
+          <svg width="196" height="196" viewBox="0 0 196 196" style="position: absolute; inset: 0;">
+            <defs>
+              <linearGradient id="rtGrad" x1="0" y1="1" x2="1" y2="0">
+                <stop offset="0" stop-color="#68e5db"></stop>
+                <stop offset="1" stop-color="#b9f55b"></stop>
+              </linearGradient>
+            </defs>
+            <circle cx="98" cy="98" r="92" fill="none" stroke="rgba(104,229,219,.14)" stroke-width="1" stroke-dasharray="2 10"></circle>
+            <circle cx="98" cy="98" r="78" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="10"></circle>
+            <circle cx="98" cy="98" r="78" fill="none" stroke="url(#rtGrad)" stroke-width="10" stroke-linecap="round" stroke-dasharray="490.1" stroke-dashoffset="{{ ringOffset }}" transform="rotate(-90 98 98)" style="transition: stroke-dashoffset 1s ease; filter: drop-shadow(0 0 10px rgba(185,245,91,.4));"></circle>
+          </svg>
+          <div style="text-align: center;">
+            <strong style="display: block; font-size: 44px; font-weight: 700; line-height: 1; letter-spacing: -.05em;">{{ progressoLabel }}</strong>
+            <span style="color: #87a39f; font-size: 10px; letter-spacing: .2em; text-transform: uppercase;">workflow</span>
+          </div>
+        </div>
+        <p style="margin: 14px 0 0; color: #87a39f; font-size: 11px; font-family: 'JetBrains Mono', monospace;">attempt 5 · OpenCode</p>
+      </div>
+    </section>
+
+    <section style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 18px;">
+      <article style="padding: 18px 20px; border: 1px solid rgba(173,219,213,.12); border-radius: 18px; background: linear-gradient(160deg, rgba(19,40,46,.86), rgba(9,20,25,.93)); box-shadow: 0 24px 70px rgba(0,0,0,.35);">
+        <div style="display: flex; align-items: center; justify-content: space-between; color: #87a39f; font-size: 11px; letter-spacing: .1em; text-transform: uppercase;"><span>Features</span><span style="color: #b9f55b; font-family: 'JetBrains Mono', monospace;">+1</span></div>
+        <div style="margin: 8px 0 2px; font-size: 30px; font-weight: 700; letter-spacing: -.05em;">2 <small style="color: #87a39f; font-size: 16px; font-weight: 500;">/ 3</small></div>
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px;"><span style="color: #87a39f; font-size: 11px;">uma em execução</span><svg width="64" height="20" viewBox="0 0 64 20"><polyline points="0,16 10,14 20,15 30,10 40,11 52,6 64,4" fill="none" stroke="#68e5db" stroke-width="1.5"></polyline></svg></div>
+      </article>
+      <article style="padding: 18px 20px; border: 1px solid rgba(173,219,213,.12); border-radius: 18px; background: linear-gradient(160deg, rgba(19,40,46,.86), rgba(9,20,25,.93)); box-shadow: 0 24px 70px rgba(0,0,0,.35);">
+        <div style="display: flex; align-items: center; justify-content: space-between; color: #87a39f; font-size: 11px; letter-spacing: .1em; text-transform: uppercase;"><span>Gates verdes</span><span style="color: #b9f55b; font-family: 'JetBrains Mono', monospace;">5/5</span></div>
+        <div style="margin: 8px 0 2px; color: #b9f55b; font-size: 30px; font-weight: 700; letter-spacing: -.05em;">10</div>
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px;"><span style="color: #87a39f; font-size: 11px;">nas features liberadas</span><svg width="64" height="20" viewBox="0 0 64 20"><polyline points="0,17 12,15 24,12 36,12 48,7 64,3" fill="none" stroke="#b9f55b" stroke-width="1.5"></polyline></svg></div>
+      </article>
+      <article style="padding: 18px 20px; border: 1px solid rgba(173,219,213,.12); border-radius: 18px; background: linear-gradient(160deg, rgba(19,40,46,.86), rgba(9,20,25,.93)); box-shadow: 0 24px 70px rgba(0,0,0,.35);">
+        <div style="display: flex; align-items: center; justify-content: space-between; color: #87a39f; font-size: 11px; letter-spacing: .1em; text-transform: uppercase;"><span>Tempo ativo</span><span style="color: #68e5db;">ao vivo</span></div>
+        <div style="margin: 8px 0 2px; font-size: 30px; font-weight: 600; letter-spacing: -.02em; font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums;">{{ tempoAtivo }}</div>
+        <div style="color: #87a39f; font-size: 11px;">desde o início do workflow</div>
+      </article>
+      <article style="padding: 18px 20px; border: 1px solid rgba(173,219,213,.12); border-radius: 18px; background: linear-gradient(160deg, rgba(19,40,46,.86), rgba(9,20,25,.93)); box-shadow: 0 24px 70px rgba(0,0,0,.35);">
+        <div style="display: flex; align-items: center; justify-content: space-between; color: #87a39f; font-size: 11px; letter-spacing: .1em; text-transform: uppercase;"><span>Recovery</span><span style="color: #ffc76b;">atenção</span></div>
+        <div style="margin: 8px 0 2px; color: #ffc76b; font-size: 30px; font-weight: 700; letter-spacing: -.05em;">2</div>
+        <div style="color: #87a39f; font-size: 11px;">incidentes documentados</div>
+      </article>
+    </section>
+
+    <sc-if value="{{ showAll }}" hint-placeholder-val="{{ true }}">
+    <section style="display: grid; grid-template-columns: 1.16fr .84fr; gap: 18px; align-items: start;">
+      <div style="padding: 24px; border: 1px solid rgba(173,219,213,.12); border-radius: 22px; background: linear-gradient(160deg, rgba(19,40,46,.86), rgba(9,20,25,.93)); box-shadow: 0 24px 70px rgba(0,0,0,.35);">
+        <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 18px;">
+          <h2 style="margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -.02em;">Feature atual</h2>
+          <span style="color: #87a39f; font-size: 11px; font-family: 'JetBrains Mono', monospace;">attempt 5 · OpenCode</span>
+        </div>
+        <div style="position: relative; overflow: hidden; border: 1px solid rgba(104,229,219,.22); border-radius: 16px; padding: 18px; background: linear-gradient(135deg, rgba(104,229,219,.07), rgba(104,229,219,.02));">
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 15px;">
+            <span style="color: #68e5db; font-size: 11px; font-weight: 600; letter-spacing: .14em; font-family: 'JetBrains Mono', monospace;">FEATURE-092</span>
+            <span style="display: flex; align-items: center; gap: 8px; border: 1px solid rgba(185,245,91,.22); border-radius: 99px; padding: 5px 11px; color: #b9f55b; background: rgba(185,245,91,.07); font-size: 11px; font-weight: 600;"><span style="width: 6px; height: 6px; border-radius: 50%; background: #b9f55b; animation: rt-pulse 2.2s ease-in-out infinite;"></span> aguardando gates</span>
+          </div>
+          <div style="margin: 10px 0 16px; font-size: 19px; font-weight: 600; letter-spacing: -.02em;">Evoluir e restaurar diretório legado por hashes</div>
+          <div style="position: relative; height: 8px; overflow: hidden; border-radius: 99px; background: rgba(255,255,255,.08);">
+            <div style="width: {{ barWidth }}; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #68e5db, #b9f55b); box-shadow: 0 0 20px rgba(185,245,91,.35); transition: width 1s ease; position: relative; overflow: hidden;">
+              <div style="position: absolute; inset: 0; width: 40%; background: linear-gradient(90deg, transparent, rgba(255,255,255,.45), transparent); animation: rt-sheen 3.2s ease-in-out infinite;"></div>
+            </div>
+          </div>
+          <div style="display: flex; justify-content: space-between; margin-top: 10px; color: #87a39f; font-size: 11px;"><span>implementação concluída</span><strong style="color: #68e5db; font-family: 'JetBrains Mono', monospace;">{{ progressoLabel }}</strong></div>
+        </div>
+        <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 26px 0 14px;">
+          <h2 style="margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -.02em;">Sequência autorizada</h2>
+          <span style="color: #87a39f; font-size: 11px;">sem avanço manual</span>
+        </div>
+        <div style="display: grid; gap: 10px;">
+          <div style-hover="border-color: rgba(185,245,91,.35);" style="display: flex; align-items: center; gap: 12px; border: 1px solid rgba(173,219,213,.12); border-radius: 12px; padding: 12px 14px; background: rgba(255,255,255,.025); transition: border-color .2s;">
+            <span style="display: grid; place-items: center; width: 26px; height: 26px; border-radius: 8px; color: #071014; background: #b9f55b; font-size: 12px; font-weight: 700;">✓</span>
+            <div style="flex: 1;"><strong style="display: block; font-size: 12.5px; font-weight: 600;">FEATURE-091 · Detectar instalação legada</strong><small style="color: #87a39f; font-size: 10.5px; font-family: 'JetBrains Mono', monospace;">released · 18m 42s · Codex</small></div>
+            <span style="color: #b9f55b; font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;">liberada</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 12px; margin-left: 26px; border: 1px solid rgba(104,229,219,.3); border-left: 2px solid #68e5db; border-radius: 12px; padding: 12px 14px; background: rgba(104,229,219,.05);">
+            <span style="display: grid; place-items: center; width: 26px; height: 26px; border-radius: 8px; color: #68e5db; background: rgba(104,229,219,.14); font-size: 13px; font-weight: 700;">→</span>
+            <div style="flex: 1;"><strong style="display: block; font-size: 12.5px; font-weight: 600;">FEATURE-092 · Evoluir e restaurar</strong><small style="color: #87a39f; font-size: 10.5px; font-family: 'JetBrains Mono', monospace;">running · 09m 11s · OpenCode</small></div>
+            <span style="color: #68e5db; font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;">atual</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 12px; border: 1px solid rgba(173,219,213,.12); border-radius: 12px; padding: 12px 14px; background: rgba(255,255,255,.015); opacity: .65;">
+            <span style="display: grid; place-items: center; width: 26px; height: 26px; border-radius: 8px; color: #87a39f; background: rgba(255,255,255,.06); font-size: 12px; font-weight: 700;">○</span>
+            <div style="flex: 1;"><strong style="display: block; font-size: 12.5px; font-weight: 600;">FEATURE-093 · Regressão e release</strong><small style="color: #87a39f; font-size: 10.5px;">aguarda aprovação da anterior</small></div>
+            <span style="color: #87a39f; font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;">pendente</span>
+          </div>
+        </div>
+      </div>
+
+      <div style="padding: 24px; border: 1px solid rgba(173,219,213,.12); border-radius: 22px; background: linear-gradient(160deg, rgba(19,40,46,.86), rgba(9,20,25,.93)); box-shadow: 0 24px 70px rgba(0,0,0,.35);">
+        <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 18px;">
+          <h2 style="margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -.02em;">Cinco gates</h2>
+          <span style="color: #87a39f; font-size: 11px;">decisão do ralph-control</span>
+        </div>
+        <div style="display: grid;">
+          <div style="display: flex; align-items: center; gap: 12px; padding: 11px 0; border-bottom: 1px solid rgba(173,219,213,.08);">
+            <span style="display: grid; place-items: center; width: 24px; height: 24px; border-radius: 8px; color: #071014; background: #b9f55b; font-size: 12px; font-weight: 700; box-shadow: 0 0 14px rgba(185,245,91,.3);">✓</span>
+            <div style="flex: 1;"><div style="font-size: 12.5px; font-weight: 600;">Validation</div><div style="color: #87a39f; font-size: 10.5px; font-family: 'JetBrains Mono', monospace;">RPT-2026-0046 · 2s</div></div>
+            <span style="color: #b9f55b; font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;">passed</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 12px; padding: 11px 0; border-bottom: 1px solid rgba(173,219,213,.08);">
+            <span style="display: grid; place-items: center; width: 24px; height: 24px; border-radius: 8px; color: #071014; background: #b9f55b; font-size: 12px; font-weight: 700; box-shadow: 0 0 14px rgba(185,245,91,.3);">✓</span>
+            <div style="flex: 1;"><div style="font-size: 12.5px; font-weight: 600;">Quality</div><div style="color: #87a39f; font-size: 10.5px; font-family: 'JetBrains Mono', monospace;">163 asserts · 2m 14s</div></div>
+            <span style="color: #b9f55b; font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;">passed</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 12px; padding: 11px 0; border-bottom: 1px solid rgba(173,219,213,.08);">
+            <span style="display: grid; place-items: center; width: 24px; height: 24px; border-radius: 8px; color: #071014; background: #b9f55b; font-size: 12px; font-weight: 700; box-shadow: 0 0 14px rgba(185,245,91,.3);">✓</span>
+            <div style="flex: 1;"><div style="font-size: 12.5px; font-weight: 600;">Runtime evidence</div><div style="color: #87a39f; font-size: 10.5px; font-family: 'JetBrains Mono', monospace;">smoke + artifacts · 18s</div></div>
+            <span style="color: #b9f55b; font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;">passed</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 12px; padding: 11px 0; border-bottom: 1px solid rgba(173,219,213,.08);">
+            <span style="display: grid; place-items: center; width: 24px; height: 24px; border-radius: 8px; color: #071014; background: #b9f55b; font-size: 12px; font-weight: 700; box-shadow: 0 0 14px rgba(185,245,91,.3);">✓</span>
+            <div style="flex: 1;"><div style="font-size: 12.5px; font-weight: 600;">Technical review</div><div style="color: #87a39f; font-size: 10.5px; font-family: 'JetBrains Mono', monospace;">ralph-review · read-only</div></div>
+            <span style="color: #b9f55b; font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;">passed</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 12px; padding: 11px 0;">
+            <span style="display: grid; place-items: center; width: 24px; height: 24px; border-radius: 8px; color: #ffc76b; background: rgba(255,199,107,.14); border: 1px dashed rgba(255,199,107,.5); font-size: 12px; font-weight: 700;">○</span>
+            <div style="flex: 1;"><div style="font-size: 12.5px; font-weight: 600;">Curation</div><div style="color: #87a39f; font-size: 10.5px;">handoff aguardando geração</div></div>
+            <span style="color: #ffc76b; font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;">pending</span>
+          </div>
+        </div>
+        <div style="margin-top: 16px; border: 1px solid rgba(255,199,107,.18); border-radius: 12px; padding: 12px 14px; background: rgba(255,199,107,.05); color: #87a39f; font-size: 11px;">O quinto gate libera automaticamente após a geração do handoff. Nenhuma ação manual é aceita nesta superfície.</div>
+      </div>
+
+      <div style="padding: 24px; border: 1px solid rgba(173,219,213,.12); border-radius: 22px; background: linear-gradient(160deg, rgba(19,40,46,.86), rgba(9,20,25,.93)); box-shadow: 0 24px 70px rgba(0,0,0,.35);">
+        <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 16px;">
+          <h2 style="margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -.02em;">Timeline operacional</h2>
+          <span style="color: #87a39f; font-size: 11px;">fatos sanitizados</span>
+        </div>
+        <div style="display: grid;">
+          <sc-for list="{{ eventos }}" as="ev" hint-placeholder-count="4">
+            <div style="position: relative; display: flex; align-items: flex-start; gap: 14px; padding: 0 0 18px 2px;">
+              <div style="position: absolute; top: 18px; left: 8px; bottom: 0; width: 1px; background: rgba(173,219,213,.12);"></div>
+              <span style="position: relative; z-index: 1; margin-top: 2px; width: 13px; height: 13px; border: 3px solid #10252b; border-radius: 50%; background: {{ ev.cor }}; box-shadow: 0 0 0 1px {{ ev.cor }}, 0 0 12px {{ ev.cor }};"></span>
+              <div style="display: flex; align-items: flex-start; justify-content: space-between; flex: 1; gap: 10px;">
+                <div><div style="font-size: 12.5px; font-weight: 600; font-family: 'JetBrains Mono', monospace;">{{ ev.nome }}</div><div style="color: #87a39f; font-size: 11px;">{{ ev.detalhe }}</div></div>
+                <span style="color: #87a39f; font-size: 11px; white-space: nowrap; font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums;">{{ ev.hora }}</span>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+
+      <div style="padding: 24px; border: 1px solid rgba(173,219,213,.12); border-radius: 22px; background: linear-gradient(160deg, rgba(19,40,46,.86), rgba(9,20,25,.93)); box-shadow: 0 24px 70px rgba(0,0,0,.35);">
+        <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 16px;">
+          <h2 style="margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -.02em;">Memória de engenharia</h2>
+          <span style="color: #87a39f; font-size: 11px;">não bloqueante</span>
+        </div>
+        <div style="display: grid; gap: 12px;">
+          <div style="display: flex; align-items: flex-start; gap: 12px; border-bottom: 1px solid rgba(173,219,213,.08); padding-bottom: 12px;">
+            <span style="color: #ffc76b; font-size: 15px;">✦</span>
+            <div><strong style="display: block; margin-bottom: 3px; font-size: 12.5px; font-weight: 600;">Gate sem diagnóstico exige reprodução limpa</strong><small style="color: #87a39f; font-size: 10.5px; font-family: 'JetBrains Mono', monospace;">LESSON-2026-004 · confiança alta · 2 aplicabilidades</small></div>
+          </div>
+          <div style="display: flex; align-items: flex-start; gap: 12px; border-bottom: 1px solid rgba(173,219,213,.08); padding-bottom: 12px;">
+            <span style="color: #ffc76b; font-size: 15px;">✦</span>
+            <div><strong style="display: block; margin-bottom: 3px; font-size: 12.5px; font-weight: 600;">Preview de captura deve tolerar UTF-8 incompleto</strong><small style="color: #87a39f; font-size: 10.5px; font-family: 'JetBrains Mono', monospace;">candidato local · origem INC-CAPTURE-LIMIT-092</small></div>
+          </div>
+          <div style="display: flex; align-items: flex-start; gap: 12px;">
+            <span style="color: #68e5db; font-size: 15px;">↗</span>
+            <div><strong style="display: block; margin-bottom: 3px; font-size: 12.5px; font-weight: 600;">Ver referências e evidências</strong><small style="color: #87a39f; font-size: 10.5px;">handoff · reports · artifacts · somente leitura</small></div>
+          </div>
+        </div>
+        <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 24px 0 14px;">
+          <h2 style="margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -.02em;">Delegação</h2>
+          <span style="color: #87a39f; font-size: 11px;">trace normalizado</span>
+        </div>
+        <div style="display: grid; gap: 10px;">
+          <div style="display: flex; align-items: center; gap: 12px; border: 1px solid rgba(169,139,255,.25); border-radius: 12px; padding: 11px 14px; background: rgba(169,139,255,.06);">
+            <span style="display: grid; place-items: center; width: 26px; height: 26px; border-radius: 8px; color: #a98bff; background: rgba(169,139,255,.16); font-size: 12px; font-weight: 700;">R</span>
+            <div style="flex: 1;"><strong style="display: block; font-size: 12.5px; font-weight: 600;">ralph-control</strong><small style="color: #87a39f; font-size: 10.5px;">autoridade · não delegável</small></div>
+            <span style="color: #a98bff; font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;">root</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 12px; margin-left: 26px; border: 1px solid rgba(173,219,213,.12); border-left: 2px solid #a98bff; border-radius: 12px; padding: 11px 14px; background: rgba(255,255,255,.025);">
+            <span style="display: grid; place-items: center; width: 26px; height: 26px; border-radius: 8px; color: #a98bff; background: rgba(169,139,255,.14); font-size: 12px; font-weight: 700;">O</span>
+            <div style="flex: 1;"><strong style="display: block; font-size: 12.5px; font-weight: 600;">OpenCode · deepseek-v4-flash-free</strong><small style="color: #87a39f; font-size: 10.5px; font-family: 'JetBrains Mono', monospace;">implementação · sessão registrada</small></div>
+            <span style="color: #b9f55b; font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;">ok</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 12px; margin-left: 26px; border: 1px solid rgba(173,219,213,.12); border-left: 2px solid #a98bff; border-radius: 12px; padding: 11px 14px; background: rgba(255,255,255,.025);">
+            <span style="display: grid; place-items: center; width: 26px; height: 26px; border-radius: 8px; color: #a98bff; background: rgba(169,139,255,.14); font-size: 12px; font-weight: 700;">V</span>
+            <div style="flex: 1;"><strong style="display: block; font-size: 12.5px; font-weight: 600;">ralph-review</strong><small style="color: #87a39f; font-size: 10.5px; font-family: 'JetBrains Mono', monospace;">technical review · read-only</small></div>
+            <span style="color: #b9f55b; font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;">ok</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    </sc-if>
+
+    <sc-if value="{{ showEventos }}" hint-placeholder-val="{{ false }}">
+    <section style="padding: 24px; border: 1px solid rgba(173,219,213,.12); border-radius: 22px; background: linear-gradient(160deg, rgba(19,40,46,.86), rgba(9,20,25,.93)); box-shadow: 0 24px 70px rgba(0,0,0,.35);">
+      <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 10px;">
+        <h2 style="margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -.02em;">Registro de eventos</h2>
+        <span style="color: #87a39f; font-size: 11px;">{{ totalEventos }} registros · ordem decrescente · fatos sanitizados</span>
+      </div>
+      <div style="display: grid;">
+        <sc-for list="{{ logEventos }}" as="ev" hint-placeholder-count="6">
+          <div style-hover="background: rgba(255,255,255,.02);" style="display: grid; grid-template-columns: 84px 14px 1fr auto; align-items: center; gap: 14px; padding: 13px 10px; border-bottom: 1px solid rgba(173,219,213,.08); border-radius: 8px;">
+            <span style="color: #87a39f; font-size: 11px; font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums;">{{ ev.hora }}</span>
+            <span style="width: 11px; height: 11px; border: 3px solid #10252b; border-radius: 50%; background: {{ ev.cor }}; box-shadow: 0 0 0 1px {{ ev.cor }};"></span>
+            <div><div style="font-size: 12.5px; font-weight: 600; font-family: 'JetBrains Mono', monospace;">{{ ev.nome }}</div><div style="color: #87a39f; font-size: 11px;">{{ ev.detalhe }}</div></div>
+            <span style="justify-self: end; border: 1px solid {{ ev.tagBd }}; border-radius: 99px; padding: 3px 10px; color: {{ ev.tagCo }}; background: {{ ev.tagBg }}; font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;">{{ ev.tagLabel }}</span>
+          </div>
+        </sc-for>
+      </div>
+    </section>
+    </sc-if>
+
+    <sc-if value="{{ showGates }}" hint-placeholder-val="{{ false }}">
+    <section style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; align-items: start;">
+      <sc-for list="{{ gatesBoard }}" as="ft" hint-placeholder-count="3">
+        <div style="padding: 22px; border: 1px solid rgba(173,219,213,.12); border-radius: 22px; background: linear-gradient(160deg, rgba(19,40,46,.86), rgba(9,20,25,.93)); box-shadow: 0 24px 70px rgba(0,0,0,.35);">
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px;">
+            <span style="color: #68e5db; font-size: 11px; font-weight: 600; letter-spacing: .14em; font-family: 'JetBrains Mono', monospace;">{{ ft.id }}</span>
+            <span style="border: 1px solid {{ ft.estadoBd }}; border-radius: 99px; padding: 4px 11px; color: {{ ft.estadoCo }}; background: {{ ft.estadoBg }}; font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;">{{ ft.estado }}</span>
+          </div>
+          <div style="margin: 12px 0 4px; font-size: 16px; font-weight: 600; letter-spacing: -.02em;">{{ ft.titulo }}</div>
+          <div style="margin-bottom: 12px; color: #87a39f; font-size: 11px; font-family: 'JetBrains Mono', monospace;">{{ ft.resumo }}</div>
+          <div style="display: grid;">
+            <sc-for list="{{ ft.gates }}" as="g" hint-placeholder-count="5">
+              <div style="display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid rgba(173,219,213,.08);">
+                <span style="display: grid; place-items: center; width: 24px; height: 24px; border-radius: 8px; color: {{ g.dotCo }}; background: {{ g.dotBg }}; font-size: 12px; font-weight: 700;">{{ g.icone }}</span>
+                <div style="flex: 1;"><div style="font-size: 12.5px; font-weight: 600;">{{ g.nome }}</div><div style="color: #87a39f; font-size: 10.5px; font-family: 'JetBrains Mono', monospace;">{{ g.detalhe }}</div></div>
+                <span style="color: {{ g.badgeCo }}; font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;">{{ g.badge }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </sc-for>
+    </section>
+    </sc-if>
+
+    <p style="margin: 24px 0 0; color: #87a39f; font-size: 11px; text-align: center;">Mockup estático · dados fictícios · a interface real nunca aprova gates, altera leases ou inicia features.</p>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;progresso&quot;: { &quot;editor&quot;: &quot;range&quot;, &quot;default&quot;: 68, &quot;min&quot;: 0, &quot;max&quot;: 100, &quot;step&quot;: 1, &quot;unit&quot;: &quot;%&quot;, &quot;tsType&quot;: &quot;number&quot;, &quot;section&quot;: &quot;Workflow&quot; },
+  &quot;aoVivo&quot;: { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Workflow&quot; }
+}">
+class Component extends DCLogic {
+  state = {
+    filter: 'all',
+    elapsed: 6138,
+    ago: 8,
+    refreshed: false,
+    eventos: [
+      { kind: 'events', nome: 'verification.passed', detalhe: '15 tarefas confirmadas no código', hora: '14:50:45', cor: '#b9f55b' },
+      { kind: 'gates', nome: 'gate.quality.passed', detalhe: 'CI portátil · 163 asserts', hora: '14:49:36', cor: '#b9f55b' },
+      { kind: 'events', nome: 'delegation.completed', detalhe: 'OpenCode · implementação', hora: '14:47:02', cor: '#68e5db' },
+      { kind: 'events', nome: 'feature.claimed', detalhe: 'lease e fencing token adquiridos', hora: '14:42:49', cor: '#68e5db' }
+    ]
+  };
+  componentDidMount() {
+    this.tick = setInterval(() => this.setState(s => ({ elapsed: s.elapsed + 1, ago: s.ago + 1 })), 1000);
+    this.feed = setInterval(() => {
+      if ((this.props.aoVivo ?? true) === false) return;
+      const pool = [
+        { kind: 'events', nome: 'artifact.captured', detalhe: 'evidência anexada ao report', cor: '#68e5db' },
+        { kind: 'gates', nome: 'gate.runtime.checked', detalhe: 'smoke re-executado · ok', cor: '#b9f55b' },
+        { kind: 'events', nome: 'lease.renewed', detalhe: 'fencing token válido', cor: '#68e5db' },
+        { kind: 'events', nome: 'trace.normalized', detalhe: 'delegação sincronizada', cor: '#a98bff' }
+      ];
+      const e = pool[Math.floor(Math.random() * pool.length)];
+      const n = new Date();
+      const p = v => String(v).padStart(2, '0');
+      const hora = p(n.getHours()) + ':' + p(n.getMinutes()) + ':' + p(n.getSeconds());
+      this.setState(s => ({ eventos: [Object.assign({ hora }, e)].concat(s.eventos).slice(0, 7), ago: 0 }));
+    }, 14000);
+  }
+  componentWillUnmount() { clearInterval(this.tick); clearInterval(this.feed); }
+  renderVals() {
+    const p = Math.max(0, Math.min(100, this.props.progresso ?? 68));
+    const on = { bd: 'rgba(104,229,219,.55)', bg: 'rgba(104,229,219,.12)', co: '#effaf7' };
+    const off = { bd: 'transparent', bg: 'transparent', co: '#87a39f' };
+    const f = this.state.filter;
+    const el = this.state.elapsed;
+    const pad = v => String(v).padStart(2, '0');
+    const ago = this.state.ago;
+    const tagMap = {
+      events: { tagLabel: 'evento', tagCo: '#68e5db', tagBg: 'rgba(104,229,219,.08)', tagBd: 'rgba(104,229,219,.3)' },
+      gates: { tagLabel: 'gate', tagCo: '#b9f55b', tagBg: 'rgba(185,245,91,.08)', tagBd: 'rgba(185,245,91,.3)' },
+      recovery: { tagLabel: 'recovery', tagCo: '#ffc76b', tagBg: 'rgba(255,199,107,.08)', tagBd: 'rgba(255,199,107,.35)' }
+    };
+    const historico = [
+      { kind: 'gates', nome: 'gate.validation.passed', detalhe: 'RPT-2026-0046 emitido · 2s', hora: '14:41:57', cor: '#b9f55b' },
+      { kind: 'events', nome: 'delegation.started', detalhe: 'OpenCode assume implementação', hora: '14:41:12', cor: '#68e5db' },
+      { kind: 'recovery', nome: 'recovery.documented', detalhe: 'INC-CAPTURE-LIMIT-092 registrado', hora: '14:38:20', cor: '#ffc76b' },
+      { kind: 'events', nome: 'feature.released', detalhe: 'FEATURE-091 · handoff publicado', hora: '14:36:04', cor: '#b9f55b' },
+      { kind: 'gates', nome: 'gate.curation.passed', detalhe: 'handoff gerado · FEATURE-091', hora: '14:33:47', cor: '#b9f55b' },
+      { kind: 'events', nome: 'workflow.started', detalhe: 'wf_detector_bc_legacy_20260810_001', hora: '14:12:31', cor: '#a98bff' }
+    ];
+    const logEventos = this.state.eventos.concat(historico).map(e => Object.assign({}, e, tagMap[e.kind] || tagMap.events));
+    const gp = { icone: '✓', dotCo: '#071014', dotBg: '#b9f55b', badge: 'passed', badgeCo: '#b9f55b' };
+    const gq = { icone: '○', dotCo: '#ffc76b', dotBg: 'rgba(255,199,107,.14)', badge: 'pending', badgeCo: '#ffc76b' };
+    const gw = { icone: '·', dotCo: '#87a39f', dotBg: 'rgba(255,255,255,.06)', badge: 'na fila', badgeCo: '#87a39f' };
+    const G = (nome, detalhe, t) => Object.assign({ nome, detalhe }, t);
+    const gatesBoard = [
+      { id: 'FEATURE-091', titulo: 'Detectar instalação legada', estado: 'liberada', estadoCo: '#b9f55b', estadoBg: 'rgba(185,245,91,.07)', estadoBd: 'rgba(185,245,91,.25)', resumo: '5/5 gates verdes · released', gates: [G('Validation', 'RPT-2026-0038 · 1s', gp), G('Quality', '141 asserts · 1m 58s', gp), G('Runtime evidence', 'smoke + artifacts · 14s', gp), G('Technical review', 'ralph-review · read-only', gp), G('Curation', 'handoff publicado', gp)] },
+      { id: 'FEATURE-092', titulo: 'Evoluir e restaurar diretório legado', estado: 'atual', estadoCo: '#68e5db', estadoBg: 'rgba(104,229,219,.07)', estadoBd: 'rgba(104,229,219,.3)', resumo: '4/5 gates verdes · aguardando curation', gates: [G('Validation', 'RPT-2026-0046 · 2s', gp), G('Quality', '163 asserts · 2m 14s', gp), G('Runtime evidence', 'smoke + artifacts · 18s', gp), G('Technical review', 'ralph-review · read-only', gp), G('Curation', 'handoff aguardando geração', gq)] },
+      { id: 'FEATURE-093', titulo: 'Regressão e release', estado: 'pendente', estadoCo: '#87a39f', estadoBg: 'rgba(255,255,255,.04)', estadoBd: 'rgba(173,219,213,.2)', resumo: '0/5 · aguarda liberação da anterior', gates: [G('Validation', 'aguarda claim', gw), G('Quality', 'aguarda claim', gw), G('Runtime evidence', 'aguarda claim', gw), G('Technical review', 'aguarda claim', gw), G('Curation', 'aguarda claim', gw)] }
+    ];
+    return {
+      showAll: f === 'all',
+      showEventos: f === 'events',
+      showGates: f === 'gates',
+      logEventos,
+      totalEventos: logEventos.length,
+      gatesBoard,
+      progressoLabel: p + '%',
+      ringOffset: (490.1 * (1 - p / 100)).toFixed(1),
+      barWidth: p + '%',
+      tempoAtivo: pad(Math.floor(el / 3600)) + ':' + pad(Math.floor(el / 60) % 60) + ':' + pad(el % 60),
+      ultimoEvento: ago <= 1 ? 'agora mesmo' : 'há ' + ago + ' segundos',
+      fAll: f === 'all' ? on : off,
+      fEv: f === 'events' ? on : off,
+      fGa: f === 'gates' ? on : off,
+      setAll: () => this.setState({ filter: 'all' }),
+      setEventos: () => this.setState({ filter: 'events' }),
+      setGates: () => this.setState({ filter: 'gates' }),
+      eventos: this.state.eventos,
+      refreshLabel: this.state.refreshed ? 'Snapshot atualizado ✓' : 'Atualizar snapshot',
+      doRefresh: () => {
+        this.setState({ refreshed: true, ago: 0 });
+        setTimeout(() => this.setState({ refreshed: false }), 1600);
+      }
+    };
+  }
+}
+</script>
+</body>
+</html>

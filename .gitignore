@@ -3,5 +3,16 @@
 .ralph/evolutions/
 .ralph/knowledge-candidates/
 .ralph/install.lock
+.ralph/cursor.env
 .phases/
 .DS_Store
+
+# dependências locais de apps e ferramentas (nunca versionar)
+apps/cockpit/vendor/
+apps/cockpit/node_modules/
+apps/cockpit/.env
+.opencode/node_modules/
+.playwright-mcp/
+
+# artefatos de campo e diagnóstico do cockpit
+cockpit-*.png

@@ -141,13 +141,15 @@ exclusiva do `ralph-control`.
 
 ## Providers
 
-O caminho padrão é `native_codex`. O modo `auto` consulta todos os providers
-certificados, mas seleciona somente um runner com `adapter_enabled=true`, em
-ordem determinística e sem fallback silencioso. Codex e Claude CLI usam os
-runners nativos do loop; OpenCode e `agy` usam a seam executável
-`preflight|run|version`. O verify `agy` é suportado nesta linha somente em
-Linux com `bwrap` allowlisted. Hermes pode aparecer na detecção passiva, mas
-permanece no backlog e não habilita execução.
+O modo `auto` consulta todos os providers certificados e seleciona **um**
+runner com `adapter_enabled=true`, em ordem determinística **priorizando o
+harness nativo detectado no checkout** (`.cursor/` → Cursor; `.codex/` → Codex;
+`.claude/` → Claude; `.opencode/` → OpenCode) e **sem fallback silencioso**.
+Quando o projeto tem harness Cursor (`.cursor/`) e CLI `agent` funcional, o
+`primary_runner` será `cursor`, não Codex. Codex e Claude CLI usam runners
+nativos do loop; OpenCode, `agy` e Cursor usam a seam executável
+`preflight|run|version`. Failover entre providers exige `execution_policy`
+opt-in (`explicit_failover`); o default permanece `fallback_policy=none`.
 
 O `ralph-trace` diferencia identidade `exact`, `declared`, `observed`,
 `partial` e `unavailable`. Um provider que não expõe modelo efetivo não pode

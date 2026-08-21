@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "hooks": {
+    "workspaceOpen": [
+      {
+        "command": "python3 .cursor/hooks/ralph-load-profile.py",
+        "failClosed": false
+      }
+    ]
+  }
+}

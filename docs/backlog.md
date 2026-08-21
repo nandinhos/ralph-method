@@ -7,7 +7,7 @@ Itens adiados conscientemente, sem prioridade nesta linha de desenvolvimento.
 | `BL-0001` | Adapter de execução Hermes | nenhuma | adiado | necessidade explícita de orquestrar Hermes como harness filho |
 | `BL-0002` | Adapter de execução agy | P0 | promovido na v0.9.0 | reaberto pela FEATURE-095 e ADR-0017; entregue e publicado com o relatório `0025` |
 | `BL-0003` | Regressão multiprovider Hermes/agy | P0 para agy | parcialmente entregue | `agy` entrou na regressão e foi promovido; Hermes permanece adiado até possuir adapter aprovado |
-| `BL-0004` | Adapter de execução Cursor (CLI `agent`/`cursor-agent`) | P1 | entregue na FEATURE-098 (ADR-0021 + PRD + schema 1.2.0 + adapter na seam + fixtures offline) | aguardando campo opt-in e revisão adversarial antes da promoção |
+| `BL-0004` | Adapter de execução Cursor (CLI `agent`/`cursor-agent`) | P1 | entregue offline (FEATURE-098); **campo opt-in comprovado** (FEATURE-100A, relatório `0031`) | adversarial + hero flow (100C–100D) antes de fechar promoção |
 
 ## Handoff Cursor (HO-2026-08-16-001)
 

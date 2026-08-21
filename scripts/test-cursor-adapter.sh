@@ -272,4 +272,13 @@ if grep -q 'nonce-cursor-7' "$TMP/artifacts/events.jsonl"; then
   fail 'eventos sanitizados vazaram conteúdo do prompt'
 fi
 
+# 12. ralph.sh aceita --engine cursor no preflight (regressão FEATURE-098).
+export RALPH_CURSOR_CLI="$TMP/bin/agent"
+export RALPH_CURSOR_MODEL=composer-1
+export RALPH_CURSOR_VERIFY_MODE=ask
+output=$("$ROOT/scripts/ralph.sh" --engine cursor --from 99 --max-cycles 1 "$TMP/prompt.md" 2>&1 || true)
+if grep -qi 'Engine invalida' <<< "$output"; then
+  fail 'ralph.sh rejeitou --engine cursor no preflight'
+fi
+
 echo 'OK: adapter Cursor (CLI agent, stream-json, parser 1.2.0, verify declarado ask, limites e sanitização) passou.'

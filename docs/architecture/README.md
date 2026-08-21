@@ -17,6 +17,10 @@ O Ralph Method é um framework local instalado dentro de um projeto-alvo. O
 - [provider-failover-continuity-plan.md](provider-failover-continuity-plan.md)
   — proposta de continuidade Codex → OpenCode por rate limit, com nova
   tentativa, fencing, cápsula sanitizada e circuit breakers.
+- [trace-cockpit.md](trace-cockpit.md) — UI observadora (Laravel 13 + Reverb) em `apps/cockpit/`.
+- [../prd/prd-trace-cockpit.md](../prd/prd-trace-cockpit.md) — requisitos do cockpit somente leitura.
+- [../adr/0022-cockpit-somente-leitura.md](../adr/0022-cockpit-somente-leitura.md)
+  — o cockpit não ganha autoridade do control plane.
 - [../prd/prd-adapter-agy.md](../prd/prd-adapter-agy.md) — requisitos da
   reabertura do Antigravity CLI.
 - [../adr/0017-reabertura-agy-e-seam-comum-de-adapters.md](../adr/0017-reabertura-agy-e-seam-comum-de-adapters.md)
@@ -56,6 +60,7 @@ Ralph for instalado em outro projeto ou receber outro harness.
 | Compatibilidade | `bin/ralph-bloco` | Alias operacional do bloco | Mantém compatibilidade com invocações em português; não cria uma segunda máquina de estados. |
 | Trace | `bin/ralph-trace` | Registrar delegações | Encaminha fatos de runner, provider, modelo, sessão e identidade ao controlador; não aprova nem libera. |
 | Monitor | `bin/ralph-monitor` | Exibir saúde e progresso | Consulta snapshots, heartbeat, processo e último feedback; não faz retry, recovery ou transição. |
+| Cockpit | `apps/cockpit/` | UI ao vivo do Ralph | Projeta JSONL/monitor em Postgres e Reverb; supervise só com preflight; não aprova gate. |
 | Métricas | `bin/ralph-metrics` | Agregar o ledger historicamente | Emite JSON ou Markdown somente por leitura; não grava relatório, altera eventos ou calcula custo/token. |
 | Loop | `scripts/ralph.sh` | Executar fases do harness | Abre sessões por fase, executa testes e emite feedback; não interpreta log como aprovação nem decide a fila. |
 | Hook | `scripts/ralph-hook.sh` | Observar o loop | Emite telemetria sanitizada e best-effort; não altera ledger, gates, leases ou estado global. |
