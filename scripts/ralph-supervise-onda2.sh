@@ -85,5 +85,5 @@ while true; do
     echo "[supervise-onda2] workflow completo; encerrando wrapper"
     exit 0
   fi
-  sleep "${RALPH_RELAUNCH_SLEEP:-5}"
+  sleep "${RALPH_RELAUNCH_SLEEP:-10}"
 done
