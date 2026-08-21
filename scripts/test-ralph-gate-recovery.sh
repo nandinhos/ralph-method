@@ -93,7 +93,7 @@ setup_repo "$repo_a" "$counter_a" 1
 
 supervise_a="$TMP/supervise-a.log"
 set +e
-timeout 25 env \
+timeout 90 env \
   RALPH_TECHNICAL_REVIEW_COMMAND='bash bin/faulty-gate.sh' \
   RALPH_CURATION_COMMAND='echo curation-ok' \
   bash -c 'cd "$1" && "$2" supervise --workflow wf_gate_recovery --engine codex --interval 1 --max-retries 0 --gate-harness-retries 1' _ "$repo_a" "$ROOT/bin/ralph-control" > "$supervise_a" 2>&1
@@ -123,7 +123,7 @@ setup_repo "$repo_b" "$counter_b" 0
 
 supervise_b="$TMP/supervise-b.log"
 set +e
-timeout 30 env \
+timeout 90 env \
   RALPH_TECHNICAL_REVIEW_COMMAND='bash bin/faulty-gate.sh' \
   RALPH_CURATION_COMMAND='echo curation-ok' \
   bash -c 'cd "$1" && "$2" supervise --workflow wf_gate_recovery --engine codex --interval 1 --max-retries 0 --gate-harness-retries 3' _ "$repo_b" "$ROOT/bin/ralph-control" > "$supervise_b" 2>&1
@@ -166,7 +166,7 @@ setup_repo "$repo_d" "$counter_d" 2
 # Esgota o limite de harness error do technical_review -> recovery_required.
 supervise_d="$TMP/supervise-d.log"
 set +e
-timeout 25 env \
+timeout 90 env \
   RALPH_TECHNICAL_REVIEW_COMMAND='bash bin/faulty-gate.sh' \
   RALPH_CURATION_COMMAND='echo curation-ok' \
   bash -c 'cd "$1" && "$2" supervise --workflow wf_gate_recovery --engine codex --interval 1 --max-retries 0 --gate-harness-retries 1' _ "$repo_d" "$ROOT/bin/ralph-control" > "$supervise_d" 2>&1

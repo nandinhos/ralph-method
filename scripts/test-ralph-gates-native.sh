@@ -60,7 +60,7 @@ printf '%s' "$run_output" | grep -q '"status": "awaiting_gates"' || fail "run n�
 #    gates foram registrados no ledger.
 supervise_out="$TMP/supervise.log"
 set +e
-timeout 120 env \
+timeout 120 env -u RALPH_QUALITY_COMMAND -u RALPH_TEST_CMD -u RALPH_RUNTIME_EVIDENCE_CMD -u RALPH_TECHNICAL_REVIEW_COMMAND -u RALPH_CURATION_COMMAND \
   RALPH_RUNTIME_EVIDENCE_CMD='echo runtime-ok' \
   RALPH_TECHNICAL_REVIEW_COMMAND='echo review-ok' \
   RALPH_CURATION_COMMAND='echo curation-ok' \
@@ -98,7 +98,7 @@ ctx="$(cd "$repo" && RALPH_WORKFLOW_ID=wf_gates_native RALPH_FEATURE_KEY=FEATURE
 #     presente e sem env, a detecção cai em bin/check (não no ralph-run-*).
 printf '%s\n' '#!/usr/bin/env bash' 'echo runtime-check-ok' > "$repo/bin/check"
 chmod +x "$repo/bin/check"
-runtime_default_out="$(cd "$repo" && env RALPH_WORKFLOW_ID=wf_gates_native RALPH_FEATURE_KEY=FEATURE-GATES-NATIVE RALPH_GATE=runtime_evidence RALPH_ATTEMPT=1 \
+runtime_default_out="$(cd "$repo" && env -u RALPH_RUNTIME_EVIDENCE_CMD -u RALPH_QUALITY_COMMAND -u RALPH_TEST_CMD RALPH_WORKFLOW_ID=wf_gates_native RALPH_FEATURE_KEY=FEATURE-GATES-NATIVE RALPH_GATE=runtime_evidence RALPH_ATTEMPT=1 \
   timeout 10 bash "$repo/scripts/ralph-run-runtime-evidence.sh" 2>&1)"
 echo "runtime_default: $runtime_default_out" | head -1
 grep -q "runtime-check-ok" <<< "$runtime_default_out" || fail 'default de runtime_evidence não resolveu para bin/check'
@@ -142,7 +142,8 @@ printf '%s' "$run2" | grep -q '"status": "awaiting_gates"' || fail "run fresh n�
 
 supervise2_out="$TMP/supervise2.log"
 set +e
-timeout 90 env RALPH_CURATION_COMMAND='echo curation-ok' \
+timeout 90 env -u RALPH_QUALITY_COMMAND -u RALPH_TEST_CMD -u RALPH_RUNTIME_EVIDENCE_CMD -u RALPH_TECHNICAL_REVIEW_COMMAND -u RALPH_CURATION_COMMAND \
+  RALPH_CURATION_COMMAND='echo curation-ok' \
   bash -c 'cd "$1" && "$2" supervise --workflow wf_gates_native --engine codex --interval 1 --max-retries 0' _ "$fresh" "$ROOT/bin/ralph-control" > "$supervise2_out" 2>&1
 set -e
 grep -q 'gates_configuration_required' "$supervise2_out" && fail 'supervise2 retornou gates_configuration_required'

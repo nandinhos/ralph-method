@@ -1467,7 +1467,7 @@ function sanitize(mixed $value): mixed
     $patterns = [
         '/-----BEGIN [A-Z ]*PRIVATE KEY-----/i',
         '/\b(?:api[_-]?key|access[_-]?token|password|passwd|secret)\s*[:=]/i',
-        '/\b(?:sk|ghp|github_pat|glpat)-[A-Za-z0-9_-]{12,}\b/',
+        '/\b(?:sk|ghp|github_pat|glpat)[-_][A-Za-z0-9_-]{12,}\b/',
         '/\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b/',
         '/\b\d{3}\.\d{3}\.\d{3}-\d{2}\b/',
     ];
@@ -4833,7 +4833,7 @@ function debugReportErrors(array $report, string $workflowId, string $featureKey
         $errors[] = 'knowledge_candidate incompleto';
     }
     $serialized = json_encode($report, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-    if (is_string($serialized) && preg_match('/-----BEGIN [A-Z ]*PRIVATE KEY-----|\b(?:api[_-]?key|access[_-]?token|password|passwd|secret)\s*[:=]|\b(?:sk|ghp|github_pat|glpat)-[A-Za-z0-9_-]{12,}\b|\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b/i', $serialized) === 1) {
+    if (is_string($serialized) && preg_match('/-----BEGIN [A-Z ]*PRIVATE KEY-----|\b(?:api[_-]?key|access[_-]?token|password|passwd|secret)\s*[:=]|\b(?:sk|ghp|github_pat|glpat)[-_][A-Za-z0-9_-]{12,}\b|\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b/i', $serialized) === 1) {
         $errors[] = 'relatório contém possível segredo ou dado sensível';
     }
 
@@ -5418,8 +5418,9 @@ function runControlled(array $arguments): void
     $captureLimitExceeded = false;
     $feedbackBuffer = '';
     $heartbeatInterval = max(1, (int) ($arguments['heartbeat-interval'] ?? getenv('RALPH_HEARTBEAT_INTERVAL') ?: 15));
-    $lastHeartbeatAt = microtime(true);
-    $lastActivityAt = $lastHeartbeatAt;
+    $startedAt = microtime(true);
+    $lastHeartbeatAt = $startedAt;
+    $lastActivityAt = $startedAt;
     $heartbeatSequence = 0;
     $exitCodeFromStatus = null;
     do {
@@ -5448,7 +5449,7 @@ function runControlled(array $arguments): void
             $gateAge = null;
             if (($feature['state'] ?? null) === 'awaiting_gates'
                 && isset($feature['gate_entered_at'])) {
-                $gateAge = max(0, (int) floor(time() - (int) $feature['gate_entered_at']));
+                $gateAge = max(0, (int) floor($now - (int) $feature['gate_entered_at']));
             }
             $heartbeatFacts = [
                 'pid' => $pid,
@@ -5458,10 +5459,8 @@ function runControlled(array $arguments): void
                 'stderr_bytes' => $stderrBytes,
                 'idle_seconds' => (int) floor($now - $lastActivityAt),
                 'child_running' => (bool) ($status['running'] ?? false),
-                'position' => is_array($feature['gates'] ?? null)
-                    ? count(array_filter($feature['gates'], fn($v) => $v === 'passed'))
-                    : 0,
-                'eta_seconds' => isset($feature['gate_entered_at'])
+                'position' => (int) ($feature['position'] ?? 0),
+                'eta_seconds' => $gateAge !== null
                     ? max(0, (int) ($feature['gate_stall_after'] ?? 60) - $gateAge)
                     : null,
                 'gate_age' => $gateAge,
@@ -5470,15 +5469,19 @@ function runControlled(array $arguments): void
                 appendEvent(eventContext($arguments, $feature, 'command.heartbeat', 'Heartbeat do processo controlado', $heartbeatFacts));
             });
             $lastHeartbeatAt = $now;
-            // Emit telemetry.activity with sanitized activity data
+            // Emit telemetry.activity with sanitized activity data.
+            // Telemetria é volátil: idempotency_key com nonce (nunca derivada
+            // do conteúdo, que muda entre heartbeats e colidiria no ledger).
             $activityFacts = [
                 'activity_preview' => sanitize($stdoutPreview),
-                'elapsed' => (int) floor($now - $lastActivityAt),
+                'elapsed' => (int) floor($now - $startedAt),
                 'idle_seconds' => (int) floor($now - $lastActivityAt),
                 'phase' => $feature['state'] ?? 'pending',
             ];
             withLock(function () use ($arguments, $feature, $activityFacts): void {
-                appendEvent(eventContext($arguments, $feature, 'telemetry.activity', 'Atividade sanitizada do processo controlado', $activityFacts));
+                appendEvent(eventContext(array_merge($arguments, [
+                    'idempotency-key' => 'idem_telemetry_'.bin2hex(random_bytes(12)),
+                ]), $feature, 'telemetry.activity', 'Atividade sanitizada do processo controlado', $activityFacts));
             });
         }
 

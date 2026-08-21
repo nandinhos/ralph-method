@@ -51,8 +51,15 @@ setup_legacy() {
   if [ "$legacy_mode" = 1 ]; then
     # Falha de filesystem no destino: bin/ fica read-only ANTES do evolve, de
     # modo que o rename de publicação (staging -> bin/ralph-control) falhe.
+    # Root ignora 0555; nesse caso transforma bin em arquivo para garantir
+    # ENOTDIR mesmo como root (comportamento idempotente).
     mkdir -p "$project/bin"
     chmod 0555 "$project/bin"
+    if [ "$(id -u)" -eq 0 ]; then
+      rm -rf "${project:?}/bin"
+      printf 'bloqueio' > "$project/bin"
+      chmod 0444 "$project/bin"
+    fi
   fi
 }
 
@@ -130,6 +137,8 @@ FS_STATE="$fs_state" php -r '
 ' || fail 'estado pós-falha de filesystem não é recovery_required/quarantine'
 
 # Restaura a permissão para o rollback conseguir repor o backup no destino.
+rm -f "${proj_fs:?}/bin" 2>/dev/null || true
+mkdir -p "$proj_fs/bin" 2>/dev/null || true
 chmod 0755 "$proj_fs/bin" 2>/dev/null || true
 fs_plan="$(RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" rollback --project "$proj_fs" --evolution "$fs_id")"
 FS_PLAN="$fs_plan" php -r '
