@@ -3432,6 +3432,22 @@ function superviseWorkflow(array $arguments): void
                 $exit = 0;
                 $claimOutput = commandOutput($self.' claim --workflow '.escapeshellarg($workflowId).' --feature '.escapeshellarg($cursor).' --actor supervisor', $exit);
                 if ($exit !== 0) {
+                    // Árvore suja na claim de uma feature pendente = bloco
+                    // interrompido deixou trabalho parcial. Não é um erro do
+                    // supervisor: é o ciclo de recuperação sendo acionado.
+                    // Registra recovery_required (orquestrador assume com
+                    // systematic debugging) em vez de morrer — a retomada
+                    // preserva a árvore via retry --preserve-tree
+                    // (RALPH_RECONCILE_DIRTY=1) e o conhecimento da pane.
+                    if (str_contains($claimOutput, 'working tree suja')) {
+                        $dirtyFeature = $feature;
+                        $dirtySnapshot = supervisorSnapshot($arguments, $workflowId, $staleAfter, $activityStaleAfter);
+                        supervisorRecordRequiredRecovery($arguments, $dirtyFeature, $dirtySnapshot, 'claim bloqueada por árvore suja de bloco interrompido; recovery preserva o trabalho parcial');
+                        fwrite(STDERR, supervisorFeedback($dirtySnapshot)."\n");
+                        printJson(['status' => 'recovery_required', 'workflow_id' => $workflowId, 'feature_key' => $cursor, 'reason' => 'dirty_tree_claim_blocked']);
+
+                        return;
+                    }
                     fail($claimOutput, $exit);
                 }
                 $claim = json_decode($claimOutput, true, 512, JSON_THROW_ON_ERROR);
