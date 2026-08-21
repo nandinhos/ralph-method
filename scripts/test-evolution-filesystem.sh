@@ -61,33 +61,26 @@ proj_kill="$TMP/proj-kill"
 setup_legacy "$proj_kill" 0
 
 kill_out="$TMP/kill.log"
-RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" evolve --project "$proj_kill" --apply --provider auto >"$kill_out" 2>&1 &
+# Hook de teste determinístico (Onda 5): pausa explícita na fase installing,
+# no lugar da corrida STOP/CONT de 2000 iterações (flaky em CI).
+RALPH_METHOD_SOURCE="$ROOT" RALPH_TEST_PAUSE_AT=installing \
+  "$ROOT/bin/ralph-init" evolve --project "$proj_kill" --apply --provider auto >"$kill_out" 2>&1 &
 kill_pid=$!
 kill_state=""
 kill_done=0
-for _ in $(seq 1 2000); do
-  if ! kill -STOP "$kill_pid" 2>/dev/null; then
-    break
-  fi
-  # Detecta a fase installing (publicação via rename de staging -> destino).
-  kill_state="$(find "$proj_kill/.ralph/evolutions" -name evolution.json -print -quit 2>/dev/null || true)"
-  if [ -n "$kill_state" ] && KILL_STATE="$kill_state" php -r '
-      $state = json_decode(file_get_contents(getenv("KILL_STATE")), true, 512, JSON_THROW_ON_ERROR);
-      if (($state["status"] ?? null) === "installing") { exit(0); }
-      exit(1);
-  ' 2>/dev/null; then
-    if kill -0 "$kill_pid" 2>/dev/null; then
-      kill -KILL "$kill_pid" 2>/dev/null || true
-      wait "$kill_pid" 2>/dev/null || true
-      kill_done=1
-      break
-    fi
-  fi
-  kill -CONT "$kill_pid" 2>/dev/null || true
-  sleep 0.001
+for _ in $(seq 1 500); do
   if ! kill -0 "$kill_pid" 2>/dev/null; then
     break
   fi
+  kill_state="$(find "$proj_kill/.ralph/evolutions" -name evolution.json -print -quit 2>/dev/null || true)"
+  if [ -n "$kill_state" ] && [ -f "${kill_state}.paused" ]; then
+    kill -KILL "$kill_pid" 2>/dev/null || true
+    wait "$kill_pid" 2>/dev/null || true
+    rm -f "${kill_state}.paused"
+    kill_done=1
+    break
+  fi
+  sleep 0.02
 done
 if [ "$kill_done" -ne 1 ]; then
   kill -KILL "$kill_pid" 2>/dev/null || true

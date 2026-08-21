@@ -1955,6 +1955,18 @@ function quarantineLegacyTree(array &$state, array $tree): void
     $state['backup']['trees'][$index]['status'] = 'quarantined';
     updateLegacyTreeMembers($state, $tree['path'], 'quarantined');
     recordEvolutionMove($state, 'quarantine', 'move_tree', $tree['path'], 'after');
+    // Hook de teste determinístico (Onda 5): em vez de corrida STOP/CONT para
+    // capturar a janela entre o movimento e a publicação, o teste pede uma
+    // pausa explícita em um ponto conhecido do journal. Sem a variável, o
+    // fluxo de produção não é afetado.
+    $testPause = trim((string) getenv('RALPH_TEST_PAUSE_AT'));
+    if ($testPause === 'quarantine:move_tree:after') {
+        $marker = (string) ($state['state_path'] ?? '').'.paused';
+        @file_put_contents($marker, (string) getmypid());
+        while (is_file($marker)) {
+            usleep(10000);
+        }
+    }
 }
 
 /** @param array<string, mixed> $state */
@@ -2217,6 +2229,17 @@ function evolveApply(string $root, array $detected, string $requestedProvider, b
         }
 
         updateEvolutionState($state, 'installing');
+        // Hook de teste determinístico (Onda 5): pausa explícita na fase
+        // installing (antes da publicação via installMethod), no lugar da
+        // corrida STOP/CONT que capturava uma janela sub-milissegundo.
+        $testPause = trim((string) getenv('RALPH_TEST_PAUSE_AT'));
+        if ($testPause === 'installing') {
+            $marker = (string) ($state['state_path'] ?? '').'.paused';
+            @file_put_contents($marker, (string) getmypid());
+            while (is_file($marker)) {
+                usleep(10000);
+            }
+        }
         $freshDetected = detectProject($root, $verifyProviders);
         $freshProvider = selectProvider($freshDetected, $requestedProvider);
         $freshPlan = installationPlan($root, $freshDetected, $freshProvider, $requestedProvider);

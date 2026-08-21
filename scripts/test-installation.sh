@@ -466,40 +466,34 @@ printf '%s\n' 'binário legado' > "$staging_interrupted_project/bin/ralph-contro
 printf '%s\n' 'bloco legado' > "$staging_interrupted_project/bin/ralph-block"
 printf '%s\n' 'loop legado' > "$staging_interrupted_project/scripts/ralph.sh"
 staging_interrupted_output="$TMP/ralph-evolucao-interrompida-staging.log"
-RALPH_METHOD_SOURCE="$ROOT" "$ROOT/bin/ralph-init" evolve --project "$staging_interrupted_project" --apply --provider auto >"$staging_interrupted_output" 2>&1 &
+# Hook de teste determinístico (Onda 5): o evolve pausa após mover a árvore
+# legada (RALPH_TEST_PAUSE_AT) em vez de depender de corrida STOP/CONT que
+# capturava uma janela sub-milissegundo (flaky em CI).
+RALPH_METHOD_SOURCE="$ROOT" RALPH_TEST_PAUSE_AT=quarantine:move_tree:after \
+  "$ROOT/bin/ralph-init" evolve --project "$staging_interrupted_project" --apply --provider auto >"$staging_interrupted_output" 2>&1 &
 staging_interrupted_pid=$!
 staging_interrupted_state=""
 staging_interrupted=0
-for _ in $(seq 1 1000); do
-  if ! kill -STOP "$staging_interrupted_pid" 2>/dev/null; then
-    break
-  fi
-  staging_interrupted_state="$(find "$staging_interrupted_project/.ralph/evolutions" -name evolution.json -print -quit 2>/dev/null || true)"
-  if [ -n "$staging_interrupted_state" ] && STAGING_INTERRUPTED_STATE="$staging_interrupted_state" php -r '
-      $state = json_decode(file_get_contents(getenv("STAGING_INTERRUPTED_STATE")), true, 512, JSON_THROW_ON_ERROR);
-      foreach ($state["journal"] ?? [] as $entry) {
-          if (($entry["phase"] ?? null) === "quarantine"
-              && ($entry["action"] ?? null) === "move_tree"
-              && ($entry["path"] ?? null) === "harness/ralph"
-              && ($entry["status"] ?? null) === "after"
-              && ($state["status"] ?? null) === "quarantine_in_progress") {
-              exit(0);
-          }
-      }
-      exit(1);
-  '; then
-    if kill -0 "$staging_interrupted_pid" 2>/dev/null; then
-      kill -KILL "$staging_interrupted_pid" 2>/dev/null || true
-      wait "$staging_interrupted_pid" 2>/dev/null || true
-      staging_interrupted=1
-      break
-    fi
-  fi
-  kill -CONT "$staging_interrupted_pid" 2>/dev/null || true
-  sleep 0.001
+for _ in $(seq 1 500); do
   if ! kill -0 "$staging_interrupted_pid" 2>/dev/null; then
     break
   fi
+  staging_interrupted_state="$(find "$staging_interrupted_project/.ralph/evolutions" -name evolution.json -print -quit 2>/dev/null || true)"
+  marker=""
+  if [ -n "$staging_interrupted_state" ]; then
+    marker="${staging_interrupted_state}.paused"
+  fi
+  if [ -n "$marker" ] && [ -f "$marker" ]; then
+    # O processo está pausado no ponto exato (após move_tree/after). Mata-o
+    # aqui: o estado persistido reflete a quarentena concluída, a instalação
+    # nova ainda não foi publicada.
+    kill -KILL "$staging_interrupted_pid" 2>/dev/null || true
+    wait "$staging_interrupted_pid" 2>/dev/null || true
+    rm -f "$marker"
+    staging_interrupted=1
+    break
+  fi
+  sleep 0.02
 done
 if [ "$staging_interrupted" -ne 1 ]; then
   kill -KILL "$staging_interrupted_pid" 2>/dev/null || true
