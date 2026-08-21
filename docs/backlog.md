@@ -8,6 +8,7 @@ Itens adiados conscientemente, sem prioridade nesta linha de desenvolvimento.
 | `BL-0002` | Adapter de execução agy | P0 | promovido na v0.9.0 | reaberto pela FEATURE-095 e ADR-0017; entregue e publicado com o relatório `0025` |
 | `BL-0003` | Regressão multiprovider Hermes/agy | P0 para agy | parcialmente entregue | `agy` entrou na regressão e foi promovido; Hermes permanece adiado até possuir adapter aprovado |
 | `BL-0004` | Adapter de execução Cursor (CLI `agent`/`cursor-agent`) | P1 | entregue offline (FEATURE-098); **campo opt-in comprovado** (FEATURE-100A, relatório `0031`) | adversarial + hero flow (100C–100D) antes de fechar promoção |
+| `BL-0005` | Métricas de tempo por feature/onda/phase — relatório de duração (implementação, gates, debugging, esperas) a partir do ledger, para identificar gargalos do processo | P1 | **base entregue** (`bin/ralph-time-report.php` + `docs/reports/relatorio-tempo-onda1.md`); consolidação em dashboard/cockpit pendente | promover a feature oficial (ex: Onda 5) com testes, CI e exibição no cockpit |
 
 ## Handoff Cursor (HO-2026-08-16-001)
 
