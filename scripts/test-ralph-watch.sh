@@ -221,5 +221,48 @@ printf '%s\n' "$debug_snapshot_text" | grep -q "DBG-2026-0042" || fail 'dashboar
 printf '%s\n' "$debug_snapshot_text" | grep -q "feature_bug" || fail 'dashboard não exibiu cause_kind do debug'
 printf '%s\n' "$debug_snapshot_text" | grep -q "Context7" || fail 'dashboard não exibiu referência Context7 do debug'
 
-printf 'OK: todos os testes de bin/ralph-watch (TUI, delta mtime, JSON, ledger ausente, gates e debug ao vivo) passaram.\n'
+# 10. Conhecimento em tempo real no ralph-watch (FEATURE-101 Phase 5)
+knowledge_events=$(cat <<'JSON'
+{"schema_version":"1.3.0","event_id":"evt-013","workflow_id":"wf_watch_demo","feature_key":"FEATURE-101","attempt":1,"type":"feature.approved","timestamp":"2026-08-21T12:02:30Z"}
+{"schema_version":"1.3.0","event_id":"evt-014","workflow_id":"wf_watch_demo","feature_key":"FEATURE-101","attempt":1,"type":"feature.released","timestamp":"2026-08-21T12:02:35Z","facts":{"knowledge_policy":"non_blocking"}}
+{"schema_version":"1.3.0","event_id":"evt-015","workflow_id":"wf_watch_demo","feature_key":"FEATURE-101","attempt":1,"type":"knowledge.candidate_created","timestamp":"2026-08-21T12:02:36Z","facts":{"policy":"non_blocking","curation_id":"CUR-2026-0001"}}
+{"schema_version":"1.3.0","event_id":"evt-016","workflow_id":"wf_watch_demo","feature_key":"FEATURE-101","attempt":1,"type":"knowledge.telemetry","timestamp":"2026-08-21T12:02:37Z","facts":{"action":"candidate_created","status":"pending","curation_id":"CUR-2026-0001","lesson_id":null,"title":"Terminal dashboard ralph-watch","category":"telemetry","topics":["watch","tui"],"policy":"non_blocking"}}
+{"schema_version":"1.3.0","event_id":"evt-017","workflow_id":"wf_watch_demo","feature_key":"FEATURE-101","attempt":1,"type":"knowledge.curated","timestamp":"2026-08-21T12:02:40Z","facts":{"curation_id":"CUR-2026-0001","lesson_id":"LES-2026-0001","category":"telemetry","topics":["watch","tui"]}}
+{"schema_version":"1.3.0","event_id":"evt-018","workflow_id":"wf_watch_demo","feature_key":"FEATURE-101","attempt":1,"type":"knowledge.telemetry","timestamp":"2026-08-21T12:02:41Z","facts":{"action":"curated","status":"persisted","curation_id":"CUR-2026-0001","lesson_id":"LES-2026-0001","title":"Terminal dashboard ralph-watch","category":"telemetry","topics":["watch","tui"],"policy":"non_blocking"}}
+JSON
+)
+printf '%s\n' "$knowledge_events" >> "$events_file"
+touch "$events_file"
+
+knowledge_snapshot_json="$(RALPH_TEST_CLOCK_EPOCH="$TEST_EPOCH" php "$ROOT/bin/ralph-watch" --workflow wf_watch_demo --events-file "$events_file" --once --json)"
+KNOWLEDGE_SNAPSHOT="$knowledge_snapshot_json" php -r '
+    $snap = json_decode(getenv("KNOWLEDGE_SNAPSHOT"), true, 512, JSON_THROW_ON_ERROR);
+    $ks = $snap["knowledge_summary"] ?? null;
+    if (! is_array($ks)) {
+        fwrite(STDERR, "knowledge_summary ausente no snapshot do ralph-watch\n");
+        exit(1);
+    }
+    if (($ks["total"] ?? 0) !== 1
+        || ($ks["curated"] ?? 0) !== 1
+        || ($ks["pending"] ?? 0) !== 0) {
+        fwrite(STDERR, "contagens de knowledge_summary no snapshot inválidas: ".json_encode($ks)."\n");
+        exit(2);
+    }
+    $cands = $ks["candidates"] ?? [];
+    if (count($cands) !== 1
+        || ($cands[0]["curation_id"] ?? "") !== "CUR-2026-0001"
+        || ($cands[0]["lesson_id"] ?? "") !== "LES-2026-0001"
+        || ($cands[0]["status"] ?? "") !== "persisted") {
+        fwrite(STDERR, "candidatos no snapshot do ralph-watch inválidos: ".json_encode($cands)."\n");
+        exit(3);
+    }
+' || fail 'knowledge_summary no snapshot JSON do ralph-watch inválido'
+
+knowledge_snapshot_text="$(RALPH_TEST_CLOCK_EPOCH="$TEST_EPOCH" php "$ROOT/bin/ralph-watch" --workflow wf_watch_demo --events-file "$events_file" --once)"
+printf '%s\n' "$knowledge_snapshot_text" | grep -q "FILA DE CONHECIMENTO & LIÇÕES" || fail 'dashboard não exibiu seção FILA DE CONHECIMENTO & LIÇÕES'
+printf '%s\n' "$knowledge_snapshot_text" | grep -q "CUR-2026-0001" || fail 'dashboard não listou CUR-2026-0001'
+printf '%s\n' "$knowledge_snapshot_text" | grep -q "LES-2026-0001" || fail 'dashboard não listou LES-2026-0001'
+printf '%s\n' "$knowledge_snapshot_text" | grep -q "CURATED" || fail 'dashboard não exibiu badge CURATED'
+
+printf 'OK: todos os testes de bin/ralph-watch (TUI, delta mtime, JSON, ledger ausente, gates, debug e conhecimento em tempo real) passaram.\n'
 

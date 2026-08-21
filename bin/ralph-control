@@ -3,6 +3,12 @@
 
 declare(strict_types=1);
 
+// O ledger (events.jsonl) cresce com a execução; o controlador relê tudo a
+// cada ciclo (supervisor) e o limite padrão de 128M estoura em execuções
+// longas (OOM silencioso matava o supervisor). 512M cobre ledgers de dezenas
+// de MB sem comprometer a máquina; o readEvents em streaming reduz o pico.
+ini_set('memory_limit', (string) getenv('RALPH_MEMORY_LIMIT') ?: '512M');
+
 const RALPH_SCHEMA_VERSION = '1.3.0';
 const RALPH_COMPATIBLE_SCHEMA_VERSIONS = ['1.0.0', '1.1.0', '1.2.0', '1.3.0'];
 
@@ -1860,39 +1866,45 @@ function readEvents(): array
     if (! is_file($eventsFile)) {
         return [];
     }
-    $lines = file($eventsFile, FILE_IGNORE_NEW_LINES);
-    if ($lines === false) {
-        fail('não foi possível ler o ledger');
-    }
-
     $events = [];
     $previous = 'GENESIS';
-    foreach ($lines as $lineNumber => $line) {
+    $handle = fopen($eventsFile, 'rb');
+    if ($handle === false) {
+        fail('não foi possível abrir o ledger');
+    }
+    $lineNumber = 0;
+    while (($line = fgets($handle)) !== false) {
+        $lineNumber++;
         if (trim($line) === '') {
             continue;
         }
         try {
             $event = json_decode($line, true, 512, JSON_THROW_ON_ERROR);
         } catch (Throwable $exception) {
-            fail('evento corrompido na linha '.($lineNumber + 1));
+            fclose($handle);
+            fail('evento corrompido na linha '.$lineNumber);
         }
         if (! is_array($event)) {
-            fail('evento corrompido na linha '.($lineNumber + 1));
+            fclose($handle);
+            fail('evento corrompido na linha '.$lineNumber);
         }
-        validateEventShape($event, $lineNumber + 1);
+        validateEventShape($event, $lineNumber);
         if (($event['prev_event_hash'] ?? null) !== $previous) {
-            fail('hash chain inválida na linha '.($lineNumber + 1));
+            fclose($handle);
+            fail('hash chain inválida na linha '.$lineNumber);
         }
         $eventHash = $event['event_hash'] ?? null;
         unset($event['event_hash']);
         $expected = hashValue(json_encode(canonical($event), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)."\n");
         if ($eventHash !== $expected) {
-            fail('hash de evento inválido na linha '.($lineNumber + 1));
+            fclose($handle);
+            fail('hash de evento inválido na linha '.$lineNumber);
         }
         $event['event_hash'] = $eventHash;
         $events[] = $event;
         $previous = $eventHash;
     }
+    fclose($handle);
 
     return $events;
 }
@@ -2368,6 +2380,9 @@ function project(array $workflow, array $events): array
                 case 'knowledge.review_required': $feature['knowledge_state'] = 'knowledge_review_required';
                     break;
                 case 'knowledge.skipped': $feature['knowledge_state'] = 'knowledge_skipped';
+                    break;
+                case 'knowledge.telemetry':
+                    $feature['knowledge_telemetry'] = $event['facts'] ?? [];
                     break;
                 case 'delegation.started':
                 case 'delegation.completed':
@@ -3420,6 +3435,22 @@ function superviseWorkflow(array $arguments): void
                 $exit = 0;
                 $claimOutput = commandOutput($self.' claim --workflow '.escapeshellarg($workflowId).' --feature '.escapeshellarg($cursor).' --actor supervisor', $exit);
                 if ($exit !== 0) {
+                    // Árvore suja na claim de uma feature pendente = bloco
+                    // interrompido deixou trabalho parcial. Não é um erro do
+                    // supervisor: é o ciclo de recuperação sendo acionado.
+                    // Registra recovery_required (orquestrador assume com
+                    // systematic debugging) em vez de morrer — a retomada
+                    // preserva a árvore via retry --preserve-tree
+                    // (RALPH_RECONCILE_DIRTY=1) e o conhecimento da pane.
+                    if (str_contains($claimOutput, 'working tree suja')) {
+                        $dirtyFeature = $feature;
+                        $dirtySnapshot = supervisorSnapshot($arguments, $workflowId, $staleAfter, $activityStaleAfter);
+                        supervisorRecordRequiredRecovery($arguments, $dirtyFeature, $dirtySnapshot, 'claim bloqueada por árvore suja de bloco interrompido; recovery preserva o trabalho parcial');
+                        fwrite(STDERR, supervisorFeedback($dirtySnapshot)."\n");
+                        printJson(['status' => 'recovery_required', 'workflow_id' => $workflowId, 'feature_key' => $cursor, 'reason' => 'dirty_tree_claim_blocked']);
+
+                        return;
+                    }
                     fail($claimOutput, $exit);
                 }
                 $claim = json_decode($claimOutput, true, 512, JSON_THROW_ON_ERROR);
@@ -4352,6 +4383,18 @@ function releaseFeature(array $arguments): void
             ],
             'created_at' => gmdate('Y-m-d\TH:i:s\Z'),
         ]);
+        appendEvent(eventContext(array_merge($arguments, [
+            'idempotency-key' => 'idem_ktel_'.bin2hex(random_bytes(12)),
+        ]), $feature, 'knowledge.telemetry', 'Telemetria de candidato de conhecimento criado após release', [
+            'action' => 'candidate_created',
+            'status' => 'pending',
+            'curation_id' => $curationId,
+            'lesson_id' => null,
+            'title' => sanitize((string) ($feature['title'] ?? $featureKey)),
+            'category' => 'engineering',
+            'topics' => [],
+            'policy' => 'non_blocking',
+        ]));
         clearGateSession($feature);
     });
     printJson(['status' => 'released', 'feature_key' => $featureKey, 'knowledge' => 'pending_non_blocking']);
@@ -6672,6 +6715,18 @@ function knowledge(array $arguments): void
                 ],
                 'created_at' => gmdate('Y-m-d\TH:i:s\Z'),
             ]);
+            appendEvent(eventContext(array_merge($arguments, [
+                'idempotency-key' => 'idem_ktel_'.bin2hex(random_bytes(12)),
+            ]), $feature, 'knowledge.telemetry', 'Telemetria de candidato de conhecimento criado', [
+                'action' => 'candidate_created',
+                'status' => 'pending',
+                'curation_id' => $curationId,
+                'lesson_id' => null,
+                'title' => sanitize((string) ($arguments['title'] ?? ($feature['title'] ?? $featureKey))),
+                'category' => $category,
+                'topics' => $topics,
+                'policy' => 'non_blocking',
+            ]));
 
             return ['lesson_id' => null, 'curation_id' => $curationId, 'index_path' => null];
         }
@@ -6698,6 +6753,21 @@ function knowledge(array $arguments): void
             'domain' => $domain,
             'fingerprints' => $fingerprints,
         ]));
+        $telemetryTitle = (string) ($arguments['title'] ?? ($feature['title'] ?? $featureKey));
+        $telemetryFacts = [
+            'action' => $action === 'review-required' ? 'review_required' : $action,
+            'status' => $candidateStatus,
+            'curation_id' => $curationId,
+            'lesson_id' => $lessonId,
+            'title' => sanitize($telemetryTitle),
+            'category' => $category,
+            'topics' => $topics,
+            'reason' => isset($arguments['reason']) ? sanitize((string) $arguments['reason']) : null,
+            'policy' => 'non_blocking',
+        ];
+        appendEvent(eventContext(array_merge($arguments, [
+            'idempotency-key' => 'idem_ktel_'.bin2hex(random_bytes(12)),
+        ]), $feature, 'knowledge.telemetry', 'Telemetria de decisão sobre memória de engenharia', array_filter($telemetryFacts, static fn ($v): bool => $v !== null)));
 
         return ['lesson_id' => $lessonId, 'curation_id' => $curationId, 'index_path' => $indexPath, 'idempotent' => false];
     });

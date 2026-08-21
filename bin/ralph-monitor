@@ -374,12 +374,222 @@ function monitorSnapshot(string $root, string $workflowId, int $staleAfter, int 
         ],
         'gate_ages' => monitorGateAges($root, $workflowId, $cursor, is_array($current) ? ($current['attempt'] ?? null) : null),
         'debug' => monitorDebug($root, $workflowId, $cursor, is_array($current) ? ($current['attempt'] ?? null) : null),
+        'knowledge_summary' => monitorKnowledgeSummary($root, $workflowId),
         'loop_feedback' => $lastLoopFeedback,
         'processes' => $processes,
         'stale_after_seconds' => $staleAfter,
         'activity_stale_after_seconds' => $activityStaleAfter,
         // FEATURE-094 (Phase 7): circuitos derivados do ledger, somente leitura.
         'provider_circuits' => monitorProviderCircuits($root, $workflowId),
+    ];
+}
+
+/**
+ * Deriva resumo e contagens da fila de conhecimento exclusivamente do ledger e cache local (read-only).
+ *
+ * @return array<string, mixed>
+ */
+function monitorKnowledgeSummary(string $root, string $workflowId): array
+{
+    $candidates = [];
+    $gitCommonDir = monitorGitCommonDir($root);
+    $runtime = ($gitCommonDir ?: $root).DIRECTORY_SEPARATOR.'ralph-control';
+    $eventsFile = $runtime.DIRECTORY_SEPARATOR.'events.jsonl';
+
+    if (is_file($eventsFile)) {
+        $lines = file($eventsFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+        foreach ($lines as $line) {
+            if (trim($line) === '') {
+                continue;
+            }
+            try {
+                $event = json_decode($line, true, 512, JSON_THROW_ON_ERROR);
+            } catch (Throwable) {
+                continue;
+            }
+            if (! is_array($event) || ($event['workflow_id'] ?? null) !== $workflowId) {
+                continue;
+            }
+            $type = (string) ($event['type'] ?? '');
+            $facts = is_array($event['facts'] ?? null) ? $event['facts'] : [];
+            $featureKey = (string) ($event['feature_key'] ?? '');
+            $attempt = (int) ($event['attempt'] ?? 1);
+            $ts = is_string($event['timestamp'] ?? null) ? $event['timestamp'] : null;
+
+            if ($type === 'knowledge.candidate_created') {
+                $cId = is_string($facts['curation_id'] ?? null) ? $facts['curation_id'] : null;
+                if ($cId !== null && $cId !== '') {
+                    $candidates[$cId] = array_merge($candidates[$cId] ?? [], [
+                        'curation_id' => $cId,
+                        'workflow_id' => $workflowId,
+                        'feature_key' => $featureKey !== '' ? $featureKey : null,
+                        'attempt' => $attempt,
+                        'status' => 'pending',
+                        'title' => $candidates[$cId]['title'] ?? null,
+                        'category' => $candidates[$cId]['category'] ?? 'engineering',
+                        'topics' => $candidates[$cId]['topics'] ?? [],
+                        'lesson_id' => null,
+                        'reason' => null,
+                        'timestamp' => $ts,
+                    ]);
+                }
+            } elseif ($type === 'knowledge.curated') {
+                $cId = is_string($facts['curation_id'] ?? null) ? $facts['curation_id'] : null;
+                if ($cId !== null && $cId !== '') {
+                    $candidates[$cId] = array_merge($candidates[$cId] ?? [
+                        'curation_id' => $cId,
+                        'workflow_id' => $workflowId,
+                        'feature_key' => $featureKey !== '' ? $featureKey : null,
+                        'attempt' => $attempt,
+                    ], [
+                        'status' => 'persisted',
+                        'lesson_id' => is_string($facts['lesson_id'] ?? null) ? $facts['lesson_id'] : null,
+                        'category' => is_string($facts['category'] ?? null) ? $facts['category'] : 'engineering',
+                        'topics' => is_array($facts['topics'] ?? null) ? $facts['topics'] : [],
+                        'timestamp' => $ts,
+                    ]);
+                }
+            } elseif ($type === 'knowledge.rejected') {
+                $cId = is_string($facts['curation_id'] ?? null) ? $facts['curation_id'] : null;
+                if ($cId !== null && $cId !== '') {
+                    $candidates[$cId] = array_merge($candidates[$cId] ?? [
+                        'curation_id' => $cId,
+                        'workflow_id' => $workflowId,
+                        'feature_key' => $featureKey !== '' ? $featureKey : null,
+                        'attempt' => $attempt,
+                    ], [
+                        'status' => 'rejected',
+                        'reason' => is_string($facts['reason'] ?? null) ? $facts['reason'] : null,
+                        'timestamp' => $ts,
+                    ]);
+                }
+            } elseif ($type === 'knowledge.skipped') {
+                $cId = is_string($facts['curation_id'] ?? null) ? $facts['curation_id'] : null;
+                if ($cId !== null && $cId !== '') {
+                    $candidates[$cId] = array_merge($candidates[$cId] ?? [
+                        'curation_id' => $cId,
+                        'workflow_id' => $workflowId,
+                        'feature_key' => $featureKey !== '' ? $featureKey : null,
+                        'attempt' => $attempt,
+                    ], [
+                        'status' => 'skipped',
+                        'timestamp' => $ts,
+                    ]);
+                }
+            } elseif ($type === 'knowledge.review_required') {
+                $cId = is_string($facts['curation_id'] ?? null) ? $facts['curation_id'] : null;
+                if ($cId !== null && $cId !== '') {
+                    $candidates[$cId] = array_merge($candidates[$cId] ?? [
+                        'curation_id' => $cId,
+                        'workflow_id' => $workflowId,
+                        'feature_key' => $featureKey !== '' ? $featureKey : null,
+                        'attempt' => $attempt,
+                    ], [
+                        'status' => 'review_required',
+                        'timestamp' => $ts,
+                    ]);
+                }
+            } elseif ($type === 'knowledge.telemetry') {
+                $cId = is_string($facts['curation_id'] ?? null) ? $facts['curation_id'] : null;
+                if ($cId !== null && $cId !== '') {
+                    $action = (string) ($facts['action'] ?? '');
+                    $status = (string) ($facts['status'] ?? ($action === 'candidate_created' ? 'pending' : ($action === 'curated' ? 'persisted' : $action)));
+                    $candidates[$cId] = array_merge($candidates[$cId] ?? [
+                        'curation_id' => $cId,
+                        'workflow_id' => $workflowId,
+                        'feature_key' => $featureKey !== '' ? $featureKey : null,
+                        'attempt' => $attempt,
+                    ], [
+                        'status' => $status,
+                        'title' => is_string($facts['title'] ?? null) ? $facts['title'] : ($candidates[$cId]['title'] ?? null),
+                        'category' => is_string($facts['category'] ?? null) ? $facts['category'] : ($candidates[$cId]['category'] ?? 'engineering'),
+                        'topics' => is_array($facts['topics'] ?? null) ? $facts['topics'] : ($candidates[$cId]['topics'] ?? []),
+                        'lesson_id' => is_string($facts['lesson_id'] ?? null) ? $facts['lesson_id'] : ($candidates[$cId]['lesson_id'] ?? null),
+                        'reason' => is_string($facts['reason'] ?? null) ? $facts['reason'] : ($candidates[$cId]['reason'] ?? null),
+                        'timestamp' => $ts,
+                    ]);
+                }
+            }
+        }
+    }
+
+    $candidatesDir = $root.DIRECTORY_SEPARATOR.'.ralph'.DIRECTORY_SEPARATOR.'knowledge-candidates';
+    if (is_dir($candidatesDir)) {
+        foreach (glob($candidatesDir.DIRECTORY_SEPARATOR.'CUR-*.json') ?: [] as $cFile) {
+            try {
+                $cData = json_decode((string) file_get_contents($cFile), true, 512, JSON_THROW_ON_ERROR);
+                if (is_array($cData) && ($cData['workflow_id'] ?? null) === $workflowId) {
+                    $cId = is_string($cData['curation_id'] ?? null) ? $cData['curation_id'] : null;
+                    if ($cId !== null && $cId !== '') {
+                        $existing = $candidates[$cId] ?? [];
+                        $cStatus = (string) ($cData['status'] ?? 'pending');
+                        $decision = is_array($cData['decision'] ?? null) ? $cData['decision'] : [];
+                        $candidates[$cId] = array_merge([
+                            'curation_id' => $cId,
+                            'workflow_id' => $workflowId,
+                            'feature_key' => $cData['feature_key'] ?? null,
+                            'attempt' => $cData['attempt'] ?? 1,
+                            'status' => $cStatus,
+                            'title' => null,
+                            'category' => 'engineering',
+                            'topics' => [],
+                            'lesson_id' => $decision['lesson_id'] ?? null,
+                            'reason' => $decision['reason'] ?? null,
+                            'timestamp' => $cData['created_at'] ?? null,
+                        ], $existing, [
+                            'status' => $existing['status'] ?? $cStatus,
+                            'lesson_id' => $existing['lesson_id'] ?? ($decision['lesson_id'] ?? null),
+                            'reason' => $existing['reason'] ?? ($decision['reason'] ?? null),
+                        ]);
+                    }
+                }
+            } catch (Throwable) {
+                // ignore
+            }
+        }
+    }
+
+    $pendingCount = 0;
+    $curatedCount = 0;
+    $rejectedCount = 0;
+    $skippedCount = 0;
+    $reviewRequiredCount = 0;
+
+    foreach ($candidates as $candidate) {
+        $st = (string) ($candidate['status'] ?? 'pending');
+        if ($st === 'pending') {
+            $pendingCount++;
+        } elseif ($st === 'persisted' || $st === 'curated') {
+            $curatedCount++;
+        } elseif ($st === 'rejected') {
+            $rejectedCount++;
+        } elseif ($st === 'skipped') {
+            $skippedCount++;
+        } elseif ($st === 'review_required') {
+            $reviewRequiredCount++;
+        }
+    }
+
+    $candidatesList = array_values($candidates);
+    usort($candidatesList, static fn (array $a, array $b): int => strcmp((string) ($a['curation_id'] ?? ''), (string) ($b['curation_id'] ?? '')));
+
+    return [
+        'total' => count($candidatesList),
+        'pending' => $pendingCount,
+        'curated' => $curatedCount,
+        'persisted' => $curatedCount,
+        'rejected' => $rejectedCount,
+        'skipped' => $skippedCount,
+        'review_required' => $reviewRequiredCount,
+        'counts' => [
+            'pending' => $pendingCount,
+            'curated' => $curatedCount,
+            'persisted' => $curatedCount,
+            'rejected' => $rejectedCount,
+            'skipped' => $skippedCount,
+            'review_required' => $reviewRequiredCount,
+        ],
+        'candidates' => $candidatesList,
     ];
 }
 
