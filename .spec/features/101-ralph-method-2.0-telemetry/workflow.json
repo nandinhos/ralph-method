@@ -1,0 +1,88 @@
+{
+  "schema_version": "1.0.0",
+  "workflow_id": "wf_ralph_method_2_0_onda1",
+  "plan_file": ".spec/features/101-ralph-method-2.0-telemetry/PHASES.md",
+  "test_command": "bash scripts/ci-portable.sh",
+  "knowledge_policy": {
+    "mode": "non_blocking"
+  },
+  "execution_policy": {
+    "schema_version": "1.0.0",
+    "provider_strategy": "explicit_failover",
+    "provider_chain": [
+      {
+        "runner": "opencode",
+        "profile": "opencode",
+        "required_failure_domain_status": "observed"
+      },
+      {
+        "runner": "codex",
+        "profile": "codex",
+        "required_failure_domain_status": "observed"
+      },
+      {
+        "runner": "claude",
+        "profile": "claude",
+        "required_failure_domain_status": "observed"
+      }
+    ],
+    "failover": {
+      "eligible_reasons": ["provider_usage_limited"],
+      "short_wait_threshold_seconds": 120,
+      "unknown_reset_cooldown_seconds": 1800,
+      "max_switches_per_feature": 2,
+      "max_no_progress_seconds": 21600,
+      "when_chain_exhausted": "capacity_wait_then_recovery"
+    }
+  },
+  "features": [
+    {
+      "feature_key": "FEATURE-101A-TELEMETRY-SCHEMA",
+      "title": "Contrato de telemetria (schema 1.3.0 + eventos)",
+      "position": 1,
+      "input_file": ".spec/features/101-ralph-method-2.0-telemetry/PHASES.md",
+      "source_phase": "1",
+      "status": "pending"
+    },
+    {
+      "feature_key": "FEATURE-101B-GATE-WATCHDOG",
+      "title": "Watchdog de gates (gate.started/stalled)",
+      "position": 2,
+      "input_file": ".spec/features/101-ralph-method-2.0-telemetry/PHASES.md",
+      "source_phase": "2",
+      "status": "pending"
+    },
+    {
+      "feature_key": "FEATURE-101C-RALPH-WATCH",
+      "title": "Terminal dashboard ralph-watch",
+      "position": 3,
+      "input_file": ".spec/features/101-ralph-method-2.0-telemetry/PHASES.md",
+      "source_phase": "3",
+      "status": "pending"
+    },
+    {
+      "feature_key": "FEATURE-101D-DEBUG-VISIBLE",
+      "title": "Systematic debugging ao vivo no stream",
+      "position": 4,
+      "input_file": ".spec/features/101-ralph-method-2.0-telemetry/PHASES.md",
+      "source_phase": "4",
+      "status": "pending"
+    },
+    {
+      "feature_key": "FEATURE-101E-KNOWLEDGE-VISIBLE",
+      "title": "Camada de conhecimento em tempo real",
+      "position": 5,
+      "input_file": ".spec/features/101-ralph-method-2.0-telemetry/PHASES.md",
+      "source_phase": "5",
+      "status": "pending"
+    },
+    {
+      "feature_key": "FEATURE-101F-COCKPIT-STREAM",
+      "title": "Cockpit consumindo o stream (sem regex em stderr)",
+      "position": 6,
+      "input_file": ".spec/features/101-ralph-method-2.0-telemetry/PHASES.md",
+      "source_phase": "6",
+      "status": "pending"
+    }
+  ]
+}
