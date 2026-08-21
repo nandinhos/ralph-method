@@ -23,6 +23,7 @@ checks=(
   scripts/test-ralph-noop-approval.sh
   scripts/test-ralph-knowledge.sh
   scripts/test-ralph-metrics.sh
+  scripts/test-ralph-watch.sh
   scripts/test-ralph.sh
   scripts/test-opencode-policy.sh
   scripts/test-opencode-adapter.sh

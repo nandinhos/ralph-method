@@ -497,9 +497,12 @@ grep -q '"exit_reconfirmed"' "$reconfirm_tmp/.git/ralph-control/events.jsonl" ||
 printf 'ok   reconfirmação de exit: exit 1 com "tudo verde" ratificado para 0 (awaiting_gates)\n'
 
 # ---------------------------------------------------------------------------
-# FEATURE-101A (TASK 2/3 do technical review): telemetry.activity sanitiza
-# canário de segredo/UTF-8 inválido e o heartbeat preserva campos antigos
-# (retrocompat de monitor/status).
+# FEATURE-101 (Phase 1): Contrato de telemetria (schema + eventos)
+# - RALPH_SCHEMA_VERSION 1.3.0 e aceitação de 1.0.0-1.3.0; rejeição de 1.4.0
+# - Verificação de novos tipos de evento e registro de event.rejected para tipo desconhecido
+# - telemetry.activity sanitiza segredos e UTF-8 inválido sem rejeitar o bloco
+# - command.heartbeat preserva campos legados e adiciona position, eta_seconds, gate_age
+# - monitor e status continuam compatíveis
 # ---------------------------------------------------------------------------
 telemetry_tmp="$TMP/telemetry-fixture"
 mkdir -p "$telemetry_tmp"
@@ -514,6 +517,7 @@ git -C "$telemetry_tmp" commit -qm base
 (cd "$telemetry_tmp" && control init --workflow wf_telemetry --manifest workflow.json >/dev/null)
 telemetry_claim="$(cd "$telemetry_tmp" && control claim --workflow wf_telemetry --feature FEATURE-001 --actor telemetry)"
 telemetry_lease="$(json_field "$telemetry_claim" lease_token)"
+
 # O bloco emite no stdout um canário de segredo e UTF-8 inválido; o
 # telemetry.activity capturado no ledger não pode conter o segredo em claro.
 telemetry_canary='sk-canary-SECRETVALUE1234567890'
@@ -521,13 +525,654 @@ telemetry_canary='sk-canary-SECRETVALUE1234567890'
   --heartbeat-interval 1 \
   --command "printf 'progredindo com $telemetry_canary e caracteres inválidos \\x00\\xff\\xfe\\n'; sleep 3; exit 0" \
   >/dev/null 2>&1)
+
 if grep -q "$telemetry_canary" "$telemetry_tmp/.git/ralph-control/events.jsonl"; then
   fail 'telemetry.activity vazou o canário de segredo no ledger'
 fi
+
 grep -q '"type":"telemetry.activity"' "$telemetry_tmp/.git/ralph-control/events.jsonl" \
   || fail 'telemetry.activity não foi emitido durante o bloco'
-# Retrocompat: command.heartbeat preserva os campos antigos (pid, idle_seconds)
-# e adiciona os novos opcionais (position, eta_seconds, gate_age).
 grep -q '"type":"command.heartbeat"' "$telemetry_tmp/.git/ralph-control/events.jsonl" \
   || fail 'command.heartbeat não foi emitido'
-printf 'ok   telemetry.activity sanitiza canário de segredo e heartbeat preserva campos (FEATURE-101A TASK 2/3)\n'
+
+# Validação detalhada dos campos de telemetry.activity e command.heartbeat
+EVENTS_FILE="$telemetry_tmp/.git/ralph-control/events.jsonl" php -r '
+  $events = file(getenv("EVENTS_FILE"), FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+  $activityFound = false;
+  $heartbeatFound = false;
+  foreach ($events as $line) {
+      $event = json_decode($line, true, 512, JSON_THROW_ON_ERROR);
+      $type = $event["type"] ?? "";
+      if ($type === "telemetry.activity") {
+          $activityFound = true;
+          $facts = $event["facts"] ?? [];
+          if (! array_key_exists("activity_preview", $facts) || ! array_key_exists("elapsed", $facts)
+              || ! array_key_exists("idle_seconds", $facts) || ! array_key_exists("phase", $facts)) {
+              fwrite(STDERR, "telemetry.activity campos ausentes: ".json_encode($facts)."\n");
+              exit(1);
+          }
+      } elseif ($type === "command.heartbeat") {
+          $heartbeatFound = true;
+          $facts = $event["facts"] ?? [];
+          // Campos legados
+          foreach (["pid", "process_tree", "heartbeat_sequence", "stdout_bytes", "stderr_bytes", "idle_seconds", "child_running"] as $legacyKey) {
+              if (! array_key_exists($legacyKey, $facts)) {
+                  fwrite(STDERR, "command.heartbeat campo legado ausente: {$legacyKey}\n");
+                  exit(1);
+              }
+          }
+          // Campos novos
+          foreach (["position", "eta_seconds", "gate_age"] as $newKey) {
+              if (! array_key_exists($newKey, $facts)) {
+                  fwrite(STDERR, "command.heartbeat campo novo ausente: {$newKey}\n");
+                  exit(1);
+              }
+          }
+      }
+  }
+  if (! $activityFound || ! $heartbeatFound) {
+      fwrite(STDERR, "eventos de telemetria não encontrados no ledger\n");
+      exit(1);
+  }
+'
+
+# Monitor e status continuam lendo os eventos normalmente
+(cd "$telemetry_tmp" && control status >/dev/null)
+(cd "$telemetry_tmp" && php "$ROOT/bin/ralph-monitor" --workflow wf_telemetry --once --json >/dev/null)
+(cd "$telemetry_tmp" && control verify >/dev/null)
+printf 'ok   telemetry.activity sanitiza canário de segredo e heartbeat preserva campos (FEATURE-101 Phase 1)\n'
+
+# ---------------------------------------------------------------------------
+# Teste de schema 1.3.0, fail-closed de 1.4.0 e tipos novos no verify
+# ---------------------------------------------------------------------------
+schema_tmp="$TMP/schema-fixture"
+mkdir -p "$schema_tmp"
+git -C "$schema_tmp" init -q
+git -C "$schema_tmp" config user.email ralph-method@example.invalid
+git -C "$schema_tmp" config user.name 'Ralph Method Schema Test'
+printf '%s\n' '# Schema Test' > "$schema_tmp/README.md"
+printf '%s\n' '# Plano' > "$schema_tmp/plan.md"
+printf '%s\n' '{"schema_version":"1.3.0","workflow_id":"wf_schema","plan_file":"plan.md","knowledge_policy":{"mode":"non_blocking"},"features":[{"feature_key":"FEATURE-001","title":"Schema Test","position":1}]}' > "$schema_tmp/workflow.json"
+git -C "$schema_tmp" add .
+git -C "$schema_tmp" commit -qm base
+(cd "$schema_tmp" && control init --workflow wf_schema --manifest workflow.json >/dev/null)
+(cd "$schema_tmp" && control verify >/dev/null)
+
+# Teste fail-closed: evento com schema_version 1.4.0 deve ser rejeitado por verify
+schema_invalid_tmp="$TMP/schema-invalid-fixture"
+cp -a "$schema_tmp" "$schema_invalid_tmp"
+EVENTS_FILE="$schema_invalid_tmp/.git/ralph-control/events.jsonl" php -r '
+  $lines = file(getenv("EVENTS_FILE"), FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+  $first = json_decode($lines[0], true, 512, JSON_THROW_ON_ERROR);
+  $first["schema_version"] = "1.4.0";
+  unset($first["event_hash"]);
+  // Canonical hash
+  $canon = $first;
+  ksort($canon);
+  // Just rewrite with invalid schema version
+  $first["event_hash"] = "sha256:".hash("sha256", json_encode($canon, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)."\n");
+  file_put_contents(getenv("EVENTS_FILE"), json_encode($first, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)."\n");
+'
+set +e
+(cd "$schema_invalid_tmp" && control verify >/dev/null 2>&1)
+schema_14_exit=$?
+set -e
+[ "$schema_14_exit" -ne 0 ] || fail 'schema_version 1.4.0 não foi rejeitado (fail-closed)'
+
+# Teste de tipo desconhecido: tentativa de evento inválido gera event.rejected no ledger
+reject_tmp="$TMP/reject-fixture"
+mkdir -p "$reject_tmp"
+git -C "$reject_tmp" init -q
+git -C "$reject_tmp" config user.email ralph-method@example.invalid
+git -C "$reject_tmp" config user.name 'Ralph Method Reject Test'
+printf '%s\n' '# Reject Test' > "$reject_tmp/README.md"
+printf '%s\n' '# Plano' > "$reject_tmp/plan.md"
+printf '%s\n' '{"schema_version":"1.3.0","workflow_id":"wf_reject","plan_file":"plan.md","knowledge_policy":{"mode":"non_blocking"},"features":[{"feature_key":"FEATURE-001","title":"Reject Test","position":1}]}' > "$reject_tmp/workflow.json"
+git -C "$reject_tmp" add .
+git -C "$reject_tmp" commit -qm base
+(cd "$reject_tmp" && control init --workflow wf_reject --manifest workflow.json >/dev/null)
+(cd "$reject_tmp" && control claim --workflow wf_reject --feature FEATURE-001 --actor reject-test >/dev/null)
+
+# Testar via subshell que appendEvent de tipo desconhecido falha e grava event.rejected
+set +e
+(cd "$reject_tmp" && ROOT_DIR="$ROOT" php -r '
+  $root = realpath(getenv("ROOT_DIR"));
+  $code = file_get_contents($root."/bin/ralph-control");
+  $code = preg_replace("/^#\!.*?\n/", "", $code);
+  $code = preg_replace("/^<\?php\s*/", "", $code);
+  $code = preg_replace("/\\\$arguments\s*=\s*args\\(\\\$argv\\);.*$/s", "", $code);
+  eval($code);
+  $workflow = loadWorkflowForId("wf_reject");
+  $projection = project($workflow, readEvents());
+  $feature = featureFrom($projection, "FEATURE-001");
+  appendEvent(eventContext(["workflow" => "wf_reject"], $feature, "tipo.completamente.invalido", "Teste de rejeição"));
+') >/dev/null 2>&1
+reject_sub_exit=$?
+set -e
+[ "$reject_sub_exit" -ne 0 ] || fail 'tipo desconhecido não retornou erro'
+grep -q '"type":"event.rejected"' "$reject_tmp/.git/ralph-control/events.jsonl" \
+  || fail 'event.rejected não foi gravado no ledger para tipo desconhecido'
+(cd "$reject_tmp" && control verify >/dev/null) || fail 'ledger com event.rejected não passou no verify'
+printf 'ok   schema 1.3.0 promovido, 1.4.0 rejeitado fail-closed, event.rejected e novos tipos no verify (FEATURE-101 Phase 1)\n'
+
+# ---------------------------------------------------------------------------
+# FEATURE-101 (Phase 2): Watchdog de gates (gate.started, gate.stalled, gate_ages)
+# - gate.started (gate, attempt, started_at) emitido ao entrar em awaiting_gates
+# - Replay de awaiting_gates não duplica gate.started (idempotência)
+# - Relógio injetável (RALPH_TEST_CLOCK_EPOCH) determinístico
+# - Acima de RALPH_GATE_STALL_AFTER (600s) -> gate.stalled com gate, age_seconds, threshold
+# - Acima de RALPH_GATE_MAX_AGE (3600s) -> recovery_required explícito sem espera real
+# - ralph-monitor --once --json expõe gate_ages de forma read-only
+# ---------------------------------------------------------------------------
+watchdog_tmp="$TMP/watchdog-fixture"
+mkdir -p "$watchdog_tmp/bin" "$watchdog_tmp/scripts"
+git -C "$watchdog_tmp" init -q
+git -C "$watchdog_tmp" config user.email ralph-method@example.invalid
+git -C "$watchdog_tmp" config user.name 'Ralph Method Watchdog Test'
+printf '%s\n' '# Watchdog Test' > "$watchdog_tmp/README.md"
+printf '%s\n' '# Plano' > "$watchdog_tmp/plan.md"
+printf '%s\n' '{"schema_version":"1.3.0","workflow_id":"wf_watchdog","plan_file":"plan.md","knowledge_policy":{"mode":"non_blocking"},"features":[{"feature_key":"FEATURE-001","title":"Watchdog Test","position":1}]}' > "$watchdog_tmp/workflow.json"
+printf '%s\n' '#!/usr/bin/env bash' 'echo "check ok"' > "$watchdog_tmp/bin/check"
+chmod +x "$watchdog_tmp/bin/check"
+cp "$ROOT/scripts/ralph-run-quality.sh" "$watchdog_tmp/scripts/"
+cp "$ROOT/scripts/ralph-run-runtime-evidence.sh" "$watchdog_tmp/scripts/"
+cp "$ROOT/scripts/ralph-run-independent-gate.sh" "$watchdog_tmp/scripts/"
+cp "$ROOT/scripts/ralph-run-curator.sh" "$watchdog_tmp/scripts/"
+chmod +x "$watchdog_tmp/scripts"/ralph-run-*.sh
+
+git -C "$watchdog_tmp" add .
+git -C "$watchdog_tmp" commit -qm base
+
+(cd "$watchdog_tmp" && control init --workflow wf_watchdog --manifest workflow.json >/dev/null)
+watchdog_claim="$(cd "$watchdog_tmp" && control claim --workflow wf_watchdog --feature FEATURE-001 --actor watchdog-test)"
+watchdog_lease="$(json_field "$watchdog_claim" lease_token)"
+
+# Bloco termina com exit 0 -> feature entra em awaiting_gates
+printf '%s\n' 'src code' > "$watchdog_tmp/src.txt"
+git -C "$watchdog_tmp" add src.txt
+git -C "$watchdog_tmp" commit -qm "feat: implementa"
+(cd "$watchdog_tmp" && control run --workflow wf_watchdog --feature FEATURE-001 --lease "$watchdog_lease" --command 'true' >/dev/null 2>&1)
+
+# Pipeline de gates via supervisor com gates configurados
+watchdog_log="$TMP/watchdog-supervise.log"
+(cd "$watchdog_tmp" && env -u RALPH_QUALITY_COMMAND -u RALPH_RUNTIME_EVIDENCE_CMD -u RALPH_TECHNICAL_REVIEW_COMMAND -u RALPH_CURATION_COMMAND -u RALPH_TEST_CMD \
+  RALPH_QUALITY_COMMAND='echo quality-ok' \
+  RALPH_RUNTIME_EVIDENCE_CMD='echo runtime-ok' \
+  RALPH_TECHNICAL_REVIEW_COMMAND='echo review-ok' \
+  RALPH_CURATION_COMMAND='echo curation-ok' \
+  php "$ROOT/bin/ralph-control" supervise --workflow wf_watchdog --engine codex --interval 1 --max-retries 0 > "$watchdog_log" 2>&1)
+
+# Verificar que gate.started foi emitido para os gates com campos esperados
+grep -q '"type":"gate.started"' "$watchdog_tmp/.git/ralph-control/events.jsonl" \
+  || fail 'gate.started não foi emitido durante o pipeline de gates'
+
+EVENTS_FILE="$watchdog_tmp/.git/ralph-control/events.jsonl" php -r '
+  $events = file(getenv("EVENTS_FILE"), FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+  $startedGates = [];
+  foreach ($events as $line) {
+      $event = json_decode($line, true, 512, JSON_THROW_ON_ERROR);
+      if (($event["type"] ?? "") === "gate.started") {
+          $facts = $event["facts"] ?? [];
+          if (! isset($facts["gate"], $facts["attempt"], $facts["started_at"])) {
+              fwrite(STDERR, "gate.started com fatos incompletos: ".json_encode($facts)."\n");
+              exit(1);
+          }
+          $startedGates[] = $facts["gate"];
+      }
+  }
+  if (! in_array("validation", $startedGates, true)) {
+      fwrite(STDERR, "gate.started para validation não encontrado\n");
+      exit(1);
+  }
+'
+
+# Teste de idempotência / replay de awaiting_gates:
+# Iniciar outra fixture travada em awaiting_gates para testar replay
+replay_tmp="$TMP/replay-fixture"
+mkdir -p "$replay_tmp/bin" "$replay_tmp/scripts"
+git -C "$replay_tmp" init -q
+git -C "$replay_tmp" config user.email ralph-method@example.invalid
+git -C "$replay_tmp" config user.name 'Ralph Method Replay Test'
+printf '%s\n' '# Replay' > "$replay_tmp/README.md"
+printf '%s\n' '# Plano' > "$replay_tmp/plan.md"
+printf '%s\n' '{"schema_version":"1.3.0","workflow_id":"wf_replay","plan_file":"plan.md","knowledge_policy":{"mode":"non_blocking"},"features":[{"feature_key":"FEATURE-001","title":"Replay","position":1}]}' > "$replay_tmp/workflow.json"
+git -C "$replay_tmp" add .
+git -C "$replay_tmp" commit -qm base
+(cd "$replay_tmp" && control init --workflow wf_replay --manifest workflow.json >/dev/null)
+replay_claim="$(cd "$replay_tmp" && control claim --workflow wf_replay --feature FEATURE-001 --actor replay-test)"
+replay_lease="$(json_field "$replay_claim" lease_token)"
+printf '%s\n' 'code' > "$replay_tmp/code.txt"
+git -C "$replay_tmp" add code.txt
+git -C "$replay_tmp" commit -qm "feat: replay"
+(cd "$replay_tmp" && control run --workflow wf_replay --feature FEATURE-001 --lease "$replay_lease" --command 'true' >/dev/null 2>&1)
+
+# Chama supervisor com comando que falha em runtime_evidence sem avançar
+set +e
+(cd "$replay_tmp" && env -u RALPH_QUALITY_COMMAND -u RALPH_RUNTIME_EVIDENCE_CMD -u RALPH_TECHNICAL_REVIEW_COMMAND -u RALPH_CURATION_COMMAND -u RALPH_TEST_CMD \
+  RALPH_QUALITY_COMMAND='echo quality-ok' \
+  RALPH_RUNTIME_EVIDENCE_CMD='exit 1' \
+  php "$ROOT/bin/ralph-control" supervise --workflow wf_replay --engine codex --interval 1 --max-retries 0 >/dev/null 2>&1)
+set -e
+replay_started_1="$(grep -c '"type":"gate.started"' "$replay_tmp/.git/ralph-control/events.jsonl")"
+
+# Re-executa supervise no mesmo estado de awaiting_gates
+set +e
+(cd "$replay_tmp" && env -u RALPH_QUALITY_COMMAND -u RALPH_RUNTIME_EVIDENCE_CMD -u RALPH_TECHNICAL_REVIEW_COMMAND -u RALPH_CURATION_COMMAND -u RALPH_TEST_CMD \
+  RALPH_QUALITY_COMMAND='echo quality-ok' \
+  RALPH_RUNTIME_EVIDENCE_CMD='exit 1' \
+  php "$ROOT/bin/ralph-control" supervise --workflow wf_replay --engine codex --interval 1 --max-retries 0 >/dev/null 2>&1)
+set -e
+replay_started_2="$(grep -c '"type":"gate.started"' "$replay_tmp/.git/ralph-control/events.jsonl")"
+
+[ "$replay_started_1" -eq "$replay_started_2" ] || fail "replay de awaiting_gates duplicou gate.started ($replay_started_1 vs $replay_started_2)"
+printf 'ok   gate.started registrado e idempotente por replay (FEATURE-101 Phase 2)\n'
+
+# ---------------------------------------------------------------------------
+# Teste de Watchdog com relógio determinístico: gate.stalled e recovery_required
+# ---------------------------------------------------------------------------
+stall_tmp="$TMP/stall-fixture"
+mkdir -p "$stall_tmp"
+git -C "$stall_tmp" init -q
+git -C "$stall_tmp" config user.email ralph-method@example.invalid
+git -C "$stall_tmp" config user.name 'Ralph Method Stall Test'
+printf '%s\n' '# Stall' > "$stall_tmp/README.md"
+printf '%s\n' '# Plano' > "$stall_tmp/plan.md"
+printf '%s\n' '{"schema_version":"1.3.0","workflow_id":"wf_stall","plan_file":"plan.md","knowledge_policy":{"mode":"non_blocking"},"features":[{"feature_key":"FEATURE-001","title":"Stall","position":1}]}' > "$stall_tmp/workflow.json"
+git -C "$stall_tmp" add .
+git -C "$stall_tmp" commit -qm base
+(cd "$stall_tmp" && control init --workflow wf_stall --manifest workflow.json >/dev/null)
+stall_claim="$(cd "$stall_tmp" && control claim --workflow wf_stall --feature FEATURE-001 --actor stall-test)"
+stall_lease="$(json_field "$stall_claim" lease_token)"
+printf '%s\n' 'code' > "$stall_tmp/code.txt"
+git -C "$stall_tmp" add code.txt
+git -C "$stall_tmp" commit -qm "feat: stall"
+(cd "$stall_tmp" && control run --workflow wf_stall --feature FEATURE-001 --lease "$stall_lease" --command 'true' >/dev/null 2>&1)
+
+# Injetar evento gate.started no passado (T0 = 1000000)
+T0=1000000
+(cd "$stall_tmp" && ROOT_DIR="$ROOT" CLOCK_T0="$T0" LEASE="$stall_lease" php -r '
+  $root = realpath(getenv("ROOT_DIR"));
+  $code = file_get_contents($root."/bin/ralph-control");
+  $code = preg_replace("/^#\!.*?\n/", "", $code);
+  $code = preg_replace("/^<\?php\s*/", "", $code);
+  $code = preg_replace("/\\\$arguments\s*=\s*args\\(\\\$argv\\);.*$/s", "", $code);
+  putenv("RALPH_TEST_CLOCK_EPOCH=".getenv("CLOCK_T0"));
+  eval($code);
+  $workflow = loadWorkflowForId("wf_stall");
+  $projection = project($workflow, readEvents());
+  $feature = featureFrom($projection, "FEATURE-001");
+  appendEvent(eventContext([
+      "workflow" => "wf_stall",
+      "lease" => getenv("LEASE"),
+      "actor" => "supervisor",
+      "actor-type" => "controller",
+      "idempotency-key" => "idem_gate_started_wf_stall_FEATURE-001_1_quality",
+  ], $feature, "gate.started", "Início do gate quality", [
+      "gate" => "quality",
+      "attempt" => 1,
+      "started_at" => gmdate("Y-m-d\TH:i:s\Z", (int) getenv("CLOCK_T0")),
+  ]));
+')
+
+# Teste gate_ages no ralph-monitor --once --json (com T = T0 + 120)
+monitor_json="$(cd "$stall_tmp" && env RALPH_TEST_CLOCK_EPOCH=$((T0 + 120)) php "$ROOT/bin/ralph-monitor" --workflow wf_stall --once --json)"
+MONITOR_PAYLOAD="$monitor_json" php -r '
+  $snapshot = json_decode(getenv("MONITOR_PAYLOAD"), true, 512, JSON_THROW_ON_ERROR);
+  if (! isset($snapshot["gate_ages"]) || ! is_array($snapshot["gate_ages"])) {
+      fwrite(STDERR, "gate_ages ausente no snapshot do monitor\n");
+      exit(1);
+  }
+  $ages = $snapshot["gate_ages"];
+  foreach (["validation", "quality", "runtime_evidence", "technical_review", "curation"] as $gate) {
+      if (! array_key_exists($gate, $ages)) {
+          fwrite(STDERR, "gate {$gate} ausente em gate_ages\n");
+          exit(1);
+      }
+  }
+  if ($ages["quality"] !== 120) {
+      fwrite(STDERR, "idade de quality esperada 120, obtida: ".var_export($ages["quality"], true)."\n");
+      exit(1);
+  }
+  if ($ages["runtime_evidence"] !== null) {
+      fwrite(STDERR, "runtime_evidence deveria ser null antes de iniciar\n");
+      exit(1);
+  }
+'
+printf 'ok   gate_ages exposto no ralph-monitor --once --json (FEATURE-101 Phase 2)\n'
+
+# Teste gate.stalled: relógio em T0 + 650 (acima de RALPH_GATE_STALL_AFTER=600)
+stall_log="$TMP/stall-run.log"
+set +e
+(cd "$stall_tmp" && env -u RALPH_QUALITY_COMMAND -u RALPH_RUNTIME_EVIDENCE_CMD -u RALPH_TECHNICAL_REVIEW_COMMAND -u RALPH_CURATION_COMMAND -u RALPH_TEST_CMD \
+  RALPH_TEST_CLOCK_EPOCH=$((T0 + 650)) \
+  RALPH_GATE_STALL_AFTER=600 \
+  RALPH_GATE_MAX_AGE=3600 \
+  RALPH_QUALITY_COMMAND='echo quality-ok' \
+  RALPH_RUNTIME_EVIDENCE_CMD='echo runtime-ok' \
+  RALPH_TECHNICAL_REVIEW_COMMAND='echo review-ok' \
+  RALPH_CURATION_COMMAND='echo curation-ok' \
+  php "$ROOT/bin/ralph-control" supervise --workflow wf_stall --engine codex --interval 1 --max-retries 0 > "$stall_log" 2>&1)
+set -e
+
+grep -q '"type":"gate.stalled"' "$stall_tmp/.git/ralph-control/events.jsonl" \
+  || fail 'gate.stalled não foi emitido no limiar RALPH_GATE_STALL_AFTER'
+
+EVENTS_FILE="$stall_tmp/.git/ralph-control/events.jsonl" php -r '
+  $events = file(getenv("EVENTS_FILE"), FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+  $stalledFound = false;
+  foreach ($events as $line) {
+      $event = json_decode($line, true, 512, JSON_THROW_ON_ERROR);
+      if (($event["type"] ?? "") === "gate.stalled") {
+          $stalledFound = true;
+          $facts = $event["facts"] ?? [];
+          if (($facts["gate"] ?? "") !== "quality" || ($facts["age_seconds"] ?? 0) < 600 || ($facts["threshold"] ?? 0) !== 600) {
+              fwrite(STDERR, "gate.stalled fatos incorretos: ".json_encode($facts)."\n");
+              exit(1);
+          }
+      }
+  }
+  if (! $stalledFound) {
+      exit(1);
+  }
+'
+printf 'ok   gate.stalled emitido no limiar e exibido no feedback (FEATURE-101 Phase 2)\n'
+
+# Teste recovery_required: relógio em T0 + 3700 (acima de RALPH_GATE_MAX_AGE=3600)
+horizon_tmp="$TMP/horizon-fixture"
+mkdir -p "$horizon_tmp"
+git -C "$horizon_tmp" init -q
+git -C "$horizon_tmp" config user.email ralph-method@example.invalid
+git -C "$horizon_tmp" config user.name 'Ralph Method Horizon Test'
+printf '%s\n' '# Horizon' > "$horizon_tmp/README.md"
+printf '%s\n' '# Plano' > "$horizon_tmp/plan.md"
+printf '%s\n' '{"schema_version":"1.3.0","workflow_id":"wf_horizon","plan_file":"plan.md","knowledge_policy":{"mode":"non_blocking"},"features":[{"feature_key":"FEATURE-001","title":"Horizon","position":1}]}' > "$horizon_tmp/workflow.json"
+git -C "$horizon_tmp" add .
+git -C "$horizon_tmp" commit -qm base
+(cd "$horizon_tmp" && control init --workflow wf_horizon --manifest workflow.json >/dev/null)
+horizon_claim="$(cd "$horizon_tmp" && control claim --workflow wf_horizon --feature FEATURE-001 --actor horizon-test)"
+horizon_lease="$(json_field "$horizon_claim" lease_token)"
+printf '%s\n' 'code' > "$horizon_tmp/code.txt"
+git -C "$horizon_tmp" add code.txt
+git -C "$horizon_tmp" commit -qm "feat: horizon"
+(cd "$horizon_tmp" && control run --workflow wf_horizon --feature FEATURE-001 --lease "$horizon_lease" --command 'true' >/dev/null 2>&1)
+
+# Injetar gate.started em T0
+(cd "$horizon_tmp" && ROOT_DIR="$ROOT" CLOCK_T0="$T0" LEASE="$horizon_lease" php -r '
+  $root = realpath(getenv("ROOT_DIR"));
+  $code = file_get_contents($root."/bin/ralph-control");
+  $code = preg_replace("/^#\!.*?\n/", "", $code);
+  $code = preg_replace("/^<\?php\s*/", "", $code);
+  $code = preg_replace("/\\\$arguments\s*=\s*args\\(\\\$argv\\);.*$/s", "", $code);
+  putenv("RALPH_TEST_CLOCK_EPOCH=".getenv("CLOCK_T0"));
+  eval($code);
+  $workflow = loadWorkflowForId("wf_horizon");
+  $projection = project($workflow, readEvents());
+  $feature = featureFrom($projection, "FEATURE-001");
+  appendEvent(eventContext([
+      "workflow" => "wf_horizon",
+      "lease" => getenv("LEASE"),
+      "actor" => "supervisor",
+      "actor-type" => "controller",
+      "idempotency-key" => "idem_gate_started_wf_horizon_FEATURE-001_1_quality",
+  ], $feature, "gate.started", "Início do gate quality", [
+      "gate" => "quality",
+      "attempt" => 1,
+      "started_at" => gmdate("Y-m-d\TH:i:s\Z", (int) getenv("CLOCK_T0")),
+  ]));
+')
+
+set +e
+horizon_out="$(cd "$horizon_tmp" && env -u RALPH_QUALITY_COMMAND -u RALPH_RUNTIME_EVIDENCE_CMD -u RALPH_TECHNICAL_REVIEW_COMMAND -u RALPH_CURATION_COMMAND -u RALPH_TEST_CMD \
+  RALPH_TEST_CLOCK_EPOCH=$((T0 + 3700)) \
+  RALPH_GATE_STALL_AFTER=600 \
+  RALPH_GATE_MAX_AGE=3600 \
+  php "$ROOT/bin/ralph-control" supervise --workflow wf_horizon --engine codex --interval 1 --max-retries 0 2>/dev/null)"
+set -e
+
+printf '%s' "$horizon_out" | grep -q '"status": *"recovery_required"' \
+  || fail "supervisor não retornou recovery_required no horizonte max_age: $horizon_out"
+grep -q '"type":"recovery.required"' "$horizon_tmp/.git/ralph-control/events.jsonl" \
+  || fail 'recovery.required não foi gravado no ledger quando gate excedeu max_age'
+printf 'ok   recovery_required emitido no horizonte máximo sem espera real (FEATURE-101 Phase 2)\n'
+
+# ---------------------------------------------------------------------------
+# FEATURE-101 (Phase 4): Systematic debugging ao vivo
+# - Emissão de debug.progress durante runSystematicDebug (início e hipóteses avaliadas)
+# - Conteúdo 100% sanitizado (canários de segredo redigidos, sem vazamento de trecho sensível)
+# - cause_kind do contrato atual (feature_bug / harness_defect)
+# - Hipóteses confirmadas/rejeitadas e referências Context7/official no stream
+# - Relatório final DBG-* segue o contrato oficial
+# - ralph-monitor --once --json expõe debug com debug.progress mais recente (read-only)
+# - ralph-watch exibe o debug ao vivo na TUI e no snapshot JSON
+# ---------------------------------------------------------------------------
+live_dbg_tmp="$TMP/live-debug-fixture"
+mkdir -p "$live_dbg_tmp"
+git -C "$live_dbg_tmp" init -q
+git -C "$live_dbg_tmp" config user.email ralph-method@example.invalid
+git -C "$live_dbg_tmp" config user.name 'Ralph Method Live Debug Test'
+printf '%s\n' '# Live Debug' > "$live_dbg_tmp/README.md"
+printf '%s\n' '# Plano' > "$live_dbg_tmp/plan.md"
+printf '%s\n' '{"schema_version":"1.3.0","workflow_id":"wf_live_debug","plan_file":"plan.md","knowledge_policy":{"mode":"non_blocking"},"features":[{"feature_key":"FEATURE-DBG","title":"Live Debug Test","position":1}]}' > "$live_dbg_tmp/workflow.json"
+git -C "$live_dbg_tmp" add .
+git -C "$live_dbg_tmp" commit -qm base
+
+(cd "$live_dbg_tmp" && control init --workflow wf_live_debug --manifest workflow.json >/dev/null)
+dbg_claim="$(cd "$live_dbg_tmp" && control claim --workflow wf_live_debug --feature FEATURE-DBG --actor live-dbg-test)"
+dbg_lease="$(json_field "$dbg_claim" lease_token)"
+
+# Faz o bloco falhar para transicionar a feature para debugging_required
+set +e
+(cd "$live_dbg_tmp" && control run --workflow wf_live_debug --feature FEATURE-DBG --lease "$dbg_lease" --command 'exit 1' >/dev/null 2>&1)
+set -e
+
+# Cria comando fake de systematic debug válido com referências Context7/official
+fake_debug_script="$TMP/fake-debug-command.sh"
+cat > "$fake_debug_script" <<'SH'
+#!/usr/bin/env bash
+cat <<JSON
+{
+  "schema_version": "1.3.0",
+  "workflow_id": "$RALPH_DEBUG_WORKFLOW_ID",
+  "feature_key": "$RALPH_DEBUG_FEATURE_KEY",
+  "attempt": $RALPH_DEBUG_ATTEMPT,
+  "incident_id": "INC-2026-0088",
+  "severity": "medium",
+  "cause_kind": "feature_bug",
+  "symptom": "Incompatibilidade no tipo de retorno do handler",
+  "root_cause": "Erro de conversao de tipos estritos no processamento",
+  "correction_plan": "Ajustar tipagem do handler",
+  "hypotheses": [
+    {
+      "id": "H1",
+      "statement": "Incompatibilidade de tipos no schema",
+      "status": "confirmed"
+    },
+    {
+      "id": "H2",
+      "statement": "Falha de rede externa",
+      "status": "rejected"
+    }
+  ],
+  "official_references": [
+    {
+      "provider": "Context7",
+      "source": "https://docs.context7.invalid/types",
+      "section": "Type Safety"
+    },
+    {
+      "provider": "official",
+      "source": "https://official.example.invalid/specs",
+      "section": "Overview"
+    }
+  ],
+  "validation": {
+    "status": "passed",
+    "exit_code": 0,
+    "evidence_refs": ["README.md"]
+  },
+  "knowledge_candidate": {
+    "title": "Validação de tipos em handlers",
+    "summary": "Sempre tipar explicitamente para evitar coerção implícita",
+    "applicability": ["core", "handlers"],
+    "limitations": ["apenas PHP 8.2+"]
+  },
+  "status": "verified"
+}
+JSON
+SH
+chmod +x "$fake_debug_script"
+
+# Executa o systematic debug via controlador
+debug_run_output="$(cd "$live_dbg_tmp" && control debug --workflow wf_live_debug --feature FEATURE-DBG --command "bash $fake_debug_script")"
+
+printf '%s\n' "$debug_run_output" | grep -q '"status": *"debugging_verified"' \
+  || fail "systematic debug não retornou debugging_verified: $debug_run_output"
+
+# 1. Verifica emissão de debug.progress no ledger
+events_content="$(cat "$live_dbg_tmp/.git/ralph-control/events.jsonl")"
+
+printf '%s\n' "$events_content" | grep -q '"type":"debug.progress"' \
+  || fail 'evento debug.progress não foi emitido no ledger durante runSystematicDebug'
+
+# Teste de sanitização estrita: em fixture separada, comando que tenta vazar segredos é rejeitado e redigido
+leak_dbg_tmp="$TMP/leak-debug-fixture"
+mkdir -p "$leak_dbg_tmp"
+git -C "$leak_dbg_tmp" init -q
+git -C "$leak_dbg_tmp" config user.email ralph-method@example.invalid
+git -C "$leak_dbg_tmp" config user.name 'Ralph Method Leak Test'
+printf '%s\n' '# Leak Test' > "$leak_dbg_tmp/README.md"
+printf '%s\n' '# Plano' > "$leak_dbg_tmp/plan.md"
+printf '%s\n' '{"schema_version":"1.3.0","workflow_id":"wf_leak","plan_file":"plan.md","knowledge_policy":{"mode":"non_blocking"},"features":[{"feature_key":"FEATURE-LEAK","title":"Leak Test","position":1}]}' > "$leak_dbg_tmp/workflow.json"
+git -C "$leak_dbg_tmp" add .
+git -C "$leak_dbg_tmp" commit -qm base
+(cd "$leak_dbg_tmp" && control init --workflow wf_leak --manifest workflow.json >/dev/null)
+leak_claim="$(cd "$leak_dbg_tmp" && control claim --workflow wf_leak --feature FEATURE-LEAK --actor leak-test)"
+leak_lease="$(json_field "$leak_claim" lease_token)"
+set +e
+(cd "$leak_dbg_tmp" && control run --workflow wf_leak --feature FEATURE-LEAK --lease "$leak_lease" --command 'exit 1' >/dev/null 2>&1)
+set -e
+
+leak_debug_script="$TMP/leak-debug-command.sh"
+cat > "$leak_debug_script" <<'SH'
+#!/usr/bin/env bash
+cat <<JSON
+{
+  "schema_version": "1.3.0",
+  "workflow_id": "$RALPH_DEBUG_WORKFLOW_ID",
+  "feature_key": "$RALPH_DEBUG_FEATURE_KEY",
+  "attempt": $RALPH_DEBUG_ATTEMPT,
+  "incident_id": "INC-2026-0089",
+  "severity": "high",
+  "cause_kind": "feature_bug",
+  "symptom": "Vazamento com api_key=secret-canary-live-debug-12345",
+  "root_cause": "sk-proj-1234567890123456 e user@secretdomain.invalid",
+  "correction_plan": "Redigir segredo",
+  "hypotheses": [{"id": "H1", "statement": "Segredo vazado", "status": "confirmed"}],
+  "official_references": [{"provider": "official", "source": "https://official.example.invalid", "section": "Sec"}],
+  "validation": {"status": "passed", "exit_code": 0, "evidence_refs": ["README.md"]},
+  "knowledge_candidate": {"title": "T", "summary": "S", "applicability": [], "limitations": []},
+  "status": "verified"
+}
+JSON
+SH
+chmod +x "$leak_debug_script"
+
+set +e
+(cd "$leak_dbg_tmp" && control debug --workflow wf_leak --feature FEATURE-LEAK --command "bash $leak_debug_script" >/dev/null 2>&1)
+set -e
+events_after_leak="$(cat "$leak_dbg_tmp/.git/ralph-control/events.jsonl")"
+if printf '%s\n' "$events_after_leak" | grep -q 'secret-canary-live-debug-12345\|sk-proj-1234567890123456'; then
+    fail 'segredo canário vazou no ledger durante systematic debugging'
+fi
+
+EVENTS_FILE="$live_dbg_tmp/.git/ralph-control/events.jsonl" php -r '
+    $lines = file(getenv("EVENTS_FILE"), FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+    $debugEvents = [];
+    foreach ($lines as $line) {
+        $event = json_decode($line, true, 512, JSON_THROW_ON_ERROR);
+        if (($event["type"] ?? "") === "debug.progress") {
+            $debugEvents[] = $event;
+        }
+    }
+    if (count($debugEvents) < 2) {
+        fwrite(STDERR, "esperava ao menos 2 eventos debug.progress (início e hipóteses), obtido: ".count($debugEvents)."\n");
+        exit(1);
+    }
+    $first = $debugEvents[0]["facts"] ?? [];
+    if (($first["phase"] ?? "") !== "started" || ($first["status"] ?? "") !== "investigating") {
+        fwrite(STDERR, "primeiro debug.progress deve ser phase=started e status=investigating: ".json_encode($first)."\n");
+        exit(2);
+    }
+    $second = $debugEvents[1]["facts"] ?? [];
+    if (($second["phase"] ?? "") !== "hypotheses_evaluated"
+        || ($second["cause_kind"] ?? "") !== "feature_bug"
+        || ($second["confirmed_hypotheses"] ?? 0) !== 1
+        || ($second["rejected_hypotheses"] ?? 0) !== 1) {
+        fwrite(STDERR, "segundo debug.progress deve conter hipóteses e cause_kind=feature_bug: ".json_encode($second)."\n");
+        exit(3);
+    }
+    $refs = $second["official_references"] ?? [];
+    if (count($refs) !== 2 || ($refs[0]["provider"] ?? "") !== "Context7") {
+        fwrite(STDERR, "referências oficiais devem conter Context7: ".json_encode($refs)."\n");
+        exit(4);
+    }
+' || fail 'estrutura e fatos dos eventos debug.progress inválidos'
+
+# 2. Relatório DBG-* segue o contrato oficial
+report_files=( "$live_dbg_tmp/.git/ralph-control/reports"/DBG-*.json )
+[ -f "${report_files[0]}" ] || fail 'relatório DBG-*.json não foi criado em reports/'
+grep -q '"status": *"verified"' "${report_files[0]}" || fail 'relatório DBG-* com status diferente de verified'
+grep -q 'Context7' "${report_files[0]}" || fail 'relatório DBG-* não contém Context7'
+
+# 3. ralph-monitor --once --json expõe debug.progress mais recente (read-only)
+events_hash_before="$(sha256sum "$live_dbg_tmp/.git/ralph-control/events.jsonl")"
+monitor_dbg_json="$(cd "$live_dbg_tmp" && php "$ROOT/bin/ralph-monitor" --workflow wf_live_debug --once --json)"
+events_hash_after="$(sha256sum "$live_dbg_tmp/.git/ralph-control/events.jsonl")"
+[ "$events_hash_before" = "$events_hash_after" ] || fail 'ralph-monitor mutou o ledger'
+
+MONITOR_DBG_PAYLOAD="$monitor_dbg_json" php -r '
+    $snap = json_decode(getenv("MONITOR_DBG_PAYLOAD"), true, 512, JSON_THROW_ON_ERROR);
+    $dbg = $snap["debug"] ?? null;
+    if (! is_array($dbg)) {
+        fwrite(STDERR, "debug ausente no snapshot do monitor\n");
+        exit(1);
+    }
+    if (($dbg["type"] ?? "") !== "debug.progress"
+        || ($dbg["cause_kind"] ?? "") !== "feature_bug"
+        || ($dbg["confirmed_hypotheses"] ?? 0) !== 1
+        || ($dbg["rejected_hypotheses"] ?? 0) !== 1) {
+        fwrite(STDERR, "campos do debug no snapshot do monitor inválidos: ".json_encode($dbg)."\n");
+        exit(2);
+    }
+' || fail 'debug no snapshot do monitor inválido'
+
+# 4. ralph-watch expõe debug no snapshot e exibe na TUI
+watch_dbg_json="$(cd "$live_dbg_tmp" && php "$ROOT/bin/ralph-watch" --workflow wf_live_debug --once --json)"
+WATCH_DBG_PAYLOAD="$watch_dbg_json" php -r '
+    $snap = json_decode(getenv("WATCH_DBG_PAYLOAD"), true, 512, JSON_THROW_ON_ERROR);
+    $dbg = $snap["debug"] ?? null;
+    if (! is_array($dbg)) {
+        fwrite(STDERR, "debug ausente no snapshot do ralph-watch\n");
+        exit(1);
+    }
+    if (($dbg["cause_kind"] ?? "") !== "feature_bug"
+        || ($dbg["confirmed_hypotheses"] ?? 0) !== 1) {
+        fwrite(STDERR, "campos do debug no snapshot do ralph-watch inválidos: ".json_encode($dbg)."\n");
+        exit(2);
+    }
+' || fail 'debug no snapshot do ralph-watch inválido'
+
+watch_dbg_text="$(cd "$live_dbg_tmp" && php "$ROOT/bin/ralph-watch" --workflow wf_live_debug --once)"
+printf '%s\n' "$watch_dbg_text" | grep -q "SYSTEMATIC DEBUGGING AO VIVO" || fail 'ralph-watch não renderizou seção SYSTEMATIC DEBUGGING AO VIVO'
+printf '%s\n' "$watch_dbg_text" | grep -q "feature_bug" || fail 'ralph-watch não exibiu cause_kind feature_bug'
+printf '%s\n' "$watch_dbg_text" | grep -q "Context7" || fail 'ralph-watch não exibiu Context7'
+printf '%s\n' "$watch_dbg_text" | grep -q "1 confirmada(s)" || fail 'ralph-watch não exibiu contagem de hipóteses confirmadas'
+
+# 5. Ledger íntegro com hash-chain válida
+(cd "$live_dbg_tmp" && control verify >/dev/null) || fail 'verify falhou no ledger com eventos de systematic debug'
+
+printf 'ok   systematic debugging ao vivo emite debug.progress sanitizado, DBG-* oficial, monitor e watch exibem progresso (FEATURE-101 Phase 4)\n'
+
+
+
+

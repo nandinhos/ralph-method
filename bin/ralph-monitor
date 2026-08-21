@@ -97,6 +97,16 @@ function monitorBool(array $arguments, string $name): bool
     return ($arguments[$name] ?? false) === true;
 }
 
+function monitorNow(): int
+{
+    $injected = getenv('RALPH_TEST_CLOCK_EPOCH');
+    if (is_string($injected) && preg_match('/^\d+$/', $injected) === 1) {
+        return (int) $injected;
+    }
+
+    return time();
+}
+
 function monitorAge(?string $timestamp): ?int
 {
     if ($timestamp === null || $timestamp === '') {
@@ -109,7 +119,7 @@ function monitorAge(?string $timestamp): ?int
         return null;
     }
 
-    return max(0, time() - $eventTime->getTimestamp());
+    return max(0, monitorNow() - $eventTime->getTimestamp());
 }
 
 function monitorFormatAge(?int $seconds): string
@@ -259,7 +269,8 @@ function monitorLastLoopFeedback(string $root): ?array
 /** @return array<string, mixed> */
 function monitorSnapshot(string $root, string $workflowId, int $staleAfter, int $activityStaleAfter, ?string $controllerPath = null): array
 {
-    $controller = realpath($controllerPath ?? $root.'/bin/ralph-control');
+    $resolvedController = $controllerPath ?? (is_file($root.'/bin/ralph-control') ? $root.'/bin/ralph-control' : __DIR__.'/ralph-control');
+    $controller = realpath($resolvedController);
     if ($controller === false || ! is_executable($controller)) {
         return ['health' => 'error', 'message' => 'bin/ralph-control não encontrado ou não executável'];
     }
@@ -322,6 +333,7 @@ function monitorSnapshot(string $root, string $workflowId, int $staleAfter, int 
         $state === 'running' && $processes === [] => 'process_missing',
         $state === 'running' && $lastEventAge !== null && $lastEventAge > $staleAfter => 'heartbeat_stale',
         $state === 'running' && ($lastEvent['type'] ?? null) === 'command.heartbeat' && $idleSeconds !== null && $idleSeconds > $activityStaleAfter && ($cpuMilli ?? 0) <= 1000 => 'activity_stale',
+        $state === 'awaiting_gates' && ($lastEvent['type'] ?? null) === 'gate.stalled' => 'gate_stalled',
         $state === 'awaiting_gates' && $lastEventAge !== null && $lastEventAge > $staleAfter => 'gates_stale',
         in_array($state, ['debugging_required', 'debugging_running', 'debugging_verified'], true) => 'debugging',
         in_array($state, ['blocked', 'recovery_required'], true) => 'blocked',
@@ -360,6 +372,8 @@ function monitorSnapshot(string $root, string $workflowId, int $staleAfter, int 
             'idle_seconds' => $idleSeconds,
             'cpu_milli' => $cpuMilli,
         ],
+        'gate_ages' => monitorGateAges($root, $workflowId, $cursor, is_array($current) ? ($current['attempt'] ?? null) : null),
+        'debug' => monitorDebug($root, $workflowId, $cursor, is_array($current) ? ($current['attempt'] ?? null) : null),
         'loop_feedback' => $lastLoopFeedback,
         'processes' => $processes,
         'stale_after_seconds' => $staleAfter,
@@ -367,6 +381,154 @@ function monitorSnapshot(string $root, string $workflowId, int $staleAfter, int 
         // FEATURE-094 (Phase 7): circuitos derivados do ledger, somente leitura.
         'provider_circuits' => monitorProviderCircuits($root, $workflowId),
     ];
+}
+
+/**
+ * Deriva informações do último debug.progress do ledger (read-only).
+ *
+ * @return array<string, mixed>|null
+ */
+function monitorDebug(string $root, string $workflowId, ?string $featureKey, ?int $attempt): ?array
+{
+    if ($featureKey === null) {
+        return null;
+    }
+
+    $gitCommonDir = monitorGitCommonDir($root);
+    if ($gitCommonDir === null) {
+        return null;
+    }
+
+    $eventsFile = $gitCommonDir.DIRECTORY_SEPARATOR.'ralph-control/events.jsonl';
+    if (! is_file($eventsFile)) {
+        return null;
+    }
+
+    $lines = file($eventsFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+    for ($index = count($lines) - 1; $index >= 0; $index--) {
+        try {
+            $event = json_decode($lines[$index], true, 512, JSON_THROW_ON_ERROR);
+        } catch (Throwable) {
+            continue;
+        }
+        if (! is_array($event)
+            || ($event['workflow_id'] ?? null) !== $workflowId
+            || ($event['feature_key'] ?? null) !== $featureKey
+        ) {
+            continue;
+        }
+        $eventAttempt = (int) ($event['attempt'] ?? 0);
+        if ($attempt !== null && $eventAttempt !== $attempt) {
+            continue;
+        }
+
+        $type = (string) ($event['type'] ?? '');
+        if ($type === 'debug.progress') {
+            $facts = is_array($event['facts'] ?? null) ? $event['facts'] : [];
+            $ts = is_string($event['timestamp'] ?? null) ? $event['timestamp'] : null;
+
+            return [
+                'type' => 'debug.progress',
+                'timestamp' => $ts,
+                'age_seconds' => monitorAge($ts),
+                'phase' => is_string($facts['phase'] ?? null) ? $facts['phase'] : 'unknown',
+                'status' => is_string($facts['status'] ?? null) ? $facts['status'] : null,
+                'cause_kind' => is_string($facts['cause_kind'] ?? null) ? $facts['cause_kind'] : null,
+                'document_id' => is_string($facts['document_id'] ?? null) ? $facts['document_id'] : null,
+                'attempt' => (int) ($event['attempt'] ?? $attempt ?? 1),
+                'confirmed_hypotheses' => $facts['confirmed_hypotheses'] ?? (isset($facts['hypotheses']) && is_array($facts['hypotheses']) ? count(array_filter($facts['hypotheses'], static fn ($h): bool => is_array($h) && ($h['status'] ?? '') === 'confirmed')) : 0),
+                'rejected_hypotheses' => $facts['rejected_hypotheses'] ?? (isset($facts['hypotheses']) && is_array($facts['hypotheses']) ? count(array_filter($facts['hypotheses'], static fn ($h): bool => is_array($h) && ($h['status'] ?? '') === 'rejected')) : 0),
+                'hypotheses' => is_array($facts['hypotheses'] ?? null) ? $facts['hypotheses'] : [],
+                'official_references' => is_array($facts['official_references'] ?? null) ? $facts['official_references'] : [],
+                'facts' => $facts,
+            ];
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Deriva as idades dos gates em segundos para a feature atual exclusivamente do ledger (read-only).
+ *
+ * @return array<string, int|null>
+ */
+function monitorGateAges(string $root, string $workflowId, ?string $featureKey, ?int $attempt): array
+{
+    $mandatoryGates = ['validation', 'quality', 'runtime_evidence', 'technical_review', 'curation'];
+    $result = array_fill_keys($mandatoryGates, null);
+    if ($featureKey === null) {
+        return $result;
+    }
+
+    $gitCommonDir = monitorGitCommonDir($root);
+    if ($gitCommonDir === null) {
+        return $result;
+    }
+
+    $eventsFile = $gitCommonDir.DIRECTORY_SEPARATOR.'ralph-control/events.jsonl';
+    if (! is_file($eventsFile)) {
+        return $result;
+    }
+
+    $now = monitorNow();
+    $startedMap = [];
+    $finishedMap = [];
+
+    $lines = file($eventsFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+    foreach ($lines as $line) {
+        if (trim($line) === '') {
+            continue;
+        }
+        try {
+            $event = json_decode($line, true, 512, JSON_THROW_ON_ERROR);
+        } catch (Throwable) {
+            continue;
+        }
+        if (! is_array($event)
+            || ($event['workflow_id'] ?? null) !== $workflowId
+            || ($event['feature_key'] ?? null) !== $featureKey
+        ) {
+            continue;
+        }
+        $eventAttempt = (int) ($event['attempt'] ?? 0);
+        if ($attempt !== null && $eventAttempt !== $attempt) {
+            continue;
+        }
+
+        $type = (string) ($event['type'] ?? '');
+        $facts = is_array($event['facts'] ?? null) ? $event['facts'] : [];
+        $gate = (string) ($facts['gate'] ?? '');
+        if (! in_array($gate, $mandatoryGates, true)) {
+            continue;
+        }
+
+        $ts = is_string($event['timestamp'] ?? null) ? strtotime($event['timestamp']) : null;
+        if ($ts === null || $ts === false) {
+            continue;
+        }
+
+        if ($type === 'gate.started') {
+            $startedMap[$gate] = (int) $ts;
+        } elseif (in_array($type, ['gate.passed', 'gate.rejected', 'gate.harness_error'], true)) {
+            $finishedMap[$gate] = (int) $ts;
+        }
+    }
+
+    foreach ($mandatoryGates as $gate) {
+        if (! isset($startedMap[$gate])) {
+            $result[$gate] = null;
+            continue;
+        }
+        $started = $startedMap[$gate];
+        if (isset($finishedMap[$gate]) && $finishedMap[$gate] >= $started) {
+            $result[$gate] = max(0, $finishedMap[$gate] - $started);
+        } else {
+            $result[$gate] = max(0, $now - $started);
+        }
+    }
+
+    return $result;
 }
 
 /**
@@ -383,7 +545,7 @@ function monitorProviderCircuits(string $root, string $workflowId): array
         return [];
     }
     $circuits = [];
-    $now = time();
+    $now = monitorNow();
     foreach (file($eventsFile, FILE_IGNORE_NEW_LINES) ?: [] as $line) {
         if (trim($line) === '') {
             continue;
@@ -420,7 +582,7 @@ function monitorFeedback(array $snapshot): string
     $level = match ($health) {
         'ok' => 'INFO',
         'complete' => 'OK',
-        'blocked', 'process_missing', 'heartbeat_stale', 'activity_stale', 'gates_stale' => 'ALERTA',
+        'blocked', 'process_missing', 'heartbeat_stale', 'activity_stale', 'gates_stale', 'gate_stalled' => 'ALERTA',
         'debugging' => 'INFO',
         default => 'ERRO',
     };
@@ -437,6 +599,7 @@ function monitorFeedback(array $snapshot): string
         'process_missing' => 'feature em execução, mas nenhum processo Ralph foi encontrado',
         'heartbeat_stale' => 'processo existe, mas não há novo evento há '.monitorFormatAge($last['age_seconds'] ?? null),
         'activity_stale' => 'heartbeat existe, mas não há saída/CPU observável há '.monitorFormatAge($last['idle_seconds'] ?? null),
+        'gate_stalled' => 'gate em atraso (stalled) há '.monitorFormatAge($last['age_seconds'] ?? null),
         'gates_stale' => 'aguardando gates há '.monitorFormatAge($last['age_seconds'] ?? null),
         'blocked' => 'workflow bloqueado; recovery explícito necessário',
         'debugging' => match ($state) {

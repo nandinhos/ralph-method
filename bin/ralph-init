@@ -1233,7 +1233,7 @@ function writeJsonStrict(string $path, array $value): void
 function managedSources(): array
 {
     return [
-        'bin/ralph-control', 'bin/ralph-trace', 'bin/ralph-monitor',
+        'bin/ralph-control', 'bin/ralph-trace', 'bin/ralph-monitor', 'bin/ralph-watch',
         'bin/ralph-block', 'bin/ralph-bloco', 'bin/ralph-knowledge', 'bin/ralph-metrics',
         'bin/ralph-init', 'bin/ralph-doctor',
         'scripts/ralph.sh', 'scripts/ralph-hook.sh',
