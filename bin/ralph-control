@@ -525,9 +525,10 @@ function captureChunk($handle, string $chunk, int &$bytes, int $limit, string &$
         }
     }
     $bytes += strlen($chunk);
-    if (strlen($preview) < 4000) {
-        $preview .= substr($chunk, 0, 4000 - strlen($preview));
-    }
+    // Preview = TAIL dos últimos 4000 chars (não o início): os marcadores de
+    // conclusão do ralph.sh ("tudo verde", "COMPLETA (", run_end) aparecem no
+    // fim da execução. Um preview do início perde a evidência de sucesso.
+    $preview = substr($preview.$chunk, -4000);
 
     return $bytes <= $limit;
 }
