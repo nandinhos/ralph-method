@@ -3767,7 +3767,23 @@ function recordGate(array $arguments): void
                 break;
             }
             if (in_array($existing['type'] ?? null, ['gate.passed', 'gate.rejected'], true) && (($existing['facts']['gate'] ?? null) === $gate)) {
-                fail("gate {$gate} já foi registrado com outro resultado");
+                // FEATURE-097 (retomada de gate): após gate.retry_started a
+                // feature volta a awaiting_gates e o gate rejeitado pode ser
+                // re-rodado; o novo resultado substitui o anterior. Sem retry,
+                // registrar um segundo resultado no mesmo attempt é rejeitado
+                // (idempotência do gate original).
+                $hasGateRetry = false;
+                foreach ($events as $retryEvent) {
+                    if (($retryEvent['type'] ?? null) === 'gate.retry_started'
+                        && ($retryEvent['feature_key'] ?? null) === $featureKey
+                        && (int) ($retryEvent['attempt'] ?? 0) === (int) $feature['attempt']) {
+                        $hasGateRetry = true;
+                        break;
+                    }
+                }
+                if (! $hasGateRetry) {
+                    fail("gate {$gate} já foi registrado com outro resultado");
+                }
             }
         }
         $facts = [
