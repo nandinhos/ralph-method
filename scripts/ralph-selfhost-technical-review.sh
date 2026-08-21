@@ -24,8 +24,25 @@ set -u
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 WORKFLOW="${RALPH_WORKFLOW_ID:-}"
 FEATURE="${RALPH_FEATURE_KEY:-}"
-ENGINE="${RALPH_ENGINE:-opencode}"
 ATTEMPT="${RALPH_ATTEMPT:-}"
+
+# Resolve o engine como o controlador: o perfil ativo do método aponta para o
+# runner (ex: RALPH_BIN=scripts/ralph.sh em .ralph/codex.env => codex). O
+# supervisor não exporta RALPH_ENGINE ao comando de gate; sem isso o wrapper
+# cairia sempre em opencode e o preflight falharia quando o supervisor usa
+# outro engine (ex: codex).
+ENGINE="${RALPH_ENGINE:-}"
+if [ -z "$ENGINE" ]; then
+  for profile in "$REPO"/.ralph/*.env; do
+    [ -f "$profile" ] || continue
+    if grep -q '^RALPH_BIN=scripts/ralph.sh$' "$profile" 2>/dev/null; then
+      pname="$(basename "$profile" .env)"
+      ENGINE="$pname"
+      break
+    fi
+  done
+fi
+ENGINE="${ENGINE:-codex}"
 
 if [ -z "$WORKFLOW" ] || [ -z "$FEATURE" ]; then
   echo "contexto ausente: RALPH_WORKFLOW_ID e RALPH_FEATURE_KEY são obrigatórios" >&2
