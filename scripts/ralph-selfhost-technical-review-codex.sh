@@ -63,7 +63,10 @@ if [ -z "$INPUT" ] || [ ! -f "$INPUT" ]; then
 fi
 
 # 2) Prompt verify: contrato idêntico ao gate 3 do bloco (read-only, TASK por
-#    task da fase, ferramentas de leitura do Codex).
+#    task da fase). No sandbox read-only do Codex 0.149 as ferramentas de
+#    leitura são expostas via exec (rg/sed/find/pwd/git diff), não
+#    Read/Glob/Grep — redação validada pelo próprio codex no ralph.sh
+#    (ANOM-2026-006/010).
 PROMPT_FILE="$REPO/.git/ralph-control/technical-review-${FEATURE}-${ATTEMPT}.txt"
 {
   cat <<'REVIEW'
@@ -71,10 +74,11 @@ RALPH_VERIFY
 
 Voce e um verificador independente. NAO escreva, edite ou crie nenhum arquivo.
 Seu unico trabalho e ler o codigo real e dizer o que esta feito e o que nao esta.
-NAO execute nenhum comando e NAO use nenhuma ferramenta de execucao ou edicao:
-use somente as ferramentas de leitura (Read, Glob e Grep). Nunca chame run_command,
-bash, terminal ou qualquer ferramenta que rode comandos — a revisao e read-only
-por construcao.
+Use somente a ferramenta exec, com os comandos rg, sed, find, pwd e git diff
+--no-ext-diff (somente leitura); nunca use apply_patch, redirecionamentos,
+comandos que escrevam, testes, PHP, providers ou qualquer acao que mude estado.
+No Codex, exec e permitido exclusivamente para leitura dos arquivos e deve
+receber apenas os comandos explicitamente listados acima.
 
 Para CADA task marcada com `- [ ]` ou `- [x]` na fase abaixo, na ordem em que
 aparecem, confira os acceptance criteria contra o codigo real (arquivos, classes,
