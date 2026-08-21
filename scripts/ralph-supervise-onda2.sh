@@ -50,7 +50,7 @@ export CODEX_HOME
 # scripts self-host read-only do próprio método — ANOM-2026-009).
 export RALPH_QUALITY_COMMAND="${RALPH_QUALITY_COMMAND:-bash scripts/check-shell.sh && bash scripts/test-ralph-method.sh}"
 export RALPH_RUNTIME_EVIDENCE_CMD="${RALPH_RUNTIME_EVIDENCE_CMD:-bash scripts/ralph-selfhost-runtime-evidence.sh}"
-export RALPH_TECHNICAL_REVIEW_COMMAND="${RALPH_TECHNICAL_REVIEW_COMMAND:-bash -c 'export RALPH_ENGINE=agy; bash scripts/ralph-selfhost-technical-review.sh'}"
+export RALPH_TECHNICAL_REVIEW_COMMAND="${RALPH_TECHNICAL_REVIEW_COMMAND:-bash -c 'export RALPH_ENGINE=agy RALPH_VERIFY_MODEL=gemini-3.7-flash-high RALPH_AGY_MODEL=gemini-3.7-flash-high RALPH_AGY_EFFORT=high RALPH_AGY_VERIFY_AGENT=ralph-review RALPH_AGY_PRINT_TIMEOUT=30m; bash scripts/ralph-selfhost-technical-review.sh'}"
 # O --verify-only do ralph.sh exige engine com adapter (opencode/agy/cursor);
 # o agy verify roda via bwrap com mounts controlados e funciona no sandbox
 # (comprovado), enquanto o impl agy não opera (ANOM-2026-002). O impl da
