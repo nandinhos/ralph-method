@@ -50,12 +50,19 @@ export CODEX_HOME
 # scripts self-host read-only do próprio método — ANOM-2026-009).
 export RALPH_QUALITY_COMMAND="${RALPH_QUALITY_COMMAND:-bash scripts/check-shell.sh && bash scripts/test-ralph-method.sh}"
 export RALPH_RUNTIME_EVIDENCE_CMD="${RALPH_RUNTIME_EVIDENCE_CMD:-bash scripts/ralph-selfhost-runtime-evidence.sh}"
-export RALPH_TECHNICAL_REVIEW_COMMAND="${RALPH_TECHNICAL_REVIEW_COMMAND:-bash scripts/ralph-selfhost-technical-review.sh}"
+export RALPH_TECHNICAL_REVIEW_COMMAND="${RALPH_TECHNICAL_REVIEW_COMMAND:-bash -c 'export RALPH_ENGINE=agy; bash scripts/ralph-selfhost-technical-review.sh'}"
 # O --verify-only do ralph.sh exige engine com adapter (opencode/agy/cursor);
 # o agy verify roda via bwrap com mounts controlados e funciona no sandbox
 # (comprovado), enquanto o impl agy não opera (ANOM-2026-002). O impl da
-# feature continua codex via --engine explícito no supervise.
+# feature continua codex via --engine explícito no supervise. As variáveis do
+# perfil agy são exportadas porque o supervisor injeta o perfil do engine do
+# gate (codex) e o comando de review precisa das variáveis agy.
 export RALPH_ENGINE="${RALPH_ENGINE:-agy}"
+export RALPH_AGY_MODEL="${RALPH_AGY_MODEL:-gemini-3.7-flash-high}"
+export RALPH_AGY_EFFORT="${RALPH_AGY_EFFORT:-high}"
+export RALPH_AGY_VERIFY_AGENT="${RALPH_AGY_VERIFY_AGENT:-ralph-review}"
+export RALPH_AGY_PRINT_TIMEOUT="${RALPH_AGY_PRINT_TIMEOUT:-30m}"
+export RALPH_VERIFY_MODEL="${RALPH_VERIFY_MODEL:-gemini-3.7-flash-high}"
 
 # O ralph-control supervise retorna em estados de espera (debugging_running,
 # capacity_wait, recovery_required etc.) — o wrapper relança até o workflow
