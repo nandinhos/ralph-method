@@ -26,21 +26,14 @@ WORKFLOW="${RALPH_WORKFLOW_ID:-}"
 FEATURE="${RALPH_FEATURE_KEY:-}"
 ATTEMPT="${RALPH_ATTEMPT:-}"
 
-# Resolve o engine como o controlador: o perfil ativo do método aponta para o
-# runner (ex: RALPH_BIN=scripts/ralph.sh em .ralph/codex.env => codex). O
-# supervisor não exporta RALPH_ENGINE ao comando de gate; sem isso o wrapper
-# cairia sempre em opencode e o preflight falharia quando o supervisor usa
-# outro engine (ex: codex).
+# Resolve o engine como o controlador: o método.json é a autoridade do runner
+# primário; os perfis .ralph/*.env definem RALPH_BIN=scripts/ralph.sh para
+# TODOS os runners (codex, opencode, agy, cursor) — não servem para distinguir.
+# Usamos .ralph/method.json (orchestration.primary_runner) quando presente,
+# senão o default codex.
 ENGINE="${RALPH_ENGINE:-}"
-if [ -z "$ENGINE" ]; then
-  for profile in "$REPO"/.ralph/*.env; do
-    [ -f "$profile" ] || continue
-    if grep -q '^RALPH_BIN=scripts/ralph.sh$' "$profile" 2>/dev/null; then
-      pname="$(basename "$profile" .env)"
-      ENGINE="$pname"
-      break
-    fi
-  done
+if [ -z "$ENGINE" ] && [ -f "$REPO/.ralph/method.json" ]; then
+  ENGINE="$(php -r '$m = json_decode(file_get_contents($argv[1]), true, 512, JSON_THROW_ON_ERROR); echo $m["orchestration"]["primary_runner"] ?? "";' "$REPO/.ralph/method.json" 2>/dev/null)"
 fi
 ENGINE="${ENGINE:-codex}"
 
@@ -61,7 +54,8 @@ if [ -d "$MANIFEST_DIR" ]; then
   fi
   if [ -z "$INPUT" ]; then
     # Fallback: o manifest mais recente da feature.
-    INPUT="$(ls -t "$MANIFEST_DIR"/$(printf '%s' "$FEATURE" | sed 's/[^A-Za-z0-9._-]/_/g')-attempt-*.md 2>/dev/null | head -1 || true)"
+    FEATURE_SAFE="$(printf '%s' "$FEATURE" | sed 's/[^A-Za-z0-9._-]/_/g')"
+    INPUT="$(find "$MANIFEST_DIR" -maxdepth 1 -name "${FEATURE_SAFE}-attempt-*.md" -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2- || true)"
   fi
 fi
 
