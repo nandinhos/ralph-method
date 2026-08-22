@@ -15,6 +15,9 @@ COCKPIT="${RALPH_COCKPIT_APP:-$(cd "$(dirname "$0")/../apps/cockpit" && pwd)}"
 TICK="${RALPH_INGEST_TICK:-5}"
 
 while true; do
-  php "$COCKPIT/artisan" ralph:ingest >/dev/null 2>&1
+  # --no-broadcast: o broadcast síncrono (ShouldBroadcastNow) trava o servidor
+  # single-threaded do artisan serve (~500ms por request), fazendo o polling do
+  # Livewire falhar no navegador (status:null). A UI atualiza pelo polling.
+  php "$COCKPIT/artisan" ralph:ingest --no-broadcast >/dev/null 2>&1
   sleep "$TICK"
 done
