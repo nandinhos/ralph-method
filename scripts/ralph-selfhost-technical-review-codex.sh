@@ -24,7 +24,14 @@
 
 set -u
 
-REPO="$(cd "$(dirname "$0")/.." && pwd)"
+# O comando de gate roda com cwd = projeto-alvo (proc_open usa o root do
+# supervisor). Preferir o cwd quando ele for um checkout com .ralph/method.json;
+# senão, cair para o diretório do script (ralph-method).
+if [ -f "$(pwd)/.ralph/method.json" ]; then
+  REPO="$(pwd)"
+else
+  REPO="$(cd "$(dirname "$0")/.." && pwd)"
+fi
 WORKFLOW="${RALPH_WORKFLOW_ID:-}"
 FEATURE="${RALPH_FEATURE_KEY:-}"
 ATTEMPT="${RALPH_ATTEMPT:-}"
