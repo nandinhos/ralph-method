@@ -5964,11 +5964,11 @@ function runSystematicDebug(array $arguments): array
         $workflow = loadWorkflowForId($workflowId);
         $projection = project($workflow, readEvents());
         $feature = featureFrom($projection, $featureKey);
-        if (! in_array($feature['state'] ?? null, ['debugging_required', 'recovery_required'], true)) {
+        if (! in_array($feature['state'] ?? null, ['debugging_required', 'recovery_required', 'failed'], true)) {
             if (($feature['state'] ?? null) === 'debugging_verified') {
                 return ['already_verified' => true, 'feature' => $feature];
             }
-            fail('systematic debugging exige estado debugging_required ou recovery_required');
+            fail('systematic debugging exige estado debugging_required, recovery_required ou failed');
         }
         $lease = $arguments['lease'] ?? null;
         if (is_string($lease) && $lease !== '') {

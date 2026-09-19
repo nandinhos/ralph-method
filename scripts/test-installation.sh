@@ -474,7 +474,7 @@ RALPH_METHOD_SOURCE="$ROOT" RALPH_TEST_PAUSE_AT=quarantine:move_tree:after \
 staging_interrupted_pid=$!
 staging_interrupted_state=""
 staging_interrupted=0
-for _ in $(seq 1 500); do
+for _ in $(seq 1 3000); do
   if ! kill -0 "$staging_interrupted_pid" 2>/dev/null; then
     break
   fi

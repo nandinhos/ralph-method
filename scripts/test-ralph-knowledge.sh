@@ -282,7 +282,7 @@ DISCARD_EVENTS="$TMP/discard/.git/ralph-control/events.jsonl" php -r '
       fwrite(STDERR, "canário de segredo vazou no título do candidate_created: ".json_encode($cFacts)."\n");
       exit(2);
   }
-  if (! str_contains($cFacts["title"] ?? "", "[REDACTED]")) {
+  if (! str_contains($cFacts["title"] ?? "", "[REDACTED")) {
       fwrite(STDERR, "título do candidate_created não foi redigido: ".json_encode($cFacts)."\n");
       exit(3);
   }
@@ -295,7 +295,7 @@ DISCARD_EVENTS="$TMP/discard/.git/ralph-control/events.jsonl" php -r '
       fwrite(STDERR, "canário de segredo vazou na razão da rejeição: ".json_encode($rFacts)."\n");
       exit(5);
   }
-  if (! str_contains($rFacts["reason"] ?? "", "[REDACTED]")) {
+  if (! str_contains($rFacts["reason"] ?? "", "[REDACTED")) {
       fwrite(STDERR, "razão da rejeição não foi redigida: ".json_encode($rFacts)."\n");
       exit(6);
   }

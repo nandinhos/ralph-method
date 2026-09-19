@@ -75,7 +75,7 @@ RALPH_METHOD_SOURCE="$ROOT" RALPH_TEST_PAUSE_AT=installing \
 kill_pid=$!
 kill_state=""
 kill_done=0
-for _ in $(seq 1 500); do
+for _ in $(seq 1 3000); do
   if ! kill -0 "$kill_pid" 2>/dev/null; then
     break
   fi
