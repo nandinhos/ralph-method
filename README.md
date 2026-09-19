@@ -24,17 +24,18 @@ A evolução publicada está registrada no [CHANGELOG](CHANGELOG.md); a versão 
 ## Estrutura
 
 ```text
-bin/ralph-control       autoridade e ledger
-bin/ralph-trace         registro/relatório de delegação
-bin/ralph-monitor       snapshot de saúde
-bin/ralph-watch         terminal dashboard em tempo real (TUI)
-bin/ralph-block         uma feature por invocação
-scripts/ralph.sh        loop de fases do harness
-scripts/ralph-hook.sh   observabilidade best-effort
-schemas/                contratos versionados
-adapters/               normalizadores de providers
-docs/                   fonte de verdade do framework
-docs/AGENT_GUIDE.md     guia operacional para agentes de IA
+bin/ralph-control          autoridade e ledger
+bin/ralph-trace            registro/relatório de delegação
+bin/ralph-monitor          snapshot de saúde
+bin/ralph-watch            terminal dashboard em tempo real (TUI)
+scripts/ralph-supervise.sh supervisor universal de multi-ondas (SPP)
+scripts/ralph-field.sh     gestão canônica de campos isolados (.ralph/fields/)
+scripts/ralph.sh           loop de fases e execução controlada
+apps/cockpit/              trace cockpit em tempo real (Livewire/Reverb)
+schemas/                   contratos versionados
+adapters/                  normalizadores de providers
+docs/CANONICAL.md          marco canônico, invariantes e arquitetura v2.0
+docs/AGENT_GUIDE.md        guia operacional para agentes de IA
 ```
 
 ## Como entender o framework

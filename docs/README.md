@@ -7,6 +7,8 @@ que mantêm o núcleo seguro e reproduzível.
 ## Mapa rápido
 
 ```text
+CANONICAL.md
+  → marco fundacional, invariantes e arquitetura v2.0
 STATUS.md
   → o que está funcionando agora
 ../CHANGELOG.md
@@ -33,11 +35,12 @@ prd/
 
 Comece pelo [README do projeto](../README.md) e depois consulte:
 
-1. [STATUS.md](STATUS.md) para o estado atual;
-2. [AGENT_GUIDE.md](AGENT_GUIDE.md) para a instalação e operação;
-3. [architecture/interfaces.md](architecture/interfaces.md) para o contrato
+1. [CANONICAL.md](CANONICAL.md) para os 6 invariantes e a arquitetura 2.0;
+2. [STATUS.md](STATUS.md) para o estado atual;
+3. [AGENT_GUIDE.md](AGENT_GUIDE.md) para a instalação e operação;
+4. [architecture/interfaces.md](architecture/interfaces.md) para o contrato
    agnóstico de harness;
-4. [architecture/README.md](architecture/README.md) para a matriz de cada
+5. [architecture/README.md](architecture/README.md) para a matriz de cada
    componente, função e limite;
 5. [reports/0024-adapter-agy-funcional-2026-08-14.md](reports/0024-adapter-agy-funcional-2026-08-14.md)
    para a implementação e prova do quarto harness executável.

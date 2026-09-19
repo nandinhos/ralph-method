@@ -14,5 +14,10 @@ apps/cockpit/.env
 .opencode/node_modules/
 .playwright-mcp/
 
-# artefatos de campo e diagnóstico do cockpit
-cockpit-*.png
+# campos de teste locais, clones e worktrees gerenciadas
+.ralph/fields/
+.fields/
+.field-*/
+.onda2-*/
+*.log
+logs/
